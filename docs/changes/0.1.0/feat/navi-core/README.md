@@ -32,3 +32,15 @@ Implement the core OpenNavi platform: navi definition format (navi.yaml), projec
 - Forms the epic "OpenNavi Platform Foundation"
 - All other components depend on navi-core being implemented first (navi.yaml parsing, project layout, builder)
 - Sub-issues can parallelize: interface implementations (CLI vs TUI vs Gateway) are independent once the interface abstraction is defined
+
+## Tracked
+
+- Epic: OpenNavi Platform Foundation (#138) — https://github.com/flintwillow-software/opennavi/issues/138 [priority: P0]
+  - Issue: Implement core navi definition data model (navi.yaml) (#139) — https://github.com/flintwillow-software/opennavi/issues/139 [priority: P0]
+  - Issue: Implement builder/compiler pipeline (#140) — https://github.com/flintwillow-software/opennavi/issues/140 [priority: P0]
+  - Issue: Implement interface set abstraction (CLI/TUI/Gateway) (#141) — https://github.com/flintwillow-software/opennavi/issues/141 [priority: P0]
+  - Issue: Implement trust & signing model (#142) — https://github.com/flintwillow-software/opennavi/issues/142 [priority: P0]
+  - Issue: Implement project layout conventions (#143) — https://github.com/flintwillow-software/opennavi/issues/143 [priority: P0]
+  - Issue: Implement extension contract (#144) — https://github.com/flintwillow-software/opennavi/issues/144 [priority: P0]
+  - Issue: Implement scaffolding tool (navi init) (#145) — https://github.com/flintwillow-software/opennavi/issues/145 [priority: P0]
+  - Issue: Implement build pipeline & Makefile (#146) — https://github.com/flintwillow-software/opennavi/issues/146 [priority: P0]

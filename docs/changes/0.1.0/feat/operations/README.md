@@ -32,3 +32,14 @@ Implement the operations framework: structured logging, metrics collection, heal
 - Independent of other components — can be built in parallel
 - Health checks are required by smial deployment (monitoring/health specs)
 - Circuit breaker and rate limiting are critical for integration adapters
+
+## Tracked
+
+- Epic: Agent Operations Infrastructure (#190) — https://github.com/flintwillow-software/opennavi/issues/190 [priority: P1]
+  - Issue: Implement structured logging (#191) — https://github.com/flintwillow-software/opennavi/issues/191 [priority: P1]
+  - Issue: Implement metrics (OpenTelemetry) (#192) — https://github.com/flintwillow-software/opennavi/issues/192 [priority: P1]
+  - Issue: Implement health checks (#193) — https://github.com/flintwillow-software/opennavi/issues/193 [priority: P1]
+  - Issue: Implement retry logic (#195) — https://github.com/flintwillow-software/opennavi/issues/195 [priority: P1]
+  - Issue: Implement circuit breaker (#196) — https://github.com/flintwillow-software/opennavi/issues/196 [priority: P1]
+  - Issue: Implement rate limiting (#197) — https://github.com/flintwillow-software/opennavi/issues/197 [priority: P1]
+  - Issue: Implement deployment lifecycle (#198) — https://github.com/flintwillow-software/opennavi/issues/198 [priority: P1]

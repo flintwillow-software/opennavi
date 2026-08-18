@@ -35,3 +35,17 @@ Implement the agent role system: role definitions (PM, Support, Lead Engineer, B
 - Depends on: agent-runtime (agent loop), multi-agent (P2P), messaging (notifications), tool-catalog (shared tools)
 - Role binaries share the same SDK — the difference is in tool set, permissions, and behavior presets
 - The PM Agent is the most complex role (board management, triage logic) and should be built first
+
+## Tracked
+
+- Epic: Role-Based Agent System (#206) — https://github.com/flintwillow-software/opennavi/issues/206 [priority: P1]
+  - Issue: Implement role definitions (#207) — https://github.com/flintwillow-software/opennavi/issues/207 [priority: P1]
+  - Issue: Implement PM Agent (#208) — https://github.com/flintwillow-software/opennavi/issues/208 [priority: P1]
+  - Issue: Implement Support Engineer (#209) — https://github.com/flintwillow-software/opennavi/issues/209 [priority: P1]
+  - Issue: Implement Lead Engineer (#210) — https://github.com/flintwillow-software/opennavi/issues/210 [priority: P1]
+  - Issue: Implement Backend Engineer (#211) — https://github.com/flintwillow-software/opennavi/issues/211 [priority: P1]
+  - Issue: Implement Frontend Engineer (#212) — https://github.com/flintwillow-software/opennavi/issues/212 [priority: P1]
+  - Issue: Implement DevOps Engineer (#213) — https://github.com/flintwillow-software/opennavi/issues/213 [priority: P1]
+  - Issue: Implement SRE (#214) — https://github.com/flintwillow-software/opennavi/issues/214 [priority: P1]
+  - Issue: Implement QA Engineer (#215) — https://github.com/flintwillow-software/opennavi/issues/215 [priority: P1]
+  - Issue: Implement Reviewer (#216) — https://github.com/flintwillow-software/opennavi/issues/216 [priority: P1]

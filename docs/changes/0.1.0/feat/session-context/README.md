@@ -28,3 +28,11 @@ Implement session context management: session create/resume/close lifecycle, dyn
 - Epic: "Agent Runtime & Session System" (same as agent-runtime)
 - Depends on: agent-runtime (session model), messaging (webhook delivery)
 - Context compaction strategy is a key quality differentiator — worth dedicated research/design
+
+## Tracked
+
+- Epic: Session Context Management (#159) — https://github.com/flintwillow-software/opennavi/issues/159 [priority: P1]
+  - Issue: Implement context window builder (#160) — https://github.com/flintwillow-software/opennavi/issues/160 [priority: P1]
+  - Issue: Implement context compaction (#161) — https://github.com/flintwillow-software/opennavi/issues/161 [priority: P1]
+  - Issue: Implement webhook response schema (#162) — https://github.com/flintwillow-software/opennavi/issues/162 [priority: P1]
+  - Issue: Implement session persistence store (#163) — https://github.com/flintwillow-software/opennavi/issues/163 [priority: P1]

@@ -31,3 +31,13 @@ Implement multi-agent capabilities: P2P chat with presence detection, trust and 
 - Depends on: agent-runtime (agent loop), trust/signing from navi-core
 - Team-of-teams and council termination are advanced features that can be deferred to a later phase
 - P2P layer is foundational — all other multi-agent features depend on reliable agent-to-agent messaging
+
+## Tracked
+
+- Epic: Multi-Agent Coordination (#164) — https://github.com/flintwillow-software/opennavi/issues/164 [priority: P1]
+  - Issue: Implement P2P chat & presence (#165) — https://github.com/flintwillow-software/opennavi/issues/165 [priority: P1]
+  - Issue: Implement trust & identity (#166) — https://github.com/flintwillow-software/opennavi/issues/166 [priority: P1]
+  - Issue: Implement IAM & idle scheduling (#167) — https://github.com/flintwillow-software/opennavi/issues/167 [priority: P1]
+  - Issue: Implement team-of-teams orchestration (#168) — https://github.com/flintwillow-software/opennavi/issues/168 [priority: P1]
+  - Issue: Implement council termination (#169) — https://github.com/flintwillow-software/opennavi/issues/169 [priority: P1]
+  - Issue: Implement multi-agent coordination framework (#170) — https://github.com/flintwillow-software/opennavi/issues/170 [priority: P1]

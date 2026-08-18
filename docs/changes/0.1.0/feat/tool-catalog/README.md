@@ -31,3 +31,13 @@ Implement the tool catalog: file and shell operations (read, write, edit, bash),
 - Depends on: agent-runtime (tool schema, dispatch, error recovery)
 - Tools are independent — file ops, git, search, test can be built in parallel once the tool schema interface is defined
 - git tools via libgit2 is preferred over shelling out to avoid CLI parsing fragility
+
+## Tracked
+
+- Epic: Core Tool Catalog (#199) — https://github.com/flintwillow-software/opennavi/issues/199 [priority: P1]
+  - Issue: Implement file operations (#200) — https://github.com/flintwillow-software/opennavi/issues/200 [priority: P1]
+  - Issue: Implement shell tool (#201) — https://github.com/flintwillow-software/opennavi/issues/201 [priority: P1]
+  - Issue: Implement git tools (#202) — https://github.com/flintwillow-software/opennavi/issues/202 [priority: P1]
+  - Issue: Implement search tools (#203) — https://github.com/flintwillow-software/opennavi/issues/203 [priority: P1]
+  - Issue: Implement test runner (#204) — https://github.com/flintwillow-software/opennavi/issues/204 [priority: P1]
+  - Issue: Implement tool registry (#205) — https://github.com/flintwillow-software/opennavi/issues/205 [priority: P1]

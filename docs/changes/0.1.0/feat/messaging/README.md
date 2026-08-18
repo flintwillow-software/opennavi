@@ -33,3 +33,15 @@ Implement the messaging subsystem: message protocol and gateway for async messag
 - Depends on: agent-runtime (for dispatching incoming messages as tool calls), session-context (webhook response)
 - Platform adapters can be built in parallel once the adapter interface and routing are defined
 - Hook/cron subsystem is critical for autonomous operation (polling, scheduled tasks)
+
+## Tracked
+
+- Epic: Messaging & Communication (#171) — https://github.com/flintwillow-software/opennavi/issues/171 [priority: P1]
+  - Issue: Implement message protocol (#172) — https://github.com/flintwillow-software/opennavi/issues/172 [priority: P1]
+  - Issue: Implement gateway (#173) — https://github.com/flintwillow-software/opennavi/issues/173 [priority: P1]
+  - Issue: Implement adapter routing (#174) — https://github.com/flintwillow-software/opennavi/issues/174 [priority: P1]
+  - Issue: Implement hook/cron scheduling (#175) — https://github.com/flintwillow-software/opennavi/issues/175 [priority: P1]
+  - Issue: Implement email adapter (#176) — https://github.com/flintwillow-software/opennavi/issues/176 [priority: P1]
+  - Issue: Implement SMS adapter (#177) — https://github.com/flintwillow-software/opennavi/issues/177 [priority: P1]
+  - Issue: Implement calendar adapter (#178) — https://github.com/flintwillow-software/opennavi/issues/178 [priority: P1]
+  - Issue: Implement MQTT adapter (#179) — https://github.com/flintwillow-software/opennavi/issues/179 [priority: P1]
