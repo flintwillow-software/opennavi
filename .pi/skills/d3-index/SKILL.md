@@ -1,15 +1,15 @@
 ---
-name: specs-index
+name: d3-index
 description: >
   Regenerate the docs/specs/README.md index. Walks the spec tree, reads frontmatter spec-refs,
   and builds the component table, requirement inventory, and change map. Maintenance step in the
-  of the 3-path workflow (proposal → changes → issue) — index regenerates the tree index after
-  direct spec edits or specs-renumber. Implementation is tracked as GitHub issues (specs-issue +
-  github-issue-tracker), not via the index.
+  d3 workflow (proposal → changes → issue) — index regenerates the tree index after direct spec
+  edits or d3-renumber. Implementation is tracked as GitHub issues (d3-issue + github-issue-tracker),
+  not via the index.
 allowed-tools: Bash(grep, find, sed, awk, sort)
 ---
 
-# specs-index
+# d3-index
 
 > Regenerate the ordered spec tree index. Reads frontmatter, never parses headings.
 
@@ -47,5 +47,5 @@ Overwrite with the updated tables. Preserve the Status section and conventions s
 
 ## Related
 
-- `specs-changes` — calls this skill after a change log is written
-- `specs-renumber` — calls this after renumbering
+- `d3-changes` — calls this skill after a change log is written
+- `d3-renumber` — calls this after renumbering

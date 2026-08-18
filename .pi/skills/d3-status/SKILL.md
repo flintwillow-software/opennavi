@@ -1,23 +1,24 @@
 ---
-name: specs-status
+name: d3-status
 description: >
   Show the current state of the spec tree and change log: active changes, completed versions,
-  and component health. Report step in the 3-path workflow (proposal → changes → issue) — the
+  and component health. Report step in the d3 workflow (proposal → changes → issue) — the
   spec-side status; issue-side status lives on the GitHub project board (see github-project-manager /
   github-issue-tracker, global skills). Use when the user wants to know what's in flight or what shipped.
 allowed-tools: Bash(grep, find, ls, sort, sed)
 ---
 
-# specs-status
+# d3-status
 
 > Report the current state of the spec tree and change log.
 
-## The 3-Path Workflow
+## The 4-Step d3 Workflow
 
 ```
-Path 1: idea/case study → spec updates        (specs-proposal)
-Path 2: spec diff → change log                (specs-changes)
-Path 3: change log → GitHub issues            (specs-issue)
+Step 1: idea/chat → case study                                 (d3-proposal)
+Step 2: case study → spec tree updates (docs/specs/)           (d3-proposal)
+Step 3: spec diff → change log (docs/changes/<version>/)       (d3-changes)
+Step 4: change log → epics/issues/sub-issues in GitHub         (d3-issue)
 ```
 
 Status observes the spec side of the pipeline (active changes, synced versions). For the execution side (issues on the board), use the GitHub project board via `github-project-manager` / `github-issue-tracker`.
@@ -57,7 +58,7 @@ For each component in `docs/specs/`, count features and their statuses.
 
 ## Related
 
-- `specs-index` — generates the permanent spec tree index
-- `specs-issue` — file change tasks as GitHub issues
+- `d3-index` — generates the permanent spec tree index
+- `d3-issue` — file change tasks as GitHub issues
 - `github-project-manager` / `github-issue-tracker` — execution status on the project board
 - `docs/changes/README.md` — the live change tracker
