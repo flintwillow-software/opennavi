@@ -8,7 +8,7 @@ A platform for building **navis** — self-contained AI agent binaries distribut
 |----------|-------------|
 | [Architecture Specs](./docs/specs/README.md) | Full OpenNavi architecture specs organized by feature — navi definition, agent runtime, multi-agent, messaging, operations, and more |
 | [Case Study: Autonomous SaaS Product Lifecycle](./docs/case-study/autonomous-saas-product-lifecycle/README.md) | How a team of role-based navi agents manages the full SDLC and operations of a SaaS product with minimal human intervention |
-| [Cleanroom Specs](./docs/README.md) | Additional design specs for the pi-mono rewrite and Hermes-inspired extended features |
+| [Autonomous Agent Specs](./docs/README.md#autonomous-agent-specs) | Autonomous multi-agent platform specs and role-based agent definitions |
 
 ## Getting Started
 

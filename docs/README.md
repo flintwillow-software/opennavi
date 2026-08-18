@@ -17,16 +17,16 @@ The following documents were written as cleanroom design specs for the **pi-mono
 | 6 | [06-configuration-settings.md](./pi/06-configuration-settings.md) | Configuration system — settings merge order, theme system, keybindings, custom models, hot-reload |
 | 7 | [07-webui.md](./pi/07-webui.md) | Web UI — Go HTTP server, WebSocket hub, REST API, SSE streaming, vanilla JS frontend |
 
-## Hermes Cleanroom Specs
+## Autonomous Agent Specs
 
-The following documents were written as cleanroom design specs for the **Hermes-inspired** extended features (Phase 2+). They describe the platform capabilities beyond the core coding agent:
+The following documents describe the autonomous agent platform capabilities beyond the core coding agent, including the multi-agent team model for autonomous SDLC and operations:
 
-| # | Document | Description |
-|---|----------|-------------|
-| 8 | [08-messaging-gateway.md](./hermes/08-messaging-gateway.md) | Messaging gateway — long-running daemon, platform adapters, message routing, hook system, cron scheduler |
-| 9 | [09-profile-isolation.md](./hermes/09-profile-isolation.md) | Profile isolation — multi-profile support, per-profile config/sessions/gateway |
-| 10 | [10-plugin-system.md](./hermes/10-plugin-system.md) | Plugin system — tool/hook/command plugins, discovery, lifecycle, security |
-| — | [issues-breakdown.md](./hermes/issues-breakdown.md) | Actionable issue breakdown — P1.1 through P6.28 mapped to cleanroom docs |
+| Document | Description |
+|----------|-------------|
+| [04-multi-agent/](./specs/04-multi-agent/README.md) | Council, sub-agents, P2P chat, presence, idle scheduling, team-of-teams |
+| [05-messaging/](./specs/05-messaging/README.md) | Gateway, platform adapters, unified message protocol, hooks, cron |
+| [14-agent-roles/](./specs/14-agent-roles/README.md) | Role-based agent definitions (PM, Support, Lead, Backend, Frontend, DevOps, SRE, QA, Reviewer) |
+| [Case Study](../../docs/case-study/autonomous-saas-product-lifecycle/README.md) | Autonomous navi team managing SDLC and operations |
 
 ## Architecture Specs
 
@@ -59,7 +59,7 @@ For a new contributor, read in this order to build up the mental model increment
 3. Read **04** to see how it all ties together in the CLI
 4. Read **05** and **06** for persistence and configuration details
 5. Read **07** for the web UI
-6. Read **hermes/** docs for extended architecture (gateway, profiles, plugins)
+6. Read the agent-role specs and multi-agent specs for autonomous architecture
 7. Read **spec/README.md** for the full OpenNavi architecture specs
 
 ## Key Conventions
