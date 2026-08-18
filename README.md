@@ -1,6 +1,6 @@
 # OpenNAVI
 
-A platform for building **navis** — self-contained AI agent binaries distributed as single signed executable files.
+An SDK for creating **network assistants and virtual interfaces** (NAVI is an acronym). Navis are self-contained AI agent binaries distributed as single signed executable files.
 
 ## Documentation
 

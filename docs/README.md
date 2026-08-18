@@ -1,6 +1,6 @@
 # OpenNavi Documentation
 
-Design and architecture documentation for OpenNavi — a Go rewrite of [badlogic/pi-mono](https://github.com/badlogic/pi-mono).
+Design and architecture documentation for OpenNavi — an SDK for creating network assistants and virtual interfaces (NAVIS).
 
 ## Pi Cleanroom Specs
 
