@@ -1,53 +1,42 @@
 ---
-name: specs-changes
+name: d3-changes
 description: >
-  Drive Path 2 of the specs workflow: derive the code-change docs from a spec update. Resolves the
-  repo, reviews the spec in place, updates it with what was requested (if not already applied), diffs
-  new spec against old, and writes the changes as a semantic-versioned change log under docs/changes/,
-  grouped by conventional-commit type with epic/issue/sub-issue mapping kept in mind. Use after
-  specs-proposal has applied spec updates, or when the user wants to move from a spec change to the
-  implementation work list.
+  Drive Step 3 of the d3 workflow: derive the code-change docs from a spec update. Resolves the
+  repo, reviews the spec in place, diffs new spec against old, and writes the changes as a
+  semantic-versioned change log under docs/changes/, grouped by conventional-commit type with
+  epic/issue/sub-issue mapping kept in mind. Use after d3-proposal has applied spec updates, or
+  when the user wants to move from a spec change to the implementation work list.
 allowed-tools: Bash(read, grep, find, ls, mkdir, cp, mv, git)
 ---
 
-# specs-changes
+# d3-changes
 
-> Path 2 of the specs workflow: spec diff → change log. Writes what changed in the spec as a
-> changelog-style record of what needs to change in code, grouped so the epic/issue/sub-issue mapping
-> in Path 3 falls out naturally.
+> Step 3 of the d3 workflow: spec diff → change log. Writes what changed in the spec as a
+> changelog-style record of what needs to change in code, grouped so the epic/issue/sub-issue
+> mapping in Step 4 falls out naturally.
 
-## The 3-Path Workflow
+## The 4-Step d3 Workflow
 
 ```
-Path 1: idea/case study → spec updates        (specs-proposal)
-Path 2: spec diff → change log                (this skill)
-Path 3: change log → epics/issues/sub-issues  (specs-issue)
+Step 1: idea/chat → case study                                 (d3-proposal)
+Step 2: case study → spec tree updates (docs/specs/)           (d3-proposal)
+Step 3: spec diff → change log (docs/changes/<version>/)       (this skill)
+Step 4: change log → epics/issues/sub-issues in GitHub         (d3-issue)
 ```
-
-Path 2 writes the change log only — it does NOT write the epic/issue/sub-issue breakdown. That is
-Path 3's job, reading this log. Path 2 groups entries so that breakdown is obvious.
 
 ## Steps
 
 ### 1. Resolve the repo
 
 - The user names a repo, or the spec change already happened in a known repo (`repos/`, `infra/`).
-- If the spec update was applied by `specs-proposal`, the repo is whatever Path 1 touched.
+- If the spec update was applied by `d3-proposal`, the repo is whatever Step 2 touched.
 
 ### 2. Review the spec in place
 
 - Read the updated spec files in `docs/specs/` — the current state is the source of truth.
 - Identify which components/features the update touched (from `spec-refs` + Status History).
 
-### 3. Update the spec if not yet applied
-
-- If the user is requesting a spec change directly (no Path 1), apply the change to `docs/specs/`
-  in place first: new subfeatures appended, `spec-refs` appended, Status History updated, tree root
-  updated. (Same direct-edit mechanics as specs-proposal step 5.)
-
-### 4. Diff new spec against old
-
-- `git diff` the spec files between the old state and the new state:
+### 3. Diff new spec against old
 
 ```bash
 git diff HEAD~1 -- docs/specs/   # or compare against the pre-update commit
@@ -55,8 +44,10 @@ git diff HEAD~1 -- docs/specs/   # or compare against the pre-update commit
 
 - Extract from the diff the behavioral deltas: new requirements, changed requirements, new subfeatures.
 - Ignore housekeeping (Status History rows, link fixes) unless they imply behavior.
+- For an initial spec tree (single commit), use the initial commit as the baseline and document
+  the entire tree as the first change set.
 
-### 5. Write the change log
+### 4. Write the change log
 
 Structure — semver version dir, then conventional-commit type, then change name, then README:
 
@@ -92,7 +83,7 @@ Each change's `README.md` is a changelog entry:
 
 ## Notes
 
-- <grouping intent for Path 3: which entries naturally form one epic, which are independent issues>
+- <grouping intent for Step 4: which entries naturally form one epic, which are independent issues>
 ```
 
 Grouping rules — keep the epic/issue/sub-issue mapping in mind while writing:
@@ -112,19 +103,20 @@ Grouping rules — keep the epic/issue/sub-issue mapping in mind while writing:
   exists for it (search the repo for the spec code / change name). If it does, mark the entry as
   already-tracked and skip — do not duplicate.
 
-### 6. Update the tracker
+### 5. Update the tracker
 
 - Update `docs/changes/README.md`: the Active Changes table (or version log) gains the new change
   entry; note the spec refs.
 
-### 7. Hand off to Path 3
+### 6. Hand off to Step 4
 
-- Report the change folder path(s) and the grouping intent (Notes sections) for `specs-issue` to
+- Report the change folder path(s) and the grouping intent (Notes sections) for `d3-issue` to
   expand into epics/issues/sub-issues.
 
 ## Related
 
-- `specs-proposal` — Path 1 (produces the spec update this skill diffs)
-- `specs-issue` — NEXT STEP: expand the change log into epics/issues/sub-issues and file GitHub issues
+- `d3-workflow` — entrypoint orchestrator
+- `d3-proposal` — Step 1 & 2 (produces the spec update this skill diffs)
+- `d3-issue` — NEXT STEP: expand the change log into epics/issues/sub-issues and file GitHub issues
 - `github-issue-tracker` — execute the filed issues (global skill)
 - `docs/changes/README.md` — change log conventions

@@ -1,52 +1,53 @@
 ---
-name: specs-proposal
+name: d3-proposal
 description: >
-  Drive Path 1 of the specs workflow: turn an idea or case study into approved spec updates. Takes a
-  proposed idea or case study (new or updated), runs a gap analysis against the spec trees of the
-  relevant repos, writes/updates the case study docs plus a spec-updates.md that documents the
-  proposed new or changed specs, presents it for human review and approval, then applies the approved
-  updates directly to docs/specs/ in the target repo(s). Use when the user proposes an idea or case
-  study, wants to update an existing case study, or wants to take an idea into spec.
+  Drive Steps 1 and 2 of the d3 workflow: take an idea or chat discussion and produce or update a
+  case study, then analyze case study demands against existing spec trees, write spec-updates.md
+  with proposed new/changed specs, present for human review and approval, and apply approved updates
+  directly to docs/specs/ in the target repo(s). Use when the user proposes an idea or case study,
+  wants to update an existing case study, or wants to take an idea into spec.
 allowed-tools: Bash(read, grep, find, ls, mkdir, cp, mv)
 ---
 
-# specs-proposal
+# d3-proposal
 
-> Path 1 of the specs workflow: idea → case study → approved spec updates. The case study is the
-> vehicle; spec-updates.md is the approval artifact; the spec tree edit is the deliverable.
+> Steps 1 & 2 of the d3 workflow: idea/chat → case study → approved spec updates. The case study is
+> the vehicle; spec-updates.md is the approval artifact; the spec tree edit is the deliverable.
 
-## The 3-Path Workflow
+## The 4-Step d3 Workflow
 
 ```
-Path 1: idea/case study → spec updates        (this skill)
-Path 2: spec diff → changes docs              (specs-changes)
-Path 3: changes docs → GitHub issues          (specs-issue)
+Step 1: idea/chat → case study                                 (this skill)
+Step 2: case study → spec tree updates (docs/specs/)           (this skill)
+Step 3: spec diff → change log (docs/changes/<version>/)       (d3-changes)
+Step 4: change log → epics/issues/sub-issues in GitHub         (d3-issue)
 ```
 
-Path 1 ends with the spec tree updated directly. Path 2 then derives what code must change from the
-spec diff, and Path 3 turns that into tracked GitHub issues. Run Path 1 alone when the user only wants
-spec work; continue to Path 2/3 when the user wants the change implemented.
+Steps 1 and 2 are handled by this skill. Step 3/4 run separately after approval.
 
 ## Steps
 
-### 1. Understand the idea or case study
+### 1. Understand the idea or chat
 
-- If the user proposes a **new idea**: clarify scope, stakeholders, constraints, and the problem.
-- If the user proposes a **new case study**: scaffold `docs/case-study/<kebab-name>/` with the standard
-  sub-files (entry point, CONTEXT.md, SOLUTION.md, RESULTS.md) from the case study conventions.
-- If the user wants to **update an existing case study**: read the current sub-files first.
+- If the user proposes a **new idea or shares a chat/discussion**: clarify scope, stakeholders,
+  constraints, and the problem. What product or system is being designed? What would success look like?
+- If the user proposes a **new case study**: scaffold `docs/case-study/<kebab-name>/` with the
+  standard sub-files (entry point, CONTEXT.md, SOLUTION.md, RESULTS.md) from the case study conventions.
+- If the user wants to **update an existing case study**: read the current sub-files first,
+  understand what changed, and plan the update.
 
 ### 2. Gap analysis against current specs
 
-Walk the spec trees of the relevant repos (`repos/*/docs/specs/README.md`) and map:
+Walk the spec trees of the relevant repos (`repos/*/docs/specs/README.md` or
+`infra/*/docs/specs/README.md`) and map:
 
 | Case study demand | Supporting spec | Gap |
 |-------------------|-----------------|-----|
 | (from the idea/case study) | existing component/feature that covers it | missing, partial, or planned |
 
-- Use `specs-render` for the holistic spec picture of each repo.
-- A demand is a gap when no spec covers it, the spec is `planned`, or the spec exists in a different
-  repo than the one that should own it.
+- Use `d3-render` for the holistic spec picture of each repo.
+- A demand is a gap when no spec covers it, the spec is `planned`, or the spec exists in a
+  different repo than the one that should own it.
 - Note which repo each gap belongs to — the update lands there.
 
 ### 3. Write the case study + spec-updates.md
@@ -95,18 +96,19 @@ For each approved update, edit the target repo's `docs/specs/` **in place**:
 - Commit per repo.
 
 > No change dirs, no proposal/design/tasks scaffolding, no GitHub issues at this stage. The spec tree
-> is the source of truth; Path 2 derives the work from the diff.
+> is the source of truth; d3-changes derives the work from the diff.
 
 ## Out of Scope
 
-- Generating changes docs from the spec diff → `specs-changes`
-- Creating GitHub issues → `specs-issue`
+- Generating change docs from the spec diff → `d3-changes`
+- Creating GitHub issues → `d3-issue`
 - Executing issues (branch/PR/draft PR/pipeline) → `github-issue-tracker` (global skill)
 
 ## Related
 
-- `specs-changes` — NEXT STEP: derive code-change docs from the spec diff
-- `specs-issue` — file the changes as GitHub issues
-- `specs-render` — holistic spec picture for gap analysis
+- `d3-workflow` — entrypoint orchestrator
+- `d3-changes` — NEXT STEP: derive code-change docs from the spec diff
+- `d3-issue` — file the changes as GitHub issues
+- `d3-render` — holistic spec picture for gap analysis
 - `github-issue-tracker` — execute the filed issues (global skill)
 - `docs/specs/README.md` — spec code and numbering conventions

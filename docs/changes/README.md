@@ -1,44 +1,29 @@
----
-status: active
-created: '2025-08-13'
-updated: '2026-08-15'
-tags:
-  - changes
-  - versioning
----
+# OpenNavi Change Log
 
-# Changes
+> Semantic-versioned change log derived from spec tree diffs.
 
-> Versioned semantic-version change log. Each version directory (`0.0.0/`, `0.1.0/`, …) holds change
-> folders grouped by conventional-commit type. This index is maintained by the `specs-status` skill.
+## Active Changes
 
-## Convention
+| Version | Type | Change | Spec Refs | Status |
+|---------|------|--------|-----------|--------|
+| 0.1.0 | feat | navi-core | [000000—000700] | draft |
+| 0.1.0 | feat | agent-runtime | [010000—010400] | draft |
+| 0.1.0 | feat | agent-config | [020000—020100] | draft |
+| 0.1.0 | feat | session-context | [030000—030200] | draft |
+| 0.1.0 | feat | multi-agent | [040000—040600] | draft |
+| 0.1.0 | feat | messaging | [050000—050300] | draft |
+| 0.1.0 | feat | memory | [060000] | draft |
+| 0.1.0 | feat | llm-provider | [070000] | draft |
+| 0.1.0 | feat | operations | [080000—081000] | draft |
+| 0.1.0 | feat | cloud-platform | [090000—090300] | planned |
+| 0.1.0 | feat | integrations | [100000—100500] | planned |
+| 0.1.0 | feat | creative-pipeline | [110000—110400] | planned |
+| 0.1.0 | feat | avatar | [120000—120200] | planned |
+| 0.1.0 | feat | tool-catalog | [130000—130300] | draft |
+| 0.1.0 | feat | agent-roles | [140000—140900] | draft |
 
-```
-docs/changes/
-├── README.md            ← this file: tracker + conventions
-├── 0.1.0/               ← semantic version
-│   ├── feat/            ← conventional-commit type (feat, fix, chore, refactor, docs, test, perf)
-│   │   └── change-name/ ← kebab-case, e.g. tool-catalog
-│   │       └── README.md ← the change log entry (written by specs-changes, stamped by specs-issue)
-│   └── fix/
-│       └── ...
-└── 0.2.0/
-    └── ...
-```
+## Version Log
 
-- **Version directories**: semver (`0.1.0`, `0.2.0`, `1.0.0`). Git tag `v<version>` on release.
-- **Type directories**: conventional-commit type (`feat`, `fix`, `chore`, `refactor`, `docs`, `test`, `perf`).
-- **Change folders**: kebab-case name, e.g. `tool-catalog`, `incident-response`.
-- **Change log entry**: `README.md` inside the change folder — a changelog-style entry written by
-  `specs-changes` (Path 2) with the spec diff as input, later stamped with issue IDs by `specs-issue`
-  (Path 3) for traceability.
-- **Spec codes**: 6 digits = `component.feature.subfeature` flattened. Bare in frontmatter
-  (`spec-refs: [000000]`), `S`-prefixed in display (`S000000`).
-- **Lifecycle**: spec update (Path 1) → change log written (Path 2) → issues filed + stamped (Path 3).
-
-## Active Versions
-
-| Version | Type | Change | Spec Refs | Status | Issue |
-|---------|------|--------|-----------|--------|-------|
-| — | — | — | — | — | — |
+| Version | Date | Summary |
+|---------|------|---------|
+| 0.1.0 | — | Initial spec tree — 15 components, 68 features |

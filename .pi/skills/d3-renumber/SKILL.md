@@ -1,14 +1,14 @@
 ---
-name: specs-renumber
+name: d3-renumber
 description: >
   Consolidation pass: renumber components, features, and subfeatures to close gaps or insert sections.
   Rewrites all frontmatter spec-refs, inline links, and file paths atomically in one commit. Maintenance
-  step in the 3-path workflow (proposal → changes → issue) — exceptional, not routine.
-  Implementation is tracked as GitHub issues (specs-issue + github-issue-tracker), not via renumbering.
+  step in the d3 workflow (proposal → changes → issue) — exceptional, not routine.
+  Implementation is tracked as GitHub issues (d3-issue + github-issue-tracker), not via renumbering.
 allowed-tools: Bash(grep, find, sed, git, mv)
 ---
 
-# specs-renumber
+# d3-renumber
 
 > Renumber and rewrite references atomically. The kebab-name carries identity; the number is a positional sort prefix.
 
@@ -60,7 +60,7 @@ Don't rewrite historic S-codes in Status History — they refer to the change co
 
 ### 7. Regenerate the index
 
-Call `specs-index` to rebuild `docs/specs/README.md`.
+Call `d3-index` to rebuild `docs/specs/README.md`.
 
 ### 8. Commit
 
@@ -70,5 +70,5 @@ git add -A && git commit -m "specs: renumber for consolidation"
 
 ## Related
 
-- `specs-index` — regenerate index after renumbering
-- `specs-changes` — normal amendment (renumber is exceptional, not routine)
+- `d3-index` — regenerate index after renumbering
+- `d3-changes` — normal amendment (renumber is exceptional, not routine)
