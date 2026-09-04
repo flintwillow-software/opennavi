@@ -30,7 +30,7 @@ var migrations = []string{
 		FOREIGN KEY (parent_id) REFERENCES sessions(id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS messages (
-		id TEXT PRIMARY KEY,
+		id TEXT NOT NULL,
 		session_id TEXT NOT NULL,
 		entry_index INTEGER NOT NULL,
 		role TEXT NOT NULL,
@@ -40,6 +40,7 @@ var migrations = []string{
 		tool_input TEXT,
 		is_compacted INTEGER DEFAULT 0,
 		created_at DATETIME NOT NULL,
+		PRIMARY KEY (session_id, id),
 		FOREIGN KEY (session_id) REFERENCES sessions(id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS session_tags (
