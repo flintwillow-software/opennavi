@@ -240,6 +240,75 @@ func TestListSessionsFiltersAndOrder(t *testing.T) {
 	}
 }
 
+func TestForkPersistenceRoundTrip(t *testing.T) {
+	// Regression: messages.id was a global PRIMARY KEY, so a forked
+	// session (which copies parent entry IDs to preserve lineage) could
+	// never be persisted. Composite PK (session_id, id) fixes it.
+	st := openTestStore(t, Options{})
+	m := session.NewSessionManager(st)
+
+	parent, err := m.CreateSession("agent-1", "/w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []string{"one", "two", "three"} {
+		parent.AppendEntry(session.NewEntry(session.RoleUser, msg))
+	}
+	if err := m.SaveSession(parent); err != nil {
+		t.Fatal(err)
+	}
+
+	fork, err := m.ForkSession(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork.AppendEntry(session.NewEntry(session.RoleAssistant, "branch reply"))
+	if err := m.SaveSession(fork); err != nil {
+		t.Fatalf("save fork (shared entry IDs): %v", err)
+	}
+
+	// Both sessions load with correct entries and positions.
+	gotParent, err := m.LoadSession(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFork, err := m.LoadSession(fork.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotParent.Entries) != 3 || gotParent.Current != 2 {
+		t.Fatalf("parent: %d entries, Current %d", len(gotParent.Entries), gotParent.Current)
+	}
+	if len(gotFork.Entries) != 4 || gotFork.Current != 3 {
+		t.Fatalf("fork: %d entries, Current %d", len(gotFork.Entries), gotFork.Current)
+	}
+	// Shared lineage: fork's first entries keep the parent's IDs.
+	for i := 0; i < 3; i++ {
+		if gotFork.Entries[i].ID != gotParent.Entries[i].ID {
+			t.Fatalf("fork entry %d ID = %s, want parent's %s", i, gotFork.Entries[i].ID, gotParent.Entries[i].ID)
+		}
+	}
+	if gotFork.ParentID != parent.ID {
+		t.Fatalf("fork ParentID = %q", gotFork.ParentID)
+	}
+
+	// Rewinding the parent must not disturb the fork, and vice versa.
+	if err := gotParent.SetCurrent(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SaveSession(gotParent); err != nil {
+		t.Fatal(err)
+	}
+	reParent, _ := m.LoadSession(parent.ID)
+	if reParent.Current != 0 {
+		t.Fatalf("parent Current = %d, want 0", reParent.Current)
+	}
+	reFork, _ := m.LoadSession(fork.ID)
+	if reFork.Current != 3 {
+		t.Fatalf("fork Current disturbed by parent save: %d", reFork.Current)
+	}
+}
+
 func TestMigrationIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.db")
