@@ -13,12 +13,17 @@ import (
 // after waiting on the AgentEndBarrier so one-shot subscribers can
 // finish processing first.
 func (a *Agent) runLoop(ctx context.Context) {
+	maxTurns := a.Config.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = DefaultMaxTurns
+	}
+	turns := 0
 loop:
 	for {
 		select {
 		case <-ctx.Done():
 			a.setState(a.state.SetStatus(StatusIdle))
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
 			return
 		default:
 		}
@@ -34,7 +39,15 @@ loop:
 		// 3. Convert executor tools to agent tool descriptors
 		tools := a.Executor.Tools()
 
-		// 4. Send to provider
+		// 4. Send to provider (counts as a turn: one provider round-trip)
+		turns++
+		if turns > maxTurns {
+			err := fmt.Errorf("run exceeded MaxTurns (%d): the model kept issuing tool calls", maxTurns)
+			a.setState(a.state.SetStatus(StatusError).SetError(err))
+			a.FireEvent(AgentEvent{Type: AgentEventError, Error: err})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
+			return
+		}
 		evts, err := a.Provider.Stream(ctx, messages, tools, a.Config)
 		if err != nil {
 			a.setState(a.state.SetStatus(StatusError).SetError(err))
@@ -123,14 +136,22 @@ loop:
 			}
 		}
 
-		// Stream ended without an explicit stop event.
+		// Stream ended without an explicit stop event (e.g. the provider
+		// closed its channel, including on ctx cancellation).
 		if haveMessage {
 			fullMessage.IsStreaming = false
 			a.setState(a.state.AppendMessage(fullMessage))
 		}
 		if len(toolCalls) == 0 {
 			a.setState(a.state.SetStatus(StatusIdle))
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: ctx.Err() != nil})
+			return
+		}
+		if ctx.Err() != nil {
+			// Cancelled with pending tool calls: don't run tools on a dead
+			// run; report the turn as aborted.
+			a.setState(a.state.SetStatus(StatusIdle))
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
 			return
 		}
 		// Tool calls present: loop again so the model sees the results.

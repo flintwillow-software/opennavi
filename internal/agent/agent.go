@@ -62,7 +62,11 @@ func NewAgent(config AgentConfig) *Agent {
 
 // Prompt starts processing of a user prompt. It launches the run loop in
 // a goroutine; use WaitForIdle to block until the run completes.
+//
+// TODO: images are not yet forwarded — the transform pipeline and
+// Ollama's message format need multimodal content support.
 func (a *Agent) Prompt(text string, images []string) error {
+	_ = images // TODO(#148 follow-up): forward to transform/provider
 	return a.startRun(func(st *AgentState) *AgentState {
 		return st.AppendMessage(AgentMessage{Role: RoleUser, Content: text})
 	})
