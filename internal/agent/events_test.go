@@ -115,3 +115,107 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 		}
 	}
 }
+
+// ── Regression: PR #217 review blockers ──────────────────────────────────
+
+func TestAgentEndBarrierReuse(t *testing.T) {
+	b := NewAgentEndBarrier()
+
+	// Two full Add/Wait/Signal cycles must not panic on close of a
+	// closed channel (the done channel is per-generation).
+	for gen := 0; gen < 2; gen++ {
+		b.Add()
+		released := make(chan struct{})
+		go func() {
+			b.Wait()
+			close(released)
+		}()
+		select {
+		case <-released:
+			t.Fatal("Wait returned before Signal")
+		case <-time.After(20 * time.Millisecond):
+		}
+		b.Signal()
+		select {
+		case <-released:
+		case <-time.After(time.Second):
+			t.Fatal("Wait not released after Signal")
+		}
+	}
+	if b.Count() != 0 {
+		t.Fatalf("count = %d after reuse, want 0", b.Count())
+	}
+}
+
+func TestAgentBarrierAcrossRuns(t *testing.T) {
+	// Repro for the review panic: once-subscriber on run 1, a NEW
+	// once-subscriber before run 2, both runs complete without panic.
+	a := NewAgent(AgentConfig{Provider: "mock", Model: "m"})
+	mp := &mockProvider{responses: [][]Event{
+		{{Type: EventContentDelta, Content: "one"}, {Type: EventStop}},
+		{{Type: EventContentDelta, Content: "two"}, {Type: EventStop}},
+	}}
+	a.Provider = mp
+
+	for run := 0; run < 2; run++ {
+		seen := make(chan AgentEvent, 1)
+		a.Subscribe(func(ev AgentEvent) { seen <- ev }, true)
+		if err := a.Prompt("hi", nil); err != nil {
+			t.Fatal(err)
+		}
+		a.WaitForIdle()
+		select {
+		case <-seen:
+		default:
+			t.Fatalf("run %d: once-subscriber never fired", run)
+		}
+	}
+}
+
+func TestEventBusPerSubscriberOrdering(t *testing.T) {
+	// Regression for unordered delivery: a subscriber must observe
+	// events in Fire order even under concurrent Fire load.
+	eb := NewEventBus()
+	const n = 500
+	var mu sync.Mutex
+	var got []int
+	eb.Subscribe(func(ev AgentEvent) {
+		mu.Lock()
+		got = append(got, ev.Sequence)
+		mu.Unlock()
+	}, false)
+
+	for i := 0; i < n; i++ {
+		eb.Fire(AgentEvent{Type: AgentEventContentDelta, Sequence: i})
+	}
+	eb.WaitDispatch()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != n {
+		t.Fatalf("got %d events, want %d", len(got), n)
+	}
+	for i, v := range got {
+		if v != i {
+			t.Fatalf("out of order: got[%d]=%d, want %d (full: %v)", i, v, i, got)
+		}
+	}
+}
+
+func TestEventBusUnsubscribeAfterQueued(t *testing.T) {
+	// Already-queued events are delivered before the drain goroutine
+	// exits; events fired after unsubscribe are not delivered.
+	eb := NewEventBus()
+	var got atomic.Int32
+	unsub := eb.Subscribe(func(AgentEvent) { got.Add(1) }, false)
+
+	eb.Fire(AgentEvent{Type: AgentEventTurnStart})
+	eb.WaitDispatch()
+	unsub()
+	eb.Fire(AgentEvent{Type: AgentEventTurnStart})
+	eb.WaitDispatch()
+
+	if got.Load() != 1 {
+		t.Fatalf("got %d events, want 1 (only the pre-unsubscribe one)", got.Load())
+	}
+}
