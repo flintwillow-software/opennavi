@@ -24,6 +24,7 @@ var migrations = []string{
 		parent_id TEXT,
 		label TEXT,
 		status TEXT DEFAULT 'active',
+		current INTEGER,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		FOREIGN KEY (parent_id) REFERENCES sessions(id)

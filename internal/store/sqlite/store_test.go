@@ -84,6 +84,57 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCurrentPositionPersists(t *testing.T) {
+	// Regression: Current was not persisted, so a session rewound via
+	// SetCurrent silently forked from the tip after a store round-trip.
+	st := openTestStore(t, Options{})
+	s := testSession("", 0)
+	if err := st.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCurrent(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.LoadSession(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Current != 0 {
+		t.Fatalf("Current = %d, want 0 (stored position lost)", got.Current)
+	}
+
+	// Out-of-range stored position clamps to the derived value rather
+	// than erroring (entries may have changed since the save).
+	s.Current = 99
+	if err := st.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.LoadSession(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Current != len(got.Entries)-1 {
+		t.Fatalf("out-of-range Current = %d, want clamped to %d", got.Current, len(got.Entries)-1)
+	}
+
+	// Empty sessions store NULL and load with Current == -1.
+	empty := session.NewSession("a", "")
+	if err := st.SaveSession(empty); err != nil {
+		t.Fatal(err)
+	}
+	emptyGot, err := st.LoadSession(empty.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyGot.Current != -1 {
+		t.Fatalf("empty session Current = %d, want -1", emptyGot.Current)
+	}
+}
+
 func TestSaveSessionWholeRowReplace(t *testing.T) {
 	st := openTestStore(t, Options{})
 	s := testSession("", 0)

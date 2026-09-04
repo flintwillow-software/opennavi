@@ -14,6 +14,16 @@ import (
 // Cipher encrypts and decrypts sensitive column values (message
 // content, tool input). The store applies it transparently; a Noop
 // cipher keeps values as plaintext.
+//
+// Contract for custom implementations: Encrypt output must be
+// self-describing (the built-in AESGCM uses the "enc1:" prefix; the
+// store additionally prepends "enc1:" to any non-prefixed Encrypt
+// output). Decrypt must accept its own Encrypt output, including the
+// prefix, and may pass non-prefixed values through unchanged (written
+// before encryption was enabled). Only message content and tool input
+// are encrypted; tool names and call IDs stay plaintext (metadata
+// remains searchable in clear) — an explicit design decision, revisit
+// if metadata is deemed sensitive.
 type Cipher interface {
 	Encrypt(plaintext []byte) ([]byte, error)
 	Decrypt(ciphertext []byte) ([]byte, error)

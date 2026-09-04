@@ -78,14 +78,16 @@ func (s *Store) SaveSession(sess *session.Session) error {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`INSERT INTO sessions
-		(id, name, agent_id, profile, work_dir, branch_id, parent_id, label, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, name, agent_id, profile, work_dir, branch_id, parent_id, label, status, current, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, agent_id=excluded.agent_id, profile=excluded.profile,
 			work_dir=excluded.work_dir, branch_id=excluded.branch_id, parent_id=excluded.parent_id,
-			label=excluded.label, status=excluded.status, updated_at=excluded.updated_at`,
+			label=excluded.label, status=excluded.status, current=excluded.current,
+			updated_at=excluded.updated_at`,
 		sess.ID, sess.Name, sess.AgentID, sess.Profile, sess.WorkDir,
 		sess.BranchID, sess.ParentID, sess.Label, string(sess.Status),
+		nilIfNegative(sess.Current),
 		formatTime(sess.CreatedAt), formatTime(sess.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("sqlite: upsert session %s: %w", sess.ID, err)
@@ -143,10 +145,11 @@ func (s *Store) LoadSession(id string) (*session.Session, error) {
 	sess := &session.Session{}
 	var status string
 	var createdAt, updatedAt string
-	err := s.db.QueryRow(`SELECT id, name, agent_id, profile, work_dir, branch_id, parent_id, label, status, created_at, updated_at
+	var storedCurrent sql.NullInt64
+	err := s.db.QueryRow(`SELECT id, name, agent_id, profile, work_dir, branch_id, parent_id, label, status, current, created_at, updated_at
 		FROM sessions WHERE id = ?`, id).
 		Scan(&sess.ID, &sess.Name, &sess.AgentID, &sess.Profile, &sess.WorkDir,
-			&sess.BranchID, &sess.ParentID, &sess.Label, &status, &createdAt, &updatedAt)
+			&sess.BranchID, &sess.ParentID, &sess.Label, &status, &storedCurrent, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, session.ErrSessionNotFound
 	}
@@ -201,10 +204,18 @@ func (s *Store) LoadSession(id string) (*session.Session, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sqlite: iterate messages in %s: %w", id, err)
 	}
+	// Derive the fallback position, then prefer the stored Current when
+	// present and in range (clamped otherwise — entries may have changed
+	// since the position was saved).
 	if len(sess.Entries) > 0 {
 		sess.Current = len(sess.Entries) - 1
 	} else {
 		sess.Current = -1
+	}
+	if storedCurrent.Valid {
+		if c := int(storedCurrent.Int64); c >= 0 && c < len(sess.Entries) {
+			sess.Current = c
+		}
 	}
 
 	tags, err := s.loadTags(id)
@@ -346,6 +357,14 @@ func (s *Store) decodeText(stored []byte) ([]byte, error) {
 }
 
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// nilIfNegative maps a negative Current (empty session) to SQL NULL.
+func nilIfNegative(i int) any {
+	if i < 0 {
+		return nil
+	}
+	return i
+}
 
 func parseTime(v string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, v)
