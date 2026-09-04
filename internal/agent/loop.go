@@ -40,7 +40,16 @@ loop:
 		// 3. Convert executor tools to agent tool descriptors
 		tools := a.Executor.Tools()
 
-		// 4. Send to provider (counts as a turn: one provider round-trip)
+		// 4. Context window compaction (spec §3.3): runs between turns,
+		// before the next provider call, when the budget is crossed.
+		if err := a.maybeCompact(ctx); err != nil {
+			a.setState(a.state.SetStatus(StatusError).SetError(err))
+			a.FireEvent(AgentEvent{Type: AgentEventError, Error: err})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
+			return
+		}
+
+		// 5. Send to provider (counts as a turn: one provider round-trip)
 		turns++
 		if turns > maxTurns {
 			err := fmt.Errorf("run exceeded MaxTurns (%d): the model kept issuing tool calls", maxTurns)
@@ -60,7 +69,7 @@ loop:
 			return
 		}
 
-		// 5. Process stream events
+		// 6. Process stream events
 		a.FireEvent(AgentEvent{Type: AgentEventTurnStart})
 
 		fullMessage := AgentMessage{Role: RoleAssistant, IsStreaming: true}
@@ -114,7 +123,7 @@ loop:
 					a.setState(a.state.AppendMessage(fullMessage))
 				}
 
-				// 6. Execute tool calls if any, feed results back, keep looping
+				// 7. Execute tool calls if any, feed results back, keep looping
 				if len(toolCalls) > 0 {
 					results := a.Executor.Execute(toolCalls)
 					for i, r := range results {
@@ -139,7 +148,7 @@ loop:
 					continue loop // think -> act -> observation
 				}
 
-				// 7. No tool calls: the turn is complete
+				// 8. No tool calls: the turn is complete
 				a.setState(a.state.SetStatus(StatusIdle))
 				a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
 				return

@@ -99,6 +99,12 @@ func AgentStateFromEntries(entries []SessionEntry) *agent.AgentState {
 
 	msgs := make([]agent.AgentMessage, 0, len(entries))
 	for _, e := range entries {
+		// Soft-compacted originals are excluded from the restored LLM
+		// context; their system-role summaries are kept (spec §06: the
+		// summary itself carries is_compacted=1 but must survive).
+		if e.IsCompacted && e.Role != RoleSystem {
+			continue
+		}
 		role := roleFromSession(e.Role)
 		// Merge consecutive assistant tool-call entries into the
 		// previous assistant message.
