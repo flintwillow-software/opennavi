@@ -122,6 +122,7 @@ loop:
 							Role:       RoleTool,
 							Content:    r.Result,
 							ToolResult: r.Result,
+							ToolCallID: r.ToolCallID,
 						}))
 						name := ""
 						if i < len(toolCalls) {
