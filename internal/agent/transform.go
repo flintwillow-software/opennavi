@@ -20,6 +20,11 @@ func TransformContext(config AgentConfig, messages []AgentMessage) []Message {
 	out := convertToLLM(messages)
 	out = filterUIMessages(out)
 
+	// NOTE: compaction summaries land as system-role messages
+	// mid-conversation (internal/agent/compaction.go). Ollama accepts
+	// system messages anywhere, but providers requiring system-at-top
+	// must move them in applyProviderTransform — that hook exists for
+	// exactly this kind of provider-specific reshaping.
 	if config.SystemPrompt != "" {
 		sys := Message{
 			Role:    "system",
