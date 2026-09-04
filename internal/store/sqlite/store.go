@@ -288,7 +288,7 @@ func (s *Store) ListSessions(opts session.ListOptions) ([]session.SessionInfo, e
 
 	query := `SELECT s.id, s.name, s.agent_id, s.created_at, s.updated_at, s.status,
 		(SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
-		(SELECT GROUP_CONCAT(t.tag, ',') FROM session_tags t WHERE t.session_id = s.id) AS tags
+		(SELECT json_group_array(t.tag) FROM session_tags t WHERE t.session_id = s.id) AS tags
 		FROM sessions s WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY s.updated_at DESC`
 
@@ -310,25 +310,41 @@ func (s *Store) ListSessions(opts session.ListOptions) ([]session.SessionInfo, e
 
 	out := []session.SessionInfo{}
 	for rows.Next() {
-		var info session.SessionInfo
-		var status, createdAt, updatedAt string
-		var tags sql.NullString
-		if err := rows.Scan(&info.ID, &info.Name, &info.AgentID, &createdAt, &updatedAt, &status, &info.MessageCount, &tags); err != nil {
-			return nil, fmt.Errorf("sqlite: scan session list: %w", err)
-		}
-		info.Status = session.Status(status)
-		if info.CreatedAt, err = parseTime(createdAt); err != nil {
+		info, err := scanSessionInfo(rows)
+		if err != nil {
 			return nil, err
-		}
-		if info.UpdatedAt, err = parseTime(updatedAt); err != nil {
-			return nil, err
-		}
-		if tags.Valid && tags.String != "" {
-			info.Tags = strings.Split(tags.String, ",")
 		}
 		out = append(out, info)
 	}
 	return out, rows.Err()
+}
+
+// scanSessionInfo scans one row of the shared session-list projection
+// (metadata + message count + JSON tag array).
+func scanSessionInfo(rows *sql.Rows) (session.SessionInfo, error) {
+	var info session.SessionInfo
+	var status, createdAt, updatedAt string
+	var tags sql.NullString
+	if err := rows.Scan(&info.ID, &info.Name, &info.AgentID, &createdAt, &updatedAt, &status, &info.MessageCount, &tags); err != nil {
+		return info, fmt.Errorf("sqlite: scan session list: %w", err)
+	}
+	info.Status = session.Status(status)
+	var err error
+	if info.CreatedAt, err = parseTime(createdAt); err != nil {
+		return info, err
+	}
+	if info.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		return info, err
+	}
+	info.Tags = []string{}
+	if tags.Valid && tags.String != "" {
+		// json_group_array produces a JSON array; decode so tags
+		// containing commas survive.
+		if err := json.Unmarshal([]byte(tags.String), &info.Tags); err != nil {
+			return info, fmt.Errorf("sqlite: decode tags %q: %w", tags.String, err)
+		}
+	}
+	return info, nil
 }
 
 // ── codec helpers ────────────────────────────────────────────────────────
