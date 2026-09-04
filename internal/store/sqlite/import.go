@@ -28,6 +28,9 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 	var header exportHeaderLine
 	var entries []session.SessionEntry
 	scanner := bufio.NewScanner(f)
+	// Messages can exceed the 64KB default token size (shell_exec caps
+	// at 100KB, file_read at 512KB), so raise the scan ceiling.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	line := 0
 	for scanner.Scan() {
 		line++
