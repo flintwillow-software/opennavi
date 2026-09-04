@@ -11,6 +11,7 @@ const (
 	RoleUser Role = iota
 	RoleAssistant
 	RoleTool
+	RoleSystem
 )
 
 // String returns the LLM-facing role name.
@@ -20,6 +21,8 @@ func (r Role) String() string {
 		return "assistant"
 	case RoleTool:
 		return "tool"
+	case RoleSystem:
+		return "system"
 	default:
 		return "user"
 	}
@@ -84,6 +87,7 @@ type AgentMessage struct {
 	Content     string     `json:"content"`
 	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
 	ToolResult  string     `json:"tool_result,omitempty"`
+	ToolCallID  string     `json:"tool_call_id,omitempty"`
 	IsStreaming bool       `json:"is_streaming,omitempty"`
 }
 
@@ -169,6 +173,25 @@ func (s *AgentState) SetStatus(st AgentStatus) *AgentState {
 	next := *s
 	next.Status = st
 	return &next
+}
+
+// Clone returns a deep copy of the state, safe to hand out or store
+// while the live state keeps mutating (copy-on-write snapshots).
+func (s *AgentState) Clone() *AgentState {
+	out := *s
+	out.Messages = make([]AgentMessage, len(s.Messages))
+	for i, m := range s.Messages {
+		out.Messages[i] = m
+		if len(m.ToolCalls) > 0 {
+			out.Messages[i].ToolCalls = make([]ToolCall, len(m.ToolCalls))
+			copy(out.Messages[i].ToolCalls, m.ToolCalls)
+		}
+	}
+	if len(s.Tools) > 0 {
+		out.Tools = make([]AgentTool, len(s.Tools))
+		copy(out.Tools, s.Tools)
+	}
+	return &out
 }
 
 // SetError returns a new AgentState with the given error recorded.

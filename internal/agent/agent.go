@@ -169,6 +169,23 @@ func (a *Agent) isRunning() bool {
 	return a.state.Status == StatusRunning
 }
 
+// LoadState replaces the agent's conversation state with the given
+// snapshot. The agent must be idle; the restored status is normalized
+// to idle (snapshots taken mid-run/paused resume as idle conversations).
+// Used by session resume (internal/session).
+func (a *Agent) LoadState(st *AgentState) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state.Status == StatusRunning {
+		return errors.New("agent: LoadState requires an idle agent")
+	}
+	if st.Status != StatusIdle {
+		st = st.Clone().SetStatus(StatusIdle)
+	}
+	a.state = st
+	return nil
+}
+
 // ── Events ───────────────────────────────────────────────────────────────
 
 // Subscribe registers a handler for agent events. If once is true the
