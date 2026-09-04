@@ -96,7 +96,9 @@ func (s *Store) Search(query string, limit int) ([]session.SessionInfo, error) {
 // stripped (they'd break FTS5 syntax). An empty result means "nothing
 // to search".
 func ftsQuery(query string) (string, error) {
-	stripped := strings.ReplaceAll(query, `"`, "")
+	// Quotes and apostrophes break FTS5 syntax (and "don't"-style
+	// terms would error); strip both before tokenizing.
+	stripped := strings.NewReplacer(`"`, "", "'", "").Replace(query)
 	terms := strings.Fields(stripped)
 	if len(terms) == 0 {
 		if strings.TrimSpace(query) != "" {

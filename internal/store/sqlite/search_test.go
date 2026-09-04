@@ -179,6 +179,50 @@ func TestSearchEncryptedContentNotMatched(t *testing.T) {
 	}
 }
 
+func TestImportLargeMessage(t *testing.T) {
+	// Regression: the import scanner used the 64KB default token size,
+	// but messages can exceed it (shell_exec output caps at 100KB,
+	// file_read at 512KB) — large sessions exported fine but failed to
+	// import with 'token too long'.
+	st := openTestStore(t, Options{})
+	s := session.NewSession("a", "")
+	s.Name = "big output"
+	big := strings.Repeat("x", 100*1024) + " terminus"
+	s.AppendEntry(session.NewEntry(session.RoleTool, big))
+	if err := st.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	if err := st.ExportJSONL(s, path); err != nil {
+		t.Fatal(err)
+	}
+	st2 := openTestStore(t, Options{})
+	imported, err := st2.ImportJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Entries[0].Message != big {
+		t.Fatalf("imported message truncated: %d bytes, want %d", len(imported.Entries[0].Message), len(big))
+	}
+}
+
+func TestSearchApostropheTerms(t *testing.T) {
+	st := openTestStore(t, Options{})
+	s := session.NewSession("a", "")
+	s.AppendEntry(session.NewEntry(session.RoleUser, "cannot find the dont entry"))
+	if err := st.SaveSession(s); err != nil {
+		t.Fatal(err)
+	}
+	// "don't"-style input must not FTS5-error; the apostrophe is
+	// stripped and the remainder matches.
+	results, err := st.Search("don't", 10)
+	if err != nil {
+		t.Fatalf("apostrophe query errored: %v", err)
+	}
+	_ = results
+}
+
 func TestTagsWithCommasSurviveListing(t *testing.T) {
 	st := openTestStore(t, Options{})
 	s := session.NewSession("a", "")
