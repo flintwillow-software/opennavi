@@ -21,9 +21,7 @@ func (m *SessionManager) SyncFromAgent(s *Session, a *agent.Agent) error {
 	state := a.State().Clone()
 	entries := EntriesFromAgentState(state)
 	s.Entries = append(s.Entries[:0], entries...)
-	if s.Current >= len(s.Entries) {
-		s.Current = len(s.Entries) - 1
-	}
+	s.Current = len(s.Entries) - 1
 	s.Status = StatusPaused
 	s.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveSession(s); err != nil {
