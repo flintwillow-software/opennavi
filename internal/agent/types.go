@@ -113,7 +113,14 @@ type AgentConfig struct {
 	SystemPrompt   string      `json:"system_prompt,omitempty"`
 	CacheRetention int         `json:"cache_retention,omitempty"`
 	WorkDir        string      `json:"work_dir,omitempty"`
+	// MaxTurns caps provider round-trips within one run (think→act→
+	// observation iterations). Guards against a model issuing tool
+	// calls forever. 0 means the default (32).
+	MaxTurns int `json:"max_turns,omitempty"`
 }
+
+// DefaultMaxTurns is the effective MaxTurns when unset.
+const DefaultMaxTurns = 32
 
 // AgentEvent carries information about an agent lifecycle event.
 type AgentEvent struct {
@@ -121,6 +128,12 @@ type AgentEvent struct {
 	Message *AgentMessage  `json:"message,omitempty"`
 	Tool    *ToolUpdate    `json:"tool,omitempty"`
 	Error   error          `json:"error,omitempty"`
+	// Sequence is an optional monotonically increasing counter set by
+	// producers (or tests) to assert per-subscriber delivery order.
+	Sequence int `json:"sequence,omitempty"`
+	// Aborted is true on turn_end when the run ended via Abort rather
+	// than completing normally.
+	Aborted bool `json:"aborted,omitempty"`
 }
 
 // ToolUpdate carries the input and result of a tool call.

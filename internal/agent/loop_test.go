@@ -356,3 +356,78 @@ func TestAgentSubscribeUnsubscribe(t *testing.T) {
 		t.Fatalf("unsubscribed handler called %d times", called)
 	}
 }
+
+// ── Regression: PR #217 review items ─────────────────────────────────────
+
+func TestRunLoopMaxTurnsCap(t *testing.T) {
+	// A model that always issues a tool call must not loop forever:
+	// the run stops after MaxTurns provider round-trips with an error.
+	a := NewAgent(AgentConfig{Provider: "mock", Model: "m", MaxTurns: 3})
+	// Turns 1-3 each issue a tool call; the cap then fires at the top of
+	// turn 4, before the provider is called a 4th time.
+	mp := &mockProvider{responses: [][]Event{
+		{{Type: EventToolCall, Tool: &ToolUpdate{Name: "loop_tool"}}, {Type: EventStop}},
+		{{Type: EventToolCall, Tool: &ToolUpdate{Name: "loop_tool"}}, {Type: EventStop}},
+		{{Type: EventToolCall, Tool: &ToolUpdate{Name: "loop_tool"}}, {Type: EventStop}},
+	}}
+	a.Provider = mp
+	a.Executor.RegisterTool(AgentTool{Name: "loop_tool"}, func(map[string]any) (string, error) {
+		return "again", nil
+	})
+
+	errCh := make(chan error, 1)
+	a.Subscribe(func(ev AgentEvent) {
+		if ev.Type == AgentEventError && ev.Error != nil {
+			errCh <- ev.Error
+		}
+	}, false)
+
+	if err := a.Prompt("loop forever", nil); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+
+	select {
+	case err := <-errCh:
+		if !strings.Contains(err.Error(), "MaxTurns") {
+			t.Fatalf("error = %v, want MaxTurns exceeded", err)
+		}
+	default:
+		t.Fatal("no error event fired on MaxTurns exhaustion")
+	}
+	if got := mp.callCount(); got != 3 {
+		t.Fatalf("provider called %d times, want exactly MaxTurns (3)", got)
+	}
+	if st := a.State(); st.Status != StatusError {
+		t.Fatalf("status = %q, want error", st.Status)
+	}
+}
+
+func TestRunLoopAbortMarksTurnEnd(t *testing.T) {
+	// Subscribers can distinguish aborted runs: turn_end carries
+	// Aborted=true when the run was cancelled.
+	a := NewAgent(AgentConfig{Provider: "mock", Model: "m"})
+	bp := &blockingProvider{entered: make(chan struct{})}
+	a.Provider = bp
+
+	var aborted bool
+	turnEnd := make(chan struct{}, 1)
+	a.Subscribe(func(ev AgentEvent) {
+		if ev.Type == AgentEventTurnEnd {
+			aborted = ev.Aborted
+			turnEnd <- struct{}{}
+		}
+	}, false)
+
+	if err := a.Prompt("hi", nil); err != nil {
+		t.Fatal(err)
+	}
+	<-bp.entered
+	a.Abort()
+	<-turnEnd
+	a.WaitForIdle()
+
+	if !aborted {
+		t.Fatal("turn_end after Abort does not set Aborted=true")
+	}
+}
