@@ -1,30 +1,123 @@
 package agent
 
-// TransformContext converts agent messages to LLM-facing format.
-// TODO: inject system prompt, context files, provider-specific transforms.
-func TransformContext(config AgentConfig, messages []AgentMessage) []Message {
-	out := make([]Message, 0, len(messages)+1)
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
 
-	// Prepend system prompt if configured
+// TransformContext converts agent state messages into the LLM-facing
+// format via the context transformation pipeline (spec section 06):
+//
+//  1. Convert agent messages to LLM messages
+//  2. Filter UI-only messages
+//  3. Prepend the system prompt
+//  4. Inject context files
+//  5. Apply provider-specific transforms
+func TransformContext(config AgentConfig, messages []AgentMessage) []Message {
+	out := convertToLLM(messages)
+	out = filterUIMessages(out)
+
 	if config.SystemPrompt != "" {
-		out = append(out, Message{
+		sys := Message{
 			Role:    "system",
-			Content: []Content{{Type: "text", Text: config.SystemPrompt}},
-		})
+			Content: []Content{TextContent(config.SystemPrompt)},
+		}
+		out = append([]Message{sys}, out...)
 	}
 
-	// Convert each message
+	out = injectContextFiles(config, out)
+	out = applyProviderTransform(config.Provider, out)
+	return out
+}
+
+// convertToLLM maps agent messages to LLM messages, carrying tool calls
+// on assistant messages and tool results on tool messages.
+func convertToLLM(messages []AgentMessage) []Message {
+	out := make([]Message, 0, len(messages))
 	for _, m := range messages {
-		role := "user"
-		if m.Role == 1 {
-			role = "assistant"
-		} else if m.Role == 2 {
-			role = "tool"
+		text := m.Content
+		if m.Role == RoleTool && m.ToolResult != "" {
+			text = m.ToolResult
 		}
-		out = append(out, Message{
-			Role:    role,
-			Content: []Content{{Type: "text", Text: m.Content}},
-		})
+		lm := Message{
+			Role:    m.Role.String(),
+			Content: []Content{TextContent(text)},
+		}
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			lm.ToolCalls = append(lm.ToolCalls, m.ToolCalls...)
+		}
+		out = append(out, lm)
 	}
 	return out
+}
+
+// filterUIMessages drops messages with no text and no tool calls
+// (UI-only placeholders such as empty notifications).
+func filterUIMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		if FlattenContent(m.Content) == "" && len(m.ToolCalls) == 0 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// injectContextFiles appends each configured context file as a user
+// message containing its path and fenced content. Paths are resolved
+// against config.WorkDir when relative. Unreadable files are noted
+// rather than fatal.
+func injectContextFiles(config AgentConfig, messages []Message) []Message {
+	if len(config.ContextFiles) == 0 {
+		return messages
+	}
+	for _, path := range config.ContextFiles {
+		resolved := resolveWorkPath(config.WorkDir, path)
+		data, err := os.ReadFile(resolved)
+		body := string(data)
+		if err != nil {
+			body = fmt.Sprintf("(unable to read file: %v)", err)
+		}
+		messages = append(messages, Message{
+			Role:    "user",
+			Content: []Content{TextContent(fmt.Sprintf("File: %s\n```\n%s\n```", path, body))},
+		})
+	}
+	return messages
+}
+
+// applyProviderTransform applies provider-specific message
+// transformations as the final pipeline step.
+func applyProviderTransform(provider string, messages []Message) []Message {
+	switch strings.ToLower(provider) {
+	case "ollama", "lmstudio":
+		// These providers accept a system message as-is; no changes needed.
+		return messages
+	default:
+		return messages
+	}
+}
+
+// resolveWorkPath resolves p against workDir when p is relative.
+func resolveWorkPath(workDir, p string) string {
+	if p == "" {
+		return p
+	}
+	if filepath.IsAbs(p) || workDir == "" {
+		return p
+	}
+	return filepath.Join(workDir, p)
+}
+
+// jsonSchema marshals a schema map to raw JSON for tool descriptors.
+func jsonSchema(v any) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(`{"type":"object"}`)
+	}
+	return data
 }
