@@ -19,6 +19,7 @@ type EventBus struct {
 	nextID int
 	subs   map[int]*subscriber
 	order  []int
+	wg     sync.WaitGroup // tracks in-flight handler dispatches
 }
 
 // NewEventBus creates a new EventBus.
@@ -41,6 +42,11 @@ func (eb *EventBus) Subscribe(fn func(AgentEvent), once bool) (unsubscribe func(
 func (eb *EventBus) remove(id int) {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
+	eb.removeLocked(id)
+}
+
+// removeLocked deletes a subscriber. Caller must hold eb.mu.
+func (eb *EventBus) removeLocked(id int) {
 	if _, ok := eb.subs[id]; !ok {
 		return
 	}
@@ -65,14 +71,26 @@ func (eb *EventBus) Fire(event AgentEvent) {
 		}
 		fns = append(fns, sub.fn)
 		if sub.once {
-			eb.remove(id)
+			eb.removeLocked(id)
 		}
 	}
 	eb.mu.Unlock()
 
 	for _, fn := range fns {
-		go fn(event)
+		eb.wg.Add(1)
+		go func(fn func(AgentEvent)) {
+			defer eb.wg.Done()
+			fn(event)
+		}(fn)
 	}
+}
+
+// WaitDispatch blocks until every handler dispatched so far has
+// completed. WaitForIdle uses this so callers that block on the run
+// loop observe all events the run fired, even though handlers run
+// asynchronously.
+func (eb *EventBus) WaitDispatch() {
+	eb.wg.Wait()
 }
 
 // ── End Barrier ──────────────────────────────────────────────────────────

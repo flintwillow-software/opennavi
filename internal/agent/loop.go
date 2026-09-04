@@ -13,6 +13,7 @@ import (
 // after waiting on the AgentEndBarrier so one-shot subscribers can
 // finish processing first.
 func (a *Agent) runLoop(ctx context.Context) {
+loop:
 	for {
 		select {
 		case <-ctx.Done():
@@ -87,6 +88,7 @@ func (a *Agent) runLoop(ctx context.Context) {
 
 			case EventStop:
 				if haveMessage {
+					fullMessage.IsStreaming = false
 					a.setState(a.state.AppendMessage(fullMessage))
 				}
 
@@ -111,7 +113,7 @@ func (a *Agent) runLoop(ctx context.Context) {
 							IsError:    r.IsError,
 						}})
 					}
-					break // continue the outer loop: think -> act -> observation
+					continue loop // think -> act -> observation
 				}
 
 				// 7. No tool calls: the turn is complete

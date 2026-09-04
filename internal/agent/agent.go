@@ -145,8 +145,9 @@ func (a *Agent) Abort() {
 	}
 }
 
-// WaitForIdle blocks until the agent completes its current run. If no
-// run is active it returns immediately.
+// WaitForIdle blocks until the agent completes its current run and all
+// events fired during that run have been delivered to their handlers.
+// If no run is active it still waits for any in-flight event dispatch.
 func (a *Agent) WaitForIdle() {
 	a.mu.RLock()
 	done := a.done
@@ -154,6 +155,7 @@ func (a *Agent) WaitForIdle() {
 	if done != nil {
 		<-done
 	}
+	a.EventBus.WaitDispatch()
 }
 
 // isRunning reports whether a run is currently active.
