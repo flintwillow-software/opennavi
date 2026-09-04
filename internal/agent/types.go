@@ -2,6 +2,29 @@ package agent
 
 import "encoding/json"
 
+// ── Role ─────────────────────────────────────────────────────────────────
+
+// Role identifies the author of an AgentMessage.
+type Role int
+
+const (
+	RoleUser Role = iota
+	RoleAssistant
+	RoleTool
+)
+
+// String returns the LLM-facing role name.
+func (r Role) String() string {
+	switch r {
+	case RoleAssistant:
+		return "assistant"
+	case RoleTool:
+		return "tool"
+	default:
+		return "user"
+	}
+}
+
 // ── Status ───────────────────────────────────────────────────────────────
 
 // AgentStatus tracks the agent's execution state.
@@ -32,11 +55,31 @@ const (
 	AgentEventEnd          AgentEventType = "agent_end"
 )
 
+// Stream event types emitted by providers on the Event channel.
+const (
+	EventMessageStart = "message_start"
+	EventContentDelta = "content_delta"
+	EventToolCall     = "tool_call"
+	EventMessageEnd   = "message_end"
+	EventError        = "error"
+	EventStop         = "stop"
+)
+
+// ── Queue Modes ──────────────────────────────────────────────────────────
+
+// QueueMode controls how steering messages are queued.
+type QueueMode string
+
+const (
+	QueueModeOneAtATime QueueMode = "one-at-a-time" // replace last queued message
+	QueueModeAll        QueueMode = "all"           // queue all messages
+)
+
 // ── Core Data Types ──────────────────────────────────────────────────────
 
 // AgentMessage represents a single message in the agent's state.
 type AgentMessage struct {
-	Role        int        `json:"role"`
+	Role        Role       `json:"role"`
 	Content     string     `json:"content"`
 	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
 	ToolResult  string     `json:"tool_result,omitempty"`
@@ -65,10 +108,11 @@ type AgentConfig struct {
 	Thinking       bool        `json:"thinking"`
 	Tools          []AgentTool `json:"tools,omitempty"`
 	ToolPlugins    []string    `json:"tool_plugins,omitempty"`
-	QueueMode      string      `json:"queue_mode,omitempty"`
+	QueueMode      QueueMode   `json:"queue_mode,omitempty"`
 	ContextFiles   []string    `json:"context_files,omitempty"`
 	SystemPrompt   string      `json:"system_prompt,omitempty"`
 	CacheRetention int         `json:"cache_retention,omitempty"`
+	WorkDir        string      `json:"work_dir,omitempty"`
 }
 
 // AgentEvent carries information about an agent lifecycle event.
@@ -115,18 +159,31 @@ func (s *AgentState) SetStatus(st AgentStatus) *AgentState {
 	return &next
 }
 
+// SetError returns a new AgentState with the given error recorded.
+func (s *AgentState) SetError(err error) *AgentState {
+	next := *s
+	next.Error = err
+	return &next
+}
+
 // ── LLM-Facing Types ─────────────────────────────────────────────────────
 
 // Message is the LLM-facing message format.
 type Message struct {
-	Role    string    `json:"role"`
-	Content []Content `json:"content,omitempty"`
+	Role      string     `json:"role"`
+	Content   []Content  `json:"content,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // Content represents a block within a message (text, image, etc.).
 type Content struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// TextContent is a convenience constructor for a text content block.
+func TextContent(text string) Content {
+	return Content{Type: "text", Text: text}
 }
 
 // ToolResult holds the output of a tool call.
@@ -136,10 +193,11 @@ type ToolResult struct {
 	IsError    bool   `json:"is_error,omitempty"`
 }
 
-// Event is the internal bus event type.
+// Event is a stream event emitted by a provider onto the Event channel.
 type Event struct {
-	Type    string       `json:"type"`
+	Type    string        `json:"type"`
+	Content string        `json:"content,omitempty"`
 	Message *AgentMessage `json:"message,omitempty"`
-	Tool    *ToolUpdate  `json:"tool,omitempty"`
-	Error   string       `json:"error,omitempty"`
+	Tool    *ToolUpdate   `json:"tool,omitempty"`
+	Error   string        `json:"error,omitempty"`
 }
