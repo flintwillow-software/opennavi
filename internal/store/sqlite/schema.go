@@ -83,6 +83,40 @@ var migrations = []string{
 		version INTEGER PRIMARY KEY,
 		applied_at DATETIME NOT NULL
 	)`,
+	// 2: external-content FTS5 (#163). v1 created a standalone FTS
+	// table with content_rowid=id (meaningless without content=) and
+	// rowid triggers that inserted the TEXT message id into the rowid
+	// column. External content halves the index, keeps it in sync via
+	// the content table, and the 'delete' command triggers below are
+	// the only correct way to remove rows from an external-content
+	// table (DELETE FROM messages_fts silently no-ops and corrupts the
+	// index). The rebuild statement backfills existing messages.
+	`DROP TRIGGER IF EXISTS messages_ai`,
+	`DROP TRIGGER IF EXISTS messages_ad`,
+	`DROP TRIGGER IF EXISTS messages_au`,
+	`DROP TABLE IF EXISTS messages_fts`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+		content,
+		session_id UNINDEXED,
+		content='messages',
+		content_rowid='rowid',
+		tokenize='unicode61'
+	)`,
+	`CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+		INSERT INTO messages_fts(rowid, content, session_id)
+		VALUES (new.rowid, new.content, new.session_id);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content, session_id)
+		VALUES ('delete', old.rowid, old.content, old.session_id);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content, session_id)
+		VALUES ('delete', old.rowid, old.content, old.session_id);
+		INSERT INTO messages_fts(rowid, content, session_id)
+		VALUES (new.rowid, new.content, new.session_id);
+	END`,
+	`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
