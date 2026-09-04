@@ -95,12 +95,12 @@ func (e *ToolExecutor) runTool(call ToolCall) ToolResult {
 	entry, ok := e.tools[call.Name]
 	e.mu.RUnlock()
 	if !ok {
-		return ToolResult{ToolCallID: call.Name, IsError: true, Result: "unknown tool: " + call.Name}
+		return ToolResult{ToolCallID: call.ToolCallID, IsError: true, Result: "unknown tool: " + call.Name}
 	}
 	input := make(map[string]any)
 	if call.Arguments != nil {
 		if err := json.Unmarshal(call.Arguments, &input); err != nil {
-			return ToolResult{ToolCallID: call.Name, IsError: true, Result: "invalid arguments: " + err.Error()}
+			return ToolResult{ToolCallID: call.ToolCallID, IsError: true, Result: "invalid arguments: " + err.Error()}
 		}
 	}
 	result, err := entry.run(input)
@@ -108,7 +108,7 @@ func (e *ToolExecutor) runTool(call ToolCall) ToolResult {
 		if result == "" {
 			result = err.Error()
 		}
-		return ToolResult{ToolCallID: call.Name, Result: result, IsError: true}
+		return ToolResult{ToolCallID: call.ToolCallID, Result: result, IsError: true}
 	}
-	return ToolResult{ToolCallID: call.Name, Result: result}
+	return ToolResult{ToolCallID: call.ToolCallID, Result: result}
 }
