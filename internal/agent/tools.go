@@ -106,8 +106,12 @@ const (
 
 func makeShellExec(workDir string) (AgentTool, func(map[string]any) (string, error)) {
 	descriptor := AgentTool{
-		Name:        ToolShellExec,
-		Description: "Execute a shell command in the working directory and return its combined output.",
+		Name: ToolShellExec,
+		Description: "Execute a shell command in the working directory and return its combined output. " +
+			"Executes with full shell access relative to the working directory; commands can read/write any path the " +
+			"agent process can reach, including outside it — containment is the caller's responsibility (run the " +
+			"agent under an OS-level sandbox if isolation is required). " +
+			"Use for deliberate operations only; prefer file_read for accidental path-traversal safety.",
 		Parameters: jsonSchema(map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -403,20 +403,20 @@ func TestRunLoopMaxTurnsCap(t *testing.T) {
 	}
 }
 
-func TestRunLoopAbortMarksTurnEnd(t *testing.T) {
-	// Subscribers can distinguish aborted runs: turn_end carries
-	// Aborted=true when the run was cancelled.
+func TestRunLoopAbortFiresAbortEvent(t *testing.T) {
+	// agent_abort fires before turn_end on cancellation, so subscribers
+	// can distinguish aborted from completed runs without overloading
+	// turn_end with a flag.
 	a := NewAgent(AgentConfig{Provider: "mock", Model: "m"})
 	bp := &blockingProvider{entered: make(chan struct{})}
 	a.Provider = bp
 
-	var aborted bool
-	turnEnd := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var order []AgentEventType
 	a.Subscribe(func(ev AgentEvent) {
-		if ev.Type == AgentEventTurnEnd {
-			aborted = ev.Aborted
-			turnEnd <- struct{}{}
-		}
+		mu.Lock()
+		order = append(order, ev.Type)
+		mu.Unlock()
 	}, false)
 
 	if err := a.Prompt("hi", nil); err != nil {
@@ -424,10 +424,80 @@ func TestRunLoopAbortMarksTurnEnd(t *testing.T) {
 	}
 	<-bp.entered
 	a.Abort()
-	<-turnEnd
 	a.WaitForIdle()
 
-	if !aborted {
-		t.Fatal("turn_end after Abort does not set Aborted=true")
+	mu.Lock()
+	defer mu.Unlock()
+	var sawAbort, sawTurnEnd, abortFirst bool
+	for i, ty := range order {
+		switch ty {
+		case AgentEventAbort:
+			sawAbort = true
+			if !sawTurnEnd {
+				abortFirst = true
+			}
+		case AgentEventTurnEnd:
+			sawTurnEnd = true
+			_ = i
+		}
+	}
+	if !sawAbort || !sawTurnEnd {
+		t.Fatalf("expected agent_abort then turn_end, got %v", order)
+	}
+	if !abortFirst {
+		t.Fatalf("agent_abort must precede turn_end: %v", order)
+	}
+}
+
+func TestRunLoopSynthesizesToolCallIDs(t *testing.T) {
+	// Providers that don't assign IDs (Ollama) get tc_<turn>_<index>,
+	// so tool results correlate by ID rather than by raw tool name.
+	a := NewAgent(AgentConfig{Provider: "mock", Model: "m"})
+	mp := &mockProvider{responses: [][]Event{
+		{ // two tool calls in one turn — positional matching used to conflate these
+			{Type: EventToolCall, Tool: &ToolUpdate{Name: "first_tool"}},
+			{Type: EventToolCall, Tool: &ToolUpdate{Name: "second_tool"}},
+			{Type: EventStop},
+		},
+		{{Type: EventContentDelta, Content: "done"}, {Type: EventStop}},
+	}}
+	a.Provider = mp
+	a.Executor.RegisterTool(AgentTool{Name: "first_tool"}, func(map[string]any) (string, error) {
+		return "r1", nil
+	})
+	a.Executor.RegisterTool(AgentTool{Name: "second_tool"}, func(map[string]any) (string, error) {
+		return "r2", nil
+	})
+
+	var mu sync.Mutex
+	var resultIDs []string
+	a.Subscribe(func(ev AgentEvent) {
+		if ev.Type == AgentEventToolResult && ev.Tool != nil {
+			mu.Lock()
+			resultIDs = append(resultIDs, ev.Tool.ToolCallID)
+			mu.Unlock()
+		}
+	}, false)
+
+	if err := a.Prompt("call both", nil); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+
+	st := a.State()
+	calls := st.Messages[1].ToolCalls
+	if len(calls) != 2 {
+		t.Fatalf("got %d tool calls, want 2", len(calls))
+	}
+	if calls[0].ToolCallID != "tc_1_0" || calls[1].ToolCallID != "tc_1_1" {
+		t.Fatalf("tool call IDs = %q, %q; want tc_1_0, tc_1_1", calls[0].ToolCallID, calls[1].ToolCallID)
+	}
+	if calls[0].ToolCallID == calls[0].Name || calls[1].ToolCallID == calls[1].Name {
+		t.Fatal("tool call ID must not be the raw tool name")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resultIDs) != 2 || resultIDs[0] != "tc_1_0" || resultIDs[1] != "tc_1_1" {
+		t.Fatalf("tool_result IDs = %v, want [tc_1_0 tc_1_1]", resultIDs)
 	}
 }

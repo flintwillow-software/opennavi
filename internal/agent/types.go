@@ -50,6 +50,7 @@ const (
 	AgentEventContentDelta AgentEventType = "content_delta"
 	AgentEventToolCall     AgentEventType = "tool_call"
 	AgentEventToolResult   AgentEventType = "tool_result"
+	AgentEventAbort        AgentEventType = "agent_abort"
 	AgentEventTurnEnd      AgentEventType = "turn_end"
 	AgentEventError        AgentEventType = "error"
 	AgentEventEnd          AgentEventType = "agent_end"
@@ -88,8 +89,9 @@ type AgentMessage struct {
 
 // ToolCall represents a call to a tool during agent execution.
 type ToolCall struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Name       string          `json:"name"`
+	Arguments  json.RawMessage `json:"arguments,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 }
 
 // AgentTool describes a tool available to the LLM.
@@ -131,9 +133,6 @@ type AgentEvent struct {
 	// Sequence is an optional monotonically increasing counter set by
 	// producers (or tests) to assert per-subscriber delivery order.
 	Sequence int `json:"sequence,omitempty"`
-	// Aborted is true on turn_end when the run ended via Abort rather
-	// than completing normally.
-	Aborted bool `json:"aborted,omitempty"`
 }
 
 // ToolUpdate carries the input and result of a tool call.

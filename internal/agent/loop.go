@@ -23,7 +23,8 @@ loop:
 		select {
 		case <-ctx.Done():
 			a.setState(a.state.SetStatus(StatusIdle))
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
+			a.FireEvent(AgentEvent{Type: AgentEventAbort})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
 			return
 		default:
 		}
@@ -45,7 +46,7 @@ loop:
 			err := fmt.Errorf("run exceeded MaxTurns (%d): the model kept issuing tool calls", maxTurns)
 			a.setState(a.state.SetStatus(StatusError).SetError(err))
 			a.FireEvent(AgentEvent{Type: AgentEventError, Error: err})
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
 			return
 		}
 		evts, err := a.Provider.Stream(ctx, messages, tools, a.Config)
@@ -81,10 +82,18 @@ loop:
 			case EventToolCall:
 				if ev.Tool != nil {
 					tc := ToolCall{Name: ev.Tool.Name, Arguments: ev.Tool.Input}
+					// Synthesize a unique call ID when the provider doesn't
+					// supply one (Ollama never does): tc_<turn>_<index>.
+					tc.ToolCallID = ev.Tool.ToolCallID
+					if tc.ToolCallID == "" {
+						tc.ToolCallID = fmt.Sprintf("tc_%d_%d", turns, len(toolCalls))
+					}
 					toolCalls = append(toolCalls, tc)
 					fullMessage.ToolCalls = append(fullMessage.ToolCalls, tc)
 					haveMessage = true
-					a.FireEvent(AgentEvent{Type: AgentEventToolCall, Tool: ev.Tool})
+					tool := *ev.Tool
+					tool.ToolCallID = tc.ToolCallID
+					a.FireEvent(AgentEvent{Type: AgentEventToolCall, Tool: &tool})
 				}
 
 			case EventMessageEnd:
@@ -144,14 +153,18 @@ loop:
 		}
 		if len(toolCalls) == 0 {
 			a.setState(a.state.SetStatus(StatusIdle))
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: ctx.Err() != nil})
+			if ctx.Err() != nil {
+				a.FireEvent(AgentEvent{Type: AgentEventAbort})
+			}
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
 			return
 		}
 		if ctx.Err() != nil {
 			// Cancelled with pending tool calls: don't run tools on a dead
-			// run; report the turn as aborted.
+			// run; report the abort before closing the turn.
 			a.setState(a.state.SetStatus(StatusIdle))
-			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd, Aborted: true})
+			a.FireEvent(AgentEvent{Type: AgentEventAbort})
+			a.FireEvent(AgentEvent{Type: AgentEventTurnEnd})
 			return
 		}
 		// Tool calls present: loop again so the model sees the results.
