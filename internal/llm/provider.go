@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"unicode/utf8"
 )
 
@@ -103,3 +104,6 @@ func toolChars(runes int) int {
 	}
 	return (runes + toolOutputCharsPerToken - 1) / toolOutputCharsPerToken
 }
+
+// ErrProviderNotFound is returned by registries for unknown names.
+var ErrProviderNotFound = errors.New("not found")
