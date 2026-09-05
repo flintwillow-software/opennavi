@@ -21,6 +21,9 @@ type Store struct {
 	cipher Cipher
 }
 
+// DB exposes the underlying connection for diagnostics and tooling.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // Options configures the store.
 type Options struct {
 	// Cipher encrypts sensitive columns; nil means NoopCipher.
