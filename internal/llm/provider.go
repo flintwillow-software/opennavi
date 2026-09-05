@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"unicode/utf8"
 )
 
 // Provider is the unified LLM provider contract (spec §01): every
@@ -9,8 +10,10 @@ import (
 type Provider interface {
 	// Stream sends the conversation and returns a channel of stream
 	// events. The channel closes when the response completes or ctx is
-	// cancelled; a terminal StreamEventStop or StreamEventError always
-	// precedes closure.
+	// cancelled; when the response completes normally a terminal
+	// StreamEventStop (or StreamEventError on failure) is delivered
+	// before closure — on ctx cancellation the provider may close the
+	// channel without a terminal event.
 	Stream(ctx context.Context, messages []Message, tools []Tool, config Config) (<-chan StreamEvent, error)
 
 	// Complete is a non-streaming variant that returns the full
@@ -40,19 +43,31 @@ type TokenCounter interface {
 	CountText(text string) int
 }
 
-// HeuristicTokenCounter estimates tokens at ~4 characters per token
-// (spec §4.3) plus a small per-message overhead for role framing. Good
+// HeuristicTokenCounter estimates tokens (spec §4.3): ~4 characters
+// per token for ordinary text (counted in RUNES — bytes overestimate
+// multibyte content ~3x for CJK), ~3 characters per token for
+// structured tool output (JSON-shaped text compresses better than
+// prose). Plus a small per-message overhead for role framing. Good
 // enough for compaction triggering and budget checks; never for
 // billing.
 type HeuristicTokenCounter struct{}
 
-const heuristicCharsPerToken = 4
+const (
+	heuristicCharsPerToken     = 4 // prose
+	toolOutputCharsPerToken    = 3 // structured/JSON-shaped tool output
+	heuristicMsgOverheadSystem = 4
+	heuristicMsgOverheadTurn   = 3
+)
 
-func (HeuristicTokenCounter) CountText(text string) int {
+func countRunes(text string) int {
 	if text == "" {
 		return 0
 	}
-	return (len(text) + heuristicCharsPerToken - 1) / heuristicCharsPerToken
+	return (utf8.RuneCountInString(text) + heuristicCharsPerToken - 1) / heuristicCharsPerToken
+}
+
+func (HeuristicTokenCounter) CountText(text string) int {
+	return countRunes(text)
 }
 
 func (c HeuristicTokenCounter) CountTokens(messages []Message) int {
@@ -60,19 +75,31 @@ func (c HeuristicTokenCounter) CountTokens(messages []Message) int {
 	for _, msg := range messages {
 		switch msg.Role {
 		case RoleSystem:
-			total += 4 // system message overhead
+			total += heuristicMsgOverheadSystem
 		case RoleUser, RoleAssistant:
-			total += 3
+			total += heuristicMsgOverheadTurn
 		case RoleTool:
-			total += 3
+			total += heuristicMsgOverheadTurn
 		}
-		total += c.CountText(msg.Content)
+		total += countRunes(msg.Content)
 		for _, tc := range msg.ToolCalls {
-			total += c.CountText(string(tc.Arguments))
+			// Spec §4.3 mandates the 3-chars/token rule for tool OUTPUT;
+			// tool call ARGUMENTS are the same shape (model-generated
+			// structured JSON), so the same ratio is applied there —
+			// documented judgment call.
+			total += toolChars(utf8.RuneCountInString(string(tc.Arguments)))
 		}
 		for _, tr := range msg.ToolResults {
-			total += c.CountText(tr.Content)
+			// Tool output: 3 chars/token per spec §4.3.
+			total += toolChars(utf8.RuneCountInString(tr.Content))
 		}
 	}
 	return total
+}
+
+func toolChars(runes int) int {
+	if runes == 0 {
+		return 0
+	}
+	return (runes + toolOutputCharsPerToken - 1) / toolOutputCharsPerToken
 }
