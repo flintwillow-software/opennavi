@@ -3,6 +3,7 @@ package interfaces
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,17 +14,30 @@ type fakeInterface struct {
 	blockUntil chan struct{}
 	ran        bool
 	stopped    bool
+	stopOnce   sync.Once
 }
 
 func (f *fakeInterface) Name() string { return f.name }
 func (f *fakeInterface) Run(ctx context.Context) error {
 	f.ran = true
 	if f.blockUntil != nil {
-		<-ctx.Done()
+		// Stop-driven shutdown: ignore ctx, exit only via Stop (legal
+		// per the Interface contract — this is the shape HTTP-server
+		// adapters will have). Stop closes the gate, simulating
+		// graceful shutdown.
+		<-f.blockUntil
 	}
 	return f.runErr
 }
-func (f *fakeInterface) Stop() error { f.stopped = true; return nil }
+func (f *fakeInterface) Stop() error {
+	f.stopped = true
+	f.stopOnce.Do(func() {
+		if f.blockUntil != nil {
+			close(f.blockUntil) // release the Run goroutine
+		}
+	})
+	return nil
+}
 
 func TestRegistrySelectEnabledOnly(t *testing.T) {
 	r := NewRegistry()
@@ -120,4 +134,39 @@ func names(ifaces []Interface) []string {
 		out[i] = f.Name()
 	}
 	return out
+}
+
+func TestRunAllStopDrivenDeadlockRegression(t *testing.T) {
+	// Regression: RunAll waited for workers BEFORE calling Stop, so a
+	// Stop-driven interface (legal per contract, ignores ctx) deadlocked
+	// wg.Wait forever. Stop must precede the wait.
+	blocker := &fakeInterface{name: "blocker", blockUntil: make(chan struct{})}
+	failer := &fakeInterface{name: "failer", runErr: errors.New("fatal")}
+	ifaces := []Interface{blocker, failer}
+
+	done := make(chan error, 1)
+	go func() { done <- RunAll(context.Background(), ifaces) }()
+
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "failer: fatal" {
+			t.Fatalf("RunAll error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunAll deadlocked: Stop-driven interface never released")
+	}
+	if !blocker.stopped || !failer.stopped {
+		t.Fatal("not all interfaces stopped")
+	}
+}
+
+func TestStopIdempotent(t *testing.T) {
+	iface := &fakeInterface{name: "x", blockUntil: make(chan struct{})}
+	// Contract: Stop is idempotent and safe after Run returned.
+	go iface.Run(context.Background())
+	_ = iface.Stop()
+	_ = iface.Stop() // must not panic or misbehave
+	if !iface.stopped {
+		t.Fatal("Stop did not mark stopped")
+	}
 }

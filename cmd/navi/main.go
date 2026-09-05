@@ -78,8 +78,3 @@ func run(opts runOpts) error {
 	}
 	return interfaces.RunAll(context.Background(), ifaces)
 }
-
-// keep the sqlite import anchored: future interface constructors (web
-// UI, gateway) will open the session store themselves; the CLI opens
-// it inside its Run. Referenced indirectly via the cli package's store
-// usage — drop this var when a second interface needs the shared DB.

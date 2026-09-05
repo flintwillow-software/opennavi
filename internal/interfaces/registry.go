@@ -10,8 +10,10 @@ import (
 
 // Interface is one delivery mode compiled into (or selected for) a
 // navi binary. Run is long-running: it blocks until ctx is done or a
-// fatal error occurs. Stop requests a graceful shutdown; Run must
-// return promptly afterwards.
+// fatal error occurs. Stop requests a graceful shutdown and MUST be
+// idempotent and safe to call after Run has returned — RunAll calls
+// Stop on every interface (including ones that already exited) before
+// waiting for them.
 type Interface interface {
 	Name() string
 	Run(ctx context.Context) error
@@ -132,13 +134,16 @@ func RunAll(ctx context.Context, ifaces []Interface) error {
 		cancel() // first fatal error shuts the rest down
 	case <-ctx.Done():
 	}
-	wg.Wait()
 
-	// Graceful stop for anything still running (ctx cancel already
-	// signalled them; Stop is the polite follow-up).
+	// Stop BEFORE waiting: the contract allows shutdown via Stop
+	// rather than ctx (Stop-driven adapters like HTTP servers ignore
+	// ctx and would deadlock a wg.Wait that precedes Stop). Stop is
+	// idempotent and safe after Run returned, so already-exited
+	// interfaces tolerate it.
 	for _, iface := range ifaces {
 		_ = iface.Stop()
 	}
+	wg.Wait()
 
 	if runErr != nil {
 		return runErr
