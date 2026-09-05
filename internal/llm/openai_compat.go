@@ -63,22 +63,26 @@ func buildOpenAIRequest(model string, messages []Message, tools []Tool, config C
 		MaxTokens:   config.MaxTokens,
 	}
 	for _, m := range messages {
-		om := openaiMessage{Role: string(m.Role), Content: m.Content}
-		switch {
-		case len(m.ToolCalls) > 0:
-			for _, tc := range m.ToolCalls {
-				om.ToolCalls = append(om.ToolCalls, openaiToolUse{
-					ID:       orSynthID(tc.ID, len(req.Messages), len(om.ToolCalls)),
-					Type:     "function",
-					Function: openaiFn{Name: tc.Name, Arguments: string(tc.Arguments)},
+		// Tool results: one wire message per result — multi-tool turns
+		// carry several results in one OpenNavi message, and each needs
+		// its own tool_call_id on the wire.
+		if len(m.ToolResults) > 0 {
+			for _, tr := range m.ToolResults {
+				req.Messages = append(req.Messages, openaiMessage{
+					Role:       "tool",
+					Content:    tr.Content,
+					ToolCallID: tr.ToolCallID,
 				})
 			}
-		case len(m.ToolResults) > 0:
-			for _, tr := range m.ToolResults {
-				om.Role = "tool"
-				om.ToolCallID = tr.ToolCallID
-				om.Content = tr.Content
-			}
+			continue
+		}
+		om := openaiMessage{Role: string(m.Role), Content: m.Content}
+		for _, tc := range m.ToolCalls {
+			om.ToolCalls = append(om.ToolCalls, openaiToolUse{
+				ID:       orSynthID(tc.ID, len(req.Messages), len(om.ToolCalls)),
+				Type:     "function",
+				Function: openaiFn{Name: tc.Name, Arguments: string(tc.Arguments)},
+			})
 		}
 		req.Messages = append(req.Messages, om)
 	}
@@ -158,7 +162,7 @@ func (p *openaiSSEParser) feed(line string) ([]StreamEvent, bool) {
 	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 	if data == "[DONE]" {
 		var evts []StreamEvent
-		if p.started {
+		if p.started && !p.sawUsage { // usage chunk already emitted MessageEnd
 			evts = append(evts, StreamEvent{Type: StreamEventMessageEnd})
 		}
 		evts = append(evts, StreamEvent{Type: StreamEventStop})
@@ -222,6 +226,8 @@ func (p *openaiSSEParser) feed(line string) ([]StreamEvent, bool) {
 	}
 
 	if chunk.Usage != nil {
+		// Usage rides on a MessageEnd event; guard so the [DONE] handler
+		// does not emit a second one.
 		p.sawUsage = true
 		evts = append(evts, StreamEvent{Type: StreamEventMessageEnd, Usage: &UsageInfo{
 			InputTokens:  chunk.Usage.PromptTokens,

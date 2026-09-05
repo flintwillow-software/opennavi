@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -101,7 +102,7 @@ func TestLiveOpenRouterNon200Shape(t *testing.T) {
 		t.Fatal("expected error for invalid model")
 	}
 	var pe *ProviderError
-	if !errorsAs(err, &pe) {
+	if !errors.As(err, &pe) {
 		t.Fatalf("error = %v, want ProviderError", err)
 	}
 }
@@ -145,25 +146,9 @@ func TestLiveOpenRouterFallbackSmoke(t *testing.T) {
 	t.Logf("fallback content: %q", strings.TrimSpace(content.String()))
 }
 
-func errorsAs(err error, target any) bool {
-	if err == nil {
-		return false
-	}
-	type asTarget interface{ As(any) bool }
-	_ = target
-	// unwrap chain manually
-	for e := err; e != nil; {
-		if pe, ok := e.(*ProviderError); ok {
-			_ = pe
-			p := any(target).(**ProviderError)
-			*p = pe
-			return true
-		}
-		u, ok := e.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		e = u.Unwrap()
-	}
-	return false
+// hasProviderError reports whether the error chain contains a
+// *ProviderError (stdlib errors.As wrapper for the live tests).
+func hasProviderError(err error) bool {
+	var pe *ProviderError
+	return errors.As(err, &pe)
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // OpenRouterProvider implements Provider against the OpenRouter API
@@ -52,11 +53,10 @@ func (p *OpenRouterProvider) MaxContextWindow(config Config) int {
 	if w, ok := knownContextWindows[config.Model]; ok {
 		return w
 	}
-	req, err := http.NewRequest(http.MethodGet, p.BaseURL+"/models/"+config.Model, nil)
-	if err != nil {
-		return 4096
-	}
-	resp, err := p.client.Do(req)
+	// Best-effort live fetch. This method has no ctx parameter, so the
+	// 10s client timeout is what prevents stalls on dead connections.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(p.BaseURL + "/models/" + config.Model)
 	if err != nil {
 		return 4096
 	}
