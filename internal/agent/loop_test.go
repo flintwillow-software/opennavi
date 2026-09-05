@@ -74,7 +74,9 @@ func TestRunLoopTextTurn(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(deltas) != 2 || deltas[0] != "Hello " || deltas[1] != "Hello world" {
+	// Deltas carry only the new text (non-cumulative) — the event is
+	// named delta; the full message arrives at message_end.
+	if len(deltas) != 2 || deltas[0] != "Hello " || deltas[1] != "world" {
 		t.Fatalf("content_delta events carried cumulative content: %v", deltas)
 	}
 }

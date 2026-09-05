@@ -36,6 +36,11 @@ func runREPL(in io.Reader, out io.Writer, store *sqlite.Store, opts runOpts) err
 		fmt.Fprint(out, "navi> ")
 		if !scanner.Scan() {
 			fmt.Fprintln(out)
+			// Quitting mid-session: sync the live conversation to the
+			// store so /search and /resume see it.
+			if err := r.syncCurrent(); err != nil {
+				fmt.Fprintf(out, "error on quit: %v\n", err)
+			}
 			return nil
 		}
 		line := scanner.Text()
@@ -63,6 +68,9 @@ func (r *repl) handle(line string) error {
 		r.printHelp()
 	case "quit", "q":
 		r.quit = true
+		if err := r.syncCurrent(); err != nil {
+			return err
+		}
 	case "new":
 		return r.cmdNew()
 	case "list":
@@ -99,8 +107,11 @@ func (r *repl) chat(text string) error {
 	r.agent.WaitForIdle()
 	st := r.agent.State()
 	fmt.Fprintln(r.out)
-	if st.Status == "error" && st.Error != nil {
-		return fmt.Errorf("agent run failed: %v", st.Error)
+	// Errors are already printed by the event subscriber ([agent error]);
+	// returning them here would double-print. Surface via exit-context:
+	// a non-idle status means the caller can check State().
+	if st.Status == agent.StatusError {
+		fmt.Fprintf(r.out, "(run ended in error state)\n")
 	}
 	return nil
 }
@@ -266,6 +277,12 @@ func (r *repl) cmdFork() error {
 		return err
 	}
 	if err := r.ensureAgent(fork); err != nil {
+		return err
+	}
+	// The fork's inherited history must be live in the new agent —
+	// without this the first chat has no context and the next sync
+	// wipes the fork's entries (whole-row replace).
+	if err := r.manager.RestoreToAgent(fork, r.agent); err != nil {
 		return err
 	}
 	fmt.Fprintf(r.out, "[forked %s → %s]\n", shortID(r.current.ID), shortID(fork.ID))
