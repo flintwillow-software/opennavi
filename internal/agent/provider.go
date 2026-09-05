@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/internal/llm"
@@ -16,7 +17,7 @@ import (
 // OllamaProvider adapts the provider layer's Ollama client onto the
 // agent's types.
 type OllamaProvider struct {
-	inner *llm.OllamaProvider
+	inner llm.Provider // interface: tests inject the scripted mock
 }
 
 // NewOllamaProvider creates an Ollama-backed provider. The base URL is
@@ -39,13 +40,25 @@ func OllamaHostFromEnv() string { return llm.OllamaHostFromEnv() }
 // Ping checks connectivity to the Ollama instance.
 func (p *OllamaProvider) Ping(ctx context.Context) error { return p.inner.Ping(ctx) }
 
-// ListModels returns the models available on the instance.
+// ListModels returns the models available on the instance (only when
+// the underlying provider supports discovery).
 func (p *OllamaProvider) ListModels(ctx context.Context) ([]string, error) {
-	return p.inner.ListModels(ctx)
+	if lm, ok := p.inner.(interface {
+		ListModels(context.Context) ([]string, error)
+	}); ok {
+		return lm.ListModels(ctx)
+	}
+	return nil, fmt.Errorf("provider does not support model discovery")
 }
 
-// Close releases provider resources.
-func (p *OllamaProvider) Close() error { return p.inner.Close() }
+// Close releases provider resources (delegates when the underlying
+// provider supports it).
+func (p *OllamaProvider) Close() error {
+	if closer, ok := p.inner.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 // Stream adapts agent types onto llm.Provider.Stream and maps llm
 // stream events back onto agent Events.

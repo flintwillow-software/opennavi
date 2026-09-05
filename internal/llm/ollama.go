@@ -98,9 +98,11 @@ type ollamaToolDef struct {
 }
 
 type ollamaChatResponse struct {
-	Message *ollamaMessage `json:"message"`
-	Done    bool           `json:"done"`
-	Error   string         `json:"error"`
+	Message         *ollamaMessage `json:"message"`
+	Done            bool           `json:"done"`
+	Error           string         `json:"error"`
+	PromptEvalCount int            `json:"prompt_eval_count"`
+	EvalCount       int            `json:"eval_count"`
 }
 
 // ── Stream ───────────────────────────────────────────────────────────────
@@ -287,6 +289,13 @@ func (p *OllamaProvider) Complete(ctx context.Context, messages []Message, tools
 		return nil, fmt.Errorf("ollama provider: empty response")
 	}
 
+	// Ollama reports prompt/eval token counts on the final chunk;
+	// surfaced as UsageInfo (free per spec section 01, useful for #189).
+	var usage *UsageInfo
+	if final.PromptEvalCount > 0 || final.EvalCount > 0 {
+		usage = &UsageInfo{InputTokens: final.PromptEvalCount, OutputTokens: final.EvalCount}
+	}
+
 	msg := Message{Role: RoleAssistant, Content: final.Message.Content}
 	for _, tc := range final.Message.ToolCalls {
 		args, err := json.Marshal(tc.Function.Arguments)
@@ -299,7 +308,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, messages []Message, tools
 			Arguments: args,
 		})
 	}
-	return &Response{Message: msg}, nil
+	return &Response{Message: msg, Usage: usage}, nil
 }
 
 // ── Ping / token counting / context window ───────────────────────────────
@@ -382,10 +391,29 @@ func (p *OllamaProvider) MaxContextWindow(config Config) int {
 // ── conversion helpers ───────────────────────────────────────────────────
 
 // toOllamaMessages converts llm messages to Ollama's flat-string
-// content format.
+// content format. A tool-role message carrying only ToolResults
+// expands into result messages; the original is skipped when it has no
+// content or tool calls of its own (otherwise the wire output gets a
+// spurious empty tool message).
 func toOllamaMessages(messages []Message) []ollamaMessage {
 	out := make([]ollamaMessage, 0, len(messages))
 	for _, m := range messages {
+		for _, tr := range m.ToolResults {
+			// Ollama represents tool results as tool-role messages; the
+			// call ID rides along in the content prefix when present.
+			// Note: this branch never fires from the agent path — the
+			// agent adapter sends results as plain tool-role content —
+			// but direct llm-layer consumers hit it. Ollama pairs
+			// results by order; #219 will add agent-side call IDs.
+			content := tr.Content
+			if tr.ToolCallID != "" {
+				content = fmt.Sprintf("[%s] %s", tr.ToolCallID, content)
+			}
+			out = append(out, ollamaMessage{Role: "tool", Content: content})
+		}
+		if m.Content == "" && len(m.ToolCalls) == 0 {
+			continue // results-only message: nothing left to append
+		}
 		om := ollamaMessage{
 			Role:    string(m.Role),
 			Content: m.Content,
@@ -399,15 +427,6 @@ func toOllamaMessages(messages []Message) []ollamaMessage {
 			om.ToolCalls = append(om.ToolCalls, ollamaToolCall{
 				Function: ollamaFunctionCall{Name: tc.Name, Arguments: args},
 			})
-		}
-		for _, tr := range m.ToolResults {
-			// Ollama represents tool results as tool-role messages; the
-			// call ID rides along in the content prefix when present.
-			content := tr.Content
-			if tr.ToolCallID != "" {
-				content = fmt.Sprintf("[%s] %s", tr.ToolCallID, content)
-			}
-			out = append(out, ollamaMessage{Role: "tool", Content: content})
 		}
 		out = append(out, om)
 	}
@@ -436,10 +455,17 @@ func toOllamaTools(tools []Tool) []ollamaTool {
 // compile-time Provider check.
 var _ Provider = (*OllamaProvider)(nil)
 
-// keep the import used when the http timeout isn't configured.
-
-// Close releases provider resources (idle HTTP connections).
+// Close releases provider resources (idle HTTP connections). Note:
+// Complete() reports prompt_eval_count/eval_count as UsageInfo; the
+// streaming path does not (Ollama only includes counts on done chunks
+// with stream:false).
 func (p *OllamaProvider) Close() error {
 	p.client.CloseIdleConnections()
 	return nil
+}
+
+// CloseIdler is implemented by providers that hold idle connections.
+// Optional: the agent adapter calls Close via this when present.
+type CloseIdler interface {
+	CloseIdleConnections()
 }
