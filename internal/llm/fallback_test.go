@@ -52,7 +52,7 @@ func (c *countingProvider) MaxContextWindow(config Config) int { return 4096 }
 func TestFallbackPrimarySucceeds(t *testing.T) {
 	primary := &countingProvider{name: "primary"}
 	fallback := &countingProvider{name: "fallback"}
-	fb, err := NewProviderFallback(primary, fallback, RetryConfig{MaxRetries: 2, InitialDelay: time.Millisecond})
+	fb, err := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 2, InitialDelay: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +70,7 @@ func TestFallbackPrimarySucceeds(t *testing.T) {
 func TestFallbackAfterRetryableExhaustion(t *testing.T) {
 	primary := &countingProvider{name: "primary", failUntil: 99}
 	fallback := &countingProvider{name: "fallback"}
-	fb, err := NewProviderFallback(primary, fallback, RetryConfig{
-		MaxRetries:    2,
-		InitialDelay:  time.Millisecond,
-		BackoffFactor: 1,
-	})
+	fb, err := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 2, InitialDelay: time.Millisecond, BackoffFactor: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +97,7 @@ func TestFallbackNonRetryableSwitchesImmediately(t *testing.T) {
 	// Use a non-retryable provider error on first call.
 	p := &failOnceProvider{name: "primary", err: NewProviderError("primary", 400, "bad request")}
 	fallback := &countingProvider{name: "fallback"}
-	fb, _ := NewProviderFallback(p, fallback, RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond})
+	fb, _ := NewProviderFallback(p, fallback, &RetryConfig{MaxRetries: 3, InitialDelay: time.Millisecond})
 
 	events, err := fb.Stream(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{})
 	if err != nil {
@@ -119,7 +115,7 @@ func TestFallbackNonRetryableSwitchesImmediately(t *testing.T) {
 func TestFallbackAllUnavailable(t *testing.T) {
 	primary := &failOnceProvider{name: "primary", err: NewProviderError("primary", 503, "down")}
 	fallback := &failOnceProvider{name: "fallback", err: NewProviderError("fallback", 503, "down")}
-	fb, _ := NewProviderFallback(primary, fallback, RetryConfig{MaxRetries: 1, InitialDelay: time.Millisecond})
+	fb, _ := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 1, InitialDelay: time.Millisecond})
 
 	_, err := fb.Stream(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{})
 	if err == nil || !strings.Contains(err.Error(), "all providers unavailable") {
@@ -130,7 +126,7 @@ func TestFallbackAllUnavailable(t *testing.T) {
 func TestFallbackComplete(t *testing.T) {
 	primary := &countingProvider{name: "primary", failUntil: 99}
 	fallback := &countingProvider{name: "fallback"}
-	fb, _ := NewProviderFallback(primary, fallback, RetryConfig{MaxRetries: 1, InitialDelay: time.Millisecond})
+	fb, _ := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 1, InitialDelay: time.Millisecond})
 
 	resp, err := fb.Complete(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{})
 	if err != nil {
@@ -149,7 +145,7 @@ func TestFallbackRewritesConfigProvider(t *testing.T) {
 	var gotProvider string
 	fallback := &configCaptureProvider{capture: &gotProvider}
 	primary := &failAlwaysProvider{name: "primary"}
-	fb, _ := NewProviderFallback(primary, fallback, RetryConfig{MaxRetries: 0})
+	fb, _ := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 0})
 
 	_, _ = fb.Stream(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{Provider: "primary"})
 	if gotProvider != "capture" {
@@ -182,11 +178,31 @@ func TestRegistryGetList(t *testing.T) {
 	}
 }
 
+func TestFallbackZeroValueMeansNoRetry(t *testing.T) {
+	// Regression: RetryConfig zero-value was treated as "use defaults",
+	// so an explicit MaxRetries: 0 (never retry) silently ran the full
+	// default backoff. Non-nil configs are now honoured verbatim.
+	primary := &failOnceProvider{name: "primary", err: NewProviderError("primary", 503, "down")}
+	fallback := &countingProvider{name: "fallback"}
+	fb, _ := NewProviderFallback(primary, fallback, &RetryConfig{MaxRetries: 0})
+
+	_, err := fb.Stream(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{})
+	if err != nil {
+		t.Fatalf("error = %v; fallback should succeed", err)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary called %d times, want exactly 1 (no retries)", primary.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback called %d times, want 1", fallback.calls)
+	}
+}
+
 func TestFallbackChainComposes(t *testing.T) {
 	// A chain whose fallback is itself a chain: primary -> fb1 -> fb2.
 	inner := &failOnceProvider{name: "fb1", err: NewProviderError("fb1", 503, "down")}
-	innerChain, _ := NewProviderFallback(inner, &countingProvider{name: "fb2"}, RetryConfig{MaxRetries: 0})
-	outer, _ := NewProviderFallback(&failAlwaysProvider{name: "primary"}, innerChain, RetryConfig{MaxRetries: 0})
+	innerChain, _ := NewProviderFallback(inner, &countingProvider{name: "fb2"}, &RetryConfig{MaxRetries: 0})
+	outer, _ := NewProviderFallback(&failAlwaysProvider{name: "primary"}, innerChain, &RetryConfig{MaxRetries: 0})
 
 	resp, err := outer.Complete(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil, Config{})
 	if err != nil {
@@ -194,6 +210,10 @@ func TestFallbackChainComposes(t *testing.T) {
 	}
 	if resp.Message.Content != "ok from fb2" {
 		t.Fatalf("response = %q", resp.Message.Content)
+	}
+	// MaxRetries 0: exactly one attempt per provider in the chain.
+	if inner.calls != 1 {
+		t.Fatalf("inner called %d times, want 1", inner.calls)
 	}
 }
 

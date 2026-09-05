@@ -20,12 +20,20 @@ func (e *ProviderError) Error() string {
 	return fmt.Sprintf("[%s] %d: %s", e.Provider, e.Code, e.Message)
 }
 
-// IsRetryableErr reports whether the error is retryable (sugar for
-// errors.As consumers).
+// IsRetryableErr reports whether the error is retryable. It always
+// derives the answer from the classification functions (Code/Message
+// + provider family) - the IsRetryable FIELD on ProviderError is
+// informational only, set at construction time, never consulted here.
+// Single source of truth is the classifier.
 func IsRetryableErr(err error) bool {
 	var pe *ProviderError
 	if errors.As(err, &pe) {
-		return pe.IsRetryable
+		switch providerFamily(pe.Provider) {
+		case "anthropic":
+			return IsAnthropicRetryable(pe.Code, pe.Message)
+		default:
+			return IsOpenAIRetryable(pe.Code)
+		}
 	}
 	return false
 }

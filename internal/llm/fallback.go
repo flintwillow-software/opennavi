@@ -14,19 +14,22 @@ import (
 type ProviderFallback struct {
 	primary  Provider
 	fallback Provider
-	config   RetryConfig
+	// retry is nil = DefaultRetryConfig; non-nil is honoured verbatim
+	// (MaxRetries: 0 explicitly means never retry).
+	retry *RetryConfig
 }
 
 // NewProviderFallback builds a fallback chain. The retry config
 // defaults to DefaultRetryConfig when zero-valued.
-func NewProviderFallback(primary, fallback Provider, retry RetryConfig) (*ProviderFallback, error) {
+func NewProviderFallback(primary, fallback Provider, retry *RetryConfig) (*ProviderFallback, error) {
 	if primary == nil {
 		return nil, fmt.Errorf("llm: fallback chain requires a primary provider")
 	}
-	if retry == (RetryConfig{}) {
-		retry = DefaultRetryConfig
+	if retry == nil {
+		r := &DefaultRetryConfig
+		return &ProviderFallback{primary: primary, fallback: fallback, retry: r}, nil
 	}
-	return &ProviderFallback{primary: primary, fallback: fallback, config: retry}, nil
+	return &ProviderFallback{primary: primary, fallback: fallback, retry: retry}, nil
 }
 
 // Name implements Provider: reports the primary's name (the chain is
@@ -111,11 +114,11 @@ func (f *ProviderFallback) withRetry(ctx context.Context, op string, fn func() (
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if !f.config.ShouldRetry(err, attempt) {
+		if !f.retry.ShouldRetry(err, attempt) {
 			return nil, lastErr
 		}
 		select {
-		case <-time.After(f.config.Delay(attempt)):
+		case <-time.After(f.retry.Delay(attempt)):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -133,11 +136,11 @@ func (f *ProviderFallback) withRetryComplete(ctx context.Context, fn func() (*Re
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if !f.config.ShouldRetry(err, attempt) {
+		if !f.retry.ShouldRetry(err, attempt) {
 			return nil, lastErr
 		}
 		select {
-		case <-time.After(f.config.Delay(attempt)):
+		case <-time.After(f.retry.Delay(attempt)):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}

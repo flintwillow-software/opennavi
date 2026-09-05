@@ -4,7 +4,6 @@ import (
 	"errors"
 	"math"
 	"math/rand"
-	"net"
 	"time"
 )
 
@@ -47,17 +46,15 @@ func (c *RetryConfig) ShouldRetry(err error, attempt int) bool {
 		}
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return netErr.Timeout()
-	}
-
-	return false
+	// Network timeouts are always retryable (spec §6.2); delegate to
+	// the shared detector (handles wrapped url.Error chains).
+	return IsNetworkTimeout(err)
 }
 
 // Delay computes the wait before the given attempt (exponential
 // backoff from InitialDelay by BackoffFactor, capped at MaxDelay, with
 // additive jitter up to half the delay when enabled).
+// MaxDelay <= 0 means uncapped.
 func (c *RetryConfig) Delay(attempt int) time.Duration {
 	factor := c.BackoffFactor
 	if factor <= 0 {
