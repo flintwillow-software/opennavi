@@ -1,50 +1,118 @@
-package main
+// Package cli is the CLI delivery interface: an interactive chat REPL
+// over the agent runtime and session store (#226), formalized behind
+// the interfaces.Interface contract (#141). The full TUI (Bubble Tea,
+// differential rendering) per spec §01.1 is a follow-up that replaces
+// the REPL front-end; the wiring below is what it reuses.
+package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 )
 
+// Config configures the CLI interface.
+type Config struct {
+	DBPath        string // session SQLite database
+	Model         string // Ollama model name
+	OllamaHost    string // Ollama base URL ($OLLAMA_HOST)
+	WorkDir       string // working directory for built-in tools
+	SystemPrompt  string
+	CompactBudget int // context token budget (0 = compaction off)
+	In            io.Reader
+	Out           io.Writer
+}
+
+// Name implements interfaces.Interface.
+func (c *Config) Name() string { return "cli" }
+
+// Run implements interfaces.Interface: blocks serving the REPL until
+// stdin is exhausted or ctx is cancelled.
+func (c *Config) Run(ctx context.Context) error {
+	cipher, err := sqlite.CipherFromEnv()
+	if err != nil {
+		return err
+	}
+	store, err := sqlite.Open(c.DBPath, sqlite.Options{Cipher: cipher})
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return runREPL(ctx, c.In, c.Out, store, c)
+}
+
+// Stop implements interfaces.Interface. The REPL is stdin-driven;
+// closing stdin (the shell/parent's job on shutdown) ends it. Nothing
+// to stop actively.
+func (c *Config) Stop() error { return nil }
+
+// Ensure the config satisfies the interface contract.
+var _ interfaces.Interface = (*Config)(nil)
+
 // REPL state: one live agent + its bound session (nil until /new or
 // /resume).
 type repl struct {
-	quit    bool
 	store   *sqlite.Store
 	manager *session.SessionManager
 	agent   *agent.Agent
 	current *session.Session
 	out     io.Writer
-	opts    runOpts
+	cfg     *Config
+	quit    bool
 }
 
-func runREPL(in io.Reader, out io.Writer, store *sqlite.Store, opts runOpts) error {
-	if opts.model == "" {
-		return fmt.Errorf("--model is required (e.g. -model qwen3.6:35b)")
+func runREPL(ctx context.Context, in io.Reader, out io.Writer, store *sqlite.Store, cfg *Config) error {
+	if cfg.Model == "" {
+		return fmt.Errorf("cli: --model is required (e.g. -model qwen3.6:35b)")
 	}
-	r := &repl{store: store, manager: session.NewSessionManager(store), out: out, opts: opts}
-	fmt.Fprintf(out, "navi chat — model %s, db %s\nType /help for commands.\n", opts.model, opts.dbPath)
+	if cfg.In == nil {
+		cfg.In = os.Stdin
+	}
+	if cfg.Out == nil {
+		cfg.Out = os.Stdout
+	}
+	r := &repl{store: store, manager: session.NewSessionManager(store), out: out, cfg: cfg}
+	fmt.Fprintf(out, "navi chat — model %s, db %s\nType /help for commands.\n", cfg.Model, cfg.DBPath)
 
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for {
 		fmt.Fprint(out, "navi> ")
-		if !scanner.Scan() {
-			fmt.Fprintln(out)
-			// Quitting mid-session: sync the live conversation to the
-			// store so /search and /resume see it.
+		read := make(chan bool, 1)
+		go func() {
+			read <- scanner.Scan()
+		}()
+		var ok bool
+		select {
+		case ok = <-read:
+		case <-ctx.Done():
+			// Shutdown: sync the live conversation so /search and
+			// /resume see un-closed sessions.
 			if err := r.syncCurrent(); err != nil {
-				fmt.Fprintf(out, "error on quit: %v\n", err)
+				fmt.Fprintf(out, "error on shutdown: %v\n", err)
 			}
+			fmt.Fprintln(out)
 			return nil
 		}
-		line := scanner.Text()
-		if err := r.handle(line); err != nil {
+		line := strings.TrimSpace(scanner.Text())
+		_ = ok
+		if !ok && line == "" {
+			// stdin exhausted: same shutdown path.
+			if err := r.syncCurrent(); err != nil {
+				fmt.Fprintf(out, "error on shutdown: %v\n", err)
+			}
+			fmt.Fprintln(out)
+			return nil
+		}
+		if err := r.handle(ctx, line); err != nil {
 			fmt.Fprintf(out, "error: %v\n", err)
 		}
 		if r.quit {
@@ -53,13 +121,13 @@ func runREPL(in io.Reader, out io.Writer, store *sqlite.Store, opts runOpts) err
 	}
 }
 
-func (r *repl) handle(line string) error {
+func (r *repl) handle(ctx context.Context, line string) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil
 	}
 	if !strings.HasPrefix(line, "/") {
-		return r.chat(line)
+		return r.chat(ctx, line)
 	}
 	cmd, rest, _ := strings.Cut(line[1:], " ")
 	rest = strings.TrimSpace(rest)
@@ -97,7 +165,7 @@ func (r *repl) handle(line string) error {
 
 // ── chat: the core loop ──────────────────────────────────────────────────
 
-func (r *repl) chat(text string) error {
+func (r *repl) chat(ctx context.Context, text string) error {
 	if r.agent == nil {
 		return fmt.Errorf("no active session — /new or /resume first")
 	}
@@ -108,8 +176,7 @@ func (r *repl) chat(text string) error {
 	st := r.agent.State()
 	fmt.Fprintln(r.out)
 	// Errors are already printed by the event subscriber ([agent error]);
-	// returning them here would double-print. Surface via exit-context:
-	// a non-idle status means the caller can check State().
+	// returning them here would double-print.
 	if st.Status == agent.StatusError {
 		fmt.Fprintf(r.out, "(run ended in error state)\n")
 	}
@@ -120,14 +187,14 @@ func (r *repl) chat(text string) error {
 func (r *repl) ensureAgent(sess *session.Session) error {
 	cfg := agent.AgentConfig{
 		Provider:     "ollama",
-		Model:        r.opts.model,
-		SystemPrompt: r.opts.systemPrompt,
-		WorkDir:      r.opts.workDir,
+		Model:        r.cfg.Model,
+		SystemPrompt: r.cfg.SystemPrompt,
+		WorkDir:      r.cfg.WorkDir,
 	}
-	if r.opts.compactBudget > 0 {
+	if r.cfg.CompactBudget > 0 {
 		cfg.Compaction = &agent.CompactionConfig{
 			Enabled:   true,
-			MaxTokens: r.opts.compactBudget,
+			MaxTokens: r.cfg.CompactBudget,
 			KeepTurns: 2,
 		}
 	}
@@ -195,7 +262,7 @@ func (r *repl) cmdNew() error {
 	if err := r.syncCurrent(); err != nil {
 		return err
 	}
-	sess, err := r.manager.CreateSession("navi-cli", r.opts.workDir)
+	sess, err := r.manager.CreateSession("navi-cli", r.cfg.WorkDir)
 	if err != nil {
 		return err
 	}

@@ -1,15 +1,16 @@
-// Command navi is a minimal CLI entry point for the opennavi agent
-// runtime (#226): an interactive chat REPL over internal/agent,
-// internal/session, and the SQLite session store. Plain stdlib — the
-// #141 interface abstraction will absorb/refactor this later.
+// Command navi is the minimal CLI entry point: parses flags into an
+// InterfaceSet, selects enabled interfaces from the registry, and runs
+// them (#141). The chat REPL itself lives in internal/interfaces/cli.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
+	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	cliiface "github.com/flintwillow-software/opennavi/internal/interfaces/cli"
 )
 
 func main() {
@@ -45,14 +46,40 @@ type runOpts struct {
 }
 
 func run(opts runOpts) error {
-	cipher, err := sqlite.CipherFromEnv()
+	if opts.model == "" {
+		return fmt.Errorf("--model is required (e.g. -model qwen3.8:27b)")
+	}
+	if opts.ollamaHost != "" {
+		os.Setenv("OLLAMA_HOST", opts.ollamaHost)
+	}
+
+	// Interface selection: the CLI interface is the only registered
+	// interface today; WebUI/Gateway/Cron adapters register here as
+	// they land (#141 follow-ups), and the builder (#140) will drive
+	// compile-time pruning.
+	registry := interfaces.NewRegistry()
+	registry.Register("cli", func(cfg interfaces.InterfaceConfig) (interfaces.Interface, error) {
+		return &cliiface.Config{
+			DBPath:        opts.dbPath,
+			Model:         opts.model,
+			OllamaHost:    opts.ollamaHost,
+			WorkDir:       opts.workDir,
+			SystemPrompt:  opts.systemPrompt,
+			CompactBudget: opts.compactBudget,
+			In:            os.Stdin,
+			Out:           os.Stdout,
+		}, nil
+	})
+
+	set := interfaces.InterfaceSet{CLI: true}
+	ifaces, err := registry.Select(set)
 	if err != nil {
 		return err
 	}
-	store, err := sqlite.Open(opts.dbPath, sqlite.Options{Cipher: cipher})
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	return runREPL(os.Stdin, os.Stdout, store, opts)
+	return interfaces.RunAll(context.Background(), ifaces)
 }
+
+// keep the sqlite import anchored: future interface constructors (web
+// UI, gateway) will open the session store themselves; the CLI opens
+// it inside its Run. Referenced indirectly via the cli package's store
+// usage — drop this var when a second interface needs the shared DB.
