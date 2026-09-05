@@ -117,6 +117,28 @@ var migrations = []string{
 		VALUES (new.rowid, new.content, new.session_id);
 	END`,
 	`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`,
+	// 3: thought queue persistence (#151) — spec §3.4/§3.5. Queue
+	// state lives in the same SQLite DB as sessions (per the #151
+	// handoff: reuse the store layer, don't invent parallel storage);
+	// the spec's queue.yaml/running.yaml files are superseded. Crash
+	// recovery is a load-side transition (running → pending).
+	`CREATE TABLE IF NOT EXISTS thoughts (
+		id TEXT PRIMARY KEY,
+		prompt TEXT NOT NULL,
+		context TEXT,
+		metadata TEXT,
+		priority INTEGER NOT NULL DEFAULT 4,
+		status TEXT NOT NULL DEFAULT 'pending',
+		session_id TEXT,
+		slot_id TEXT,
+		worker_id TEXT,
+		log_path TEXT,
+		checkpoint BLOB,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_thoughts_status ON thoughts(status)`,
+	`CREATE INDEX IF NOT EXISTS idx_thoughts_priority ON thoughts(priority)`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
