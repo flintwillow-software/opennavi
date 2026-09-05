@@ -82,11 +82,19 @@ loop:
 				a.FireEvent(AgentEvent{Type: AgentEventMessageStart})
 
 			case EventContentDelta:
-				fullMessage.Content += ev.Content // fix: append the delta text, not ev.Error
+				// Keep the full message assembly internal (it's appended
+				// to state at stop); fire only the NEW text in the delta
+				// event — cumulative payloads in a delta-named event make
+				// every UI staircase-print (the #227 REPL did exactly
+				// that). message_end still carries the full message.
+				fullMessage.Content += ev.Content
 				fullMessage.IsStreaming = true
 				haveMessage = true
-				msg := fullMessage
-				a.FireEvent(AgentEvent{Type: AgentEventContentDelta, Message: &msg})
+				a.FireEvent(AgentEvent{Type: AgentEventContentDelta, Message: &AgentMessage{
+					Role:        RoleAssistant,
+					Content:     ev.Content,
+					IsStreaming: true,
+				}})
 
 			case EventToolCall:
 				if ev.Tool != nil {
