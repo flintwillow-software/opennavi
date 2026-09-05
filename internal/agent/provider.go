@@ -1,278 +1,152 @@
 package agent
 
+// Agent-facing provider seam. The concrete Ollama client lives in the
+// provider layer (internal/llm, #187) — this file adapts it onto the
+// agent's own Message/Event types so the run loop is untouched. When
+// the provider layer matures further (#184+), this adapter is the only
+// place that changes.
+
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"strings"
+
+	"github.com/flintwillow-software/opennavi/internal/llm"
 )
 
-// ── Ollama Provider ──────────────────────────────────────────────────────
-
-// OllamaProvider implements ProviderInterface using an Ollama server's
-// /api/chat endpoint with NDJSON streaming.
+// OllamaProvider adapts the provider layer's Ollama client onto the
+// agent's types.
 type OllamaProvider struct {
-	BaseURL string // e.g. "http://localhost:11434"
-	Model   string // default model; overridden by config.Model
-	client  *http.Client
+	inner *llm.OllamaProvider
 }
 
-// NewOllamaProvider creates an OllamaProvider. The base URL is taken from
-// the OLLAMA_HOST environment variable when set (with or without a
-// scheme), defaulting to http://localhost:11434.
+// NewOllamaProvider creates an Ollama-backed provider. The base URL is
+// taken from $OLLAMA_HOST (with or without scheme), defaulting to
+// http://localhost:11434.
 func NewOllamaProvider() *OllamaProvider {
-	return &OllamaProvider{
-		BaseURL: OllamaHostFromEnv(),
-		client:  &http.Client{},
-	}
+	return &OllamaProvider{inner: llm.NewOllamaProvider()}
 }
 
-// OllamaHostFromEnv resolves the Ollama base URL from OLLAMA_HOST.
-func OllamaHostFromEnv() string {
-	host := os.Getenv("OLLAMA_HOST")
-	if host == "" {
-		return "http://localhost:11434"
-	}
-	if !strings.Contains(host, "://") {
-		host = "http://" + host
-	}
-	return strings.TrimSuffix(host, "/")
+// NewOllamaProviderAt creates an Ollama-backed provider at an explicit
+// URL.
+func NewOllamaProviderAt(baseURL string) *OllamaProvider {
+	return &OllamaProvider{inner: llm.NewOllamaProviderAt(baseURL)}
 }
 
-// ollamaChatRequest is the /api/chat request body.
-type ollamaChatRequest struct {
-	Model    string          `json:"model"`
-	Messages []ollamaMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
-	Tools    []ollamaTool    `json:"tools,omitempty"`
-	Options  ollamaOptions   `json:"options,omitempty"`
+// OllamaHostFromEnv resolves the Ollama base URL from OLLAMA_HOST
+// (delegates to the provider layer).
+func OllamaHostFromEnv() string { return llm.OllamaHostFromEnv() }
+
+// Ping checks connectivity to the Ollama instance.
+func (p *OllamaProvider) Ping(ctx context.Context) error { return p.inner.Ping(ctx) }
+
+// ListModels returns the models available on the instance.
+func (p *OllamaProvider) ListModels(ctx context.Context) ([]string, error) {
+	return p.inner.ListModels(ctx)
 }
 
-type ollamaOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
-	NumPredict  int     `json:"num_predict,omitempty"`
-}
+// Close releases provider resources.
+func (p *OllamaProvider) Close() error { return p.inner.Close() }
 
-// ollamaMessage is Ollama's chat message format (content is a string).
-type ollamaMessage struct {
-	Role      string           `json:"role"`
-	Content   string           `json:"content"`
-	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
-}
-
-type ollamaToolCall struct {
-	Function ollamaFunctionCall `json:"function"`
-}
-
-type ollamaFunctionCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-type ollamaTool struct {
-	Type     string        `json:"type"`
-	Function ollamaToolDef `json:"function"`
-}
-
-type ollamaToolDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}
-
-// ollamaChatResponse is one NDJSON chunk of the /api/chat stream.
-type ollamaChatResponse struct {
-	Message *ollamaMessage `json:"message"`
-	Done    bool           `json:"done"`
-	Error   string         `json:"error"`
-}
-
-// Stream sends a chat completion request to Ollama and returns a channel
-// of stream events: message_start, content_delta, tool_call,
-// message_end, stop (or error). The channel closes when the stream ends
-// or ctx is cancelled.
+// Stream adapts agent types onto llm.Provider.Stream and maps llm
+// stream events back onto agent Events.
 func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools []AgentTool, config AgentConfig) (<-chan Event, error) {
-	model := config.Model
-	if model == "" {
-		model = p.Model
-	}
-	if model == "" {
-		return nil, fmt.Errorf("ollama provider: no model configured")
-	}
-
-	body := ollamaChatRequest{
-		Model:    model,
-		Messages: toOllamaMessages(messages),
-		Stream:   true,
-		Tools:    toOllamaTools(tools),
-		Options: ollamaOptions{
-			Temperature: config.Temperature,
-			NumPredict:  config.MaxTokens,
-		},
-	}
-
-	payload, err := json.Marshal(body)
+	events, err := p.inner.Stream(ctx, toLLMMessages(messages), toLLMTools(tools), agentConfigToLLM(config))
 	if err != nil {
-		return nil, fmt.Errorf("ollama provider: encode request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/api/chat", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("ollama provider: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ollama provider: request failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("ollama provider: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return nil, err
 	}
 
 	out := make(chan Event, 32)
-	go p.consume(ctx, resp.Body, out)
+	go func() {
+		defer close(out)
+		for ev := range events {
+			switch ev.Type {
+			case llm.StreamEventMessageStart:
+				deliver(ctx, out, Event{Type: EventMessageStart})
+			case llm.StreamEventContentDelta:
+				deliver(ctx, out, Event{Type: EventContentDelta, Content: ev.Content})
+			case llm.StreamEventToolCallStart:
+				if ev.ToolCall != nil {
+					deliver(ctx, out, Event{
+						Type: EventToolCall,
+						Tool: &ToolUpdate{
+							ToolCallID: ev.ToolCall.ID,
+							Name:       ev.ToolCall.Name,
+							Input:      []byte(ev.ToolCall.Arguments),
+						},
+					})
+				}
+			case llm.StreamEventToolCallEnd:
+				// The agent loop assembles calls from ToolCallStart
+				// events; the end event carries no new information.
+			case llm.StreamEventMessageEnd:
+				deliver(ctx, out, Event{Type: EventMessageEnd})
+			case llm.StreamEventStop:
+				deliver(ctx, out, Event{Type: EventStop})
+				return
+			case llm.StreamEventError:
+				deliver(ctx, out, Event{Type: EventError, Error: errString(ev.Error)})
+				return
+			}
+		}
+	}()
 	return out, nil
 }
 
-// consume parses the NDJSON stream and maps chunks to Events on out,
-// closing the channel when the stream ends or ctx is cancelled.
-func (p *OllamaProvider) consume(ctx context.Context, body io.ReadCloser, out chan Event) {
-	defer close(out)
-	defer body.Close()
-
-	dec := json.NewDecoder(body)
-	started := false
-
-	for {
-		var chunk ollamaChatResponse
-		if err := dec.Decode(&chunk); err != nil {
-			if err == io.EOF {
-				break
-			}
-			// Cancellation closes the body mid-read; treat as normal end.
-			if ctx.Err() != nil {
-				return
-			}
-			p.send(ctx, out, Event{Type: EventError, Error: fmt.Sprintf("decode stream: %v", err)})
-			return
-		}
-
-		if chunk.Error != "" {
-			p.send(ctx, out, Event{Type: EventError, Error: chunk.Error})
-			return
-		}
-
-		if !started && chunk.Message != nil {
-			started = true
-			p.send(ctx, out, Event{Type: EventMessageStart})
-		}
-
-		if chunk.Message != nil {
-			if chunk.Message.Content != "" {
-				p.send(ctx, out, Event{Type: EventContentDelta, Content: chunk.Message.Content})
-			}
-			for _, tc := range chunk.Message.ToolCalls {
-				args, err := json.Marshal(tc.Function.Arguments)
-				if err != nil {
-					args = []byte(`{}`)
-				}
-				p.send(ctx, out, Event{Type: EventToolCall, Tool: &ToolUpdate{
-					Name:  tc.Function.Name,
-					Input: args,
-				}})
-			}
-		}
-
-		if chunk.Done {
-			if started {
-				p.send(ctx, out, Event{Type: EventMessageEnd})
-			}
-			p.send(ctx, out, Event{Type: EventStop})
-			return
-		}
-	}
-
-	// Stream ended without a done chunk: emit close events if we started.
-	if started {
-		p.send(ctx, out, Event{Type: EventMessageEnd})
-	}
-	p.send(ctx, out, Event{Type: EventStop})
-}
-
-// send delivers an event, aborting silently if ctx is cancelled.
-func (p *OllamaProvider) send(ctx context.Context, out chan Event, ev Event) {
+func deliver(ctx context.Context, out chan Event, ev Event) {
 	select {
 	case out <- ev:
 	case <-ctx.Done():
 	}
 }
 
-// toOllamaMessages converts LLM-facing messages to Ollama's flat-string
-// content format.
-func toOllamaMessages(messages []Message) []ollamaMessage {
-	out := make([]ollamaMessage, 0, len(messages))
+// errString renders an error as a string (agent events carry string
+// errors for stream failures).
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func agentConfigToLLM(config AgentConfig) llm.Config {
+	return llm.Config{
+		Provider:    "ollama",
+		Model:       config.Model,
+		Temperature: config.Temperature,
+		MaxTokens:   config.MaxTokens,
+	}
+}
+
+func toLLMMessages(messages []Message) []llm.Message {
+	out := make([]llm.Message, 0, len(messages))
 	for _, m := range messages {
-		om := ollamaMessage{
-			Role:    m.Role,
+		lm := llm.Message{
+			Role:    llm.Role(strings.ToLower(m.Role)),
 			Content: FlattenContent(m.Content),
 		}
 		for _, tc := range m.ToolCalls {
-			var args map[string]any
-			_ = json.Unmarshal(tc.Arguments, &args)
-			if args == nil {
-				args = map[string]any{}
-			}
-			om.ToolCalls = append(om.ToolCalls, ollamaToolCall{
-				Function: ollamaFunctionCall{Name: tc.Name, Arguments: args},
+			lm.ToolCalls = append(lm.ToolCalls, llm.ToolCall{
+				ID:        tc.ToolCallID,
+				Name:      tc.Name,
+				Arguments: append([]byte(nil), tc.Arguments...),
 			})
 		}
-		out = append(out, om)
+		out = append(out, lm)
 	}
 	return out
 }
 
-// toOllamaTools converts tool descriptors to Ollama's function format.
-func toOllamaTools(tools []AgentTool) []ollamaTool {
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]ollamaTool, 0, len(tools))
+func toLLMTools(tools []AgentTool) []llm.Tool {
+	out := make([]llm.Tool, 0, len(tools))
 	for _, t := range tools {
-		out = append(out, ollamaTool{
-			Type: "function",
-			Function: ollamaToolDef{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
+		out = append(out, llm.Tool{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  append([]byte(nil), t.Parameters...),
 		})
 	}
 	return out
 }
 
-// FlattenContent concatenates the text of all content blocks.
-func FlattenContent(blocks []Content) string {
-	var sb strings.Builder
-	for _, b := range blocks {
-		if b.Text != "" {
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(b.Text)
-		}
-	}
-	return sb.String()
-}
-
-// Close cleans up provider resources.
-func (p *OllamaProvider) Close() error {
-	return nil
-}
+// Compile-time check: the adapter satisfies the agent-side contract.
+var _ ProviderInterface = (*OllamaProvider)(nil)

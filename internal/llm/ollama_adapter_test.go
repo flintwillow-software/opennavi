@@ -1,4 +1,4 @@
-package agent
+package llm
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 )
 
 // drain collects every event the provider emits until the channel closes.
-func drain(t *testing.T, ch <-chan Event) []Event {
+func drain(t *testing.T, ch <-chan StreamEvent) []StreamEvent {
 	t.Helper()
-	var evts []Event
+	var evts []StreamEvent
 	timeout := time.After(2 * time.Second)
 	for {
 		select {
@@ -53,13 +53,13 @@ func TestOllamaProviderStreamContent(t *testing.T) {
 	defer srv.Close()
 
 	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	ch, err := p.Stream(context.Background(), []Message{{Role: "user", Content: []Content{{Text: "hi"}}}}, nil, AgentConfig{Model: "test-model"})
+	ch, err := p.Stream(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, Config{Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	evts := drain(t, ch)
 
-	want := []string{string(EventMessageStart), string(EventContentDelta), string(EventContentDelta), string(EventMessageEnd), string(EventStop)}
+	want := []string{string(StreamEventMessageStart), string(StreamEventContentDelta), string(StreamEventContentDelta), string(StreamEventMessageEnd), string(StreamEventStop)}
 	if len(evts) != len(want) {
 		t.Fatalf("got %d events %v, want %v", len(evts), evts, want)
 	}
@@ -86,8 +86,8 @@ func TestOllamaProviderStreamToolCall(t *testing.T) {
 	defer srv.Close()
 
 	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	tools := []AgentTool{{Name: "my_tool", Description: "d"}}
-	ch, err := p.Stream(context.Background(), nil, tools, AgentConfig{Model: "m"})
+	tools := []Tool{{Name: "my_tool", Description: "d"}}
+	ch, err := p.Stream(context.Background(), nil, tools, Config{Model: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,17 +95,17 @@ func TestOllamaProviderStreamToolCall(t *testing.T) {
 
 	var sawTool bool
 	for _, ev := range evts {
-		if ev.Type == EventToolCall && ev.Tool != nil && ev.Tool.Name == "my_tool" {
+		if ev.Type == StreamEventToolCallStart && ev.ToolCall != nil && ev.ToolCall.Name == "my_tool" {
 			sawTool = true
-			if !strings.Contains(string(ev.Tool.Input), `"x"`) {
-				t.Fatalf("tool arguments = %s, want marshalled map", ev.Tool.Input)
+			if !strings.Contains(ev.ToolCall.Arguments, `"x"`) {
+				t.Fatalf("tool arguments = %s, want marshalled map", ev.ToolCall.Arguments)
 			}
 		}
 	}
 	if !sawTool {
 		t.Fatalf("no tool_call event in %v", evts)
 	}
-	if last := evts[len(evts)-1]; last.Type != EventStop {
+	if last := evts[len(evts)-1]; last.Type != StreamEventStop {
 		t.Fatalf("last event = %q, want stop", last.Type)
 	}
 }
@@ -117,7 +117,7 @@ func TestOllamaProviderHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	_, err := p.Stream(context.Background(), nil, nil, AgentConfig{Model: "missing"})
+	_, err := p.Stream(context.Background(), nil, nil, Config{Model: "missing"})
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
 	}
@@ -128,7 +128,7 @@ func TestOllamaProviderHTTPError(t *testing.T) {
 
 func TestOllamaProviderNoModel(t *testing.T) {
 	p := &OllamaProvider{BaseURL: "http://localhost:1"}
-	if _, err := p.Stream(context.Background(), nil, nil, AgentConfig{}); err == nil {
+	if _, err := p.Stream(context.Background(), nil, nil, Config{}); err == nil {
 		t.Fatal("expected error when no model configured")
 	}
 }
@@ -145,7 +145,7 @@ func TestOllamaProviderContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	ch, err := p.Stream(ctx, nil, nil, AgentConfig{Model: "m"})
+	ch, err := p.Stream(ctx, nil, nil, Config{Model: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,15 +173,15 @@ func TestOllamaHostFromEnv(t *testing.T) {
 
 func TestToOllamaMessages(t *testing.T) {
 	msgs := []Message{
-		{Role: "user", Content: []Content{{Text: "hello"}, {Text: "world"}}},
-		{Role: "assistant", ToolCalls: []ToolCall{{Name: "f", Arguments: []byte(`{"a":1}`)}}},
+		{Role: RoleUser, Content: "hello world"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{Name: "f", Arguments: []byte(`{"a":1}`)}}},
 	}
 	out := toOllamaMessages(msgs)
 	if len(out) != 2 {
 		t.Fatalf("got %d messages", len(out))
 	}
-	if out[0].Content != "hello\nworld" {
-		t.Fatalf("content = %q, want blocks flattened", out[0].Content)
+	if out[0].Content != "hello world" {
+		t.Fatalf("content = %q", out[0].Content)
 	}
 	if len(out[1].ToolCalls) != 1 || out[1].ToolCalls[0].Function.Name != "f" {
 		t.Fatalf("tool calls = %+v", out[1].ToolCalls)
