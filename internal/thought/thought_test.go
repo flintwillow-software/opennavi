@@ -1,6 +1,7 @@
 package thought
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -134,9 +135,29 @@ func TestQueuePreemption(t *testing.T) {
 		t.Fatal("low should be claimable")
 	}
 
-	// High-priority arrival with all slots full: preempts the low one.
+	// High-priority arrival with all slots full: the low thought is
+	// marked preempt-requested (cooperative — it keeps running until
+	// its runner yields).
 	high := newThought("high", 1)
 	if err := q.Enqueue(high); err != nil {
+		t.Fatal(err)
+	}
+	lowCopy, err := q.GetThought("low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lowCopy.PreemptRequested {
+		t.Fatal("victim not marked preempt-requested")
+	}
+	// Until the victim's worker cooperates, the slot is occupied: high
+	// must NOT be claimable yet.
+	if _, ok := q.Dequeue(); ok {
+		t.Fatal("high claimed while victim still running")
+	}
+
+	// The worker honours the request: Pause with the runner's snapshot
+	// frees the slot, and high becomes claimable.
+	if err := q.Pause("low", []byte("low-checkpoint")); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := q.Dequeue()
@@ -144,13 +165,20 @@ func TestQueuePreemption(t *testing.T) {
 		t.Fatalf("dequeue = %v, %v; want high", got, ok)
 	}
 
-	// The preempted victim is paused, not lost.
+	// The victim is paused with its checkpoint, not lost.
 	victim, err := q.GetThought("low")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if victim.Status != ThoughtPaused {
 		t.Fatalf("victim status = %q, want paused", victim.Status)
+	}
+	if string(victim.Checkpoint) != "low-checkpoint" {
+		t.Fatalf("victim checkpoint = %q", victim.Checkpoint)
+	}
+	// The flag is cleared once the pause lands.
+	if victim.PreemptRequested {
+		t.Fatal("PreemptRequested not cleared after pause")
 	}
 }
 
@@ -405,5 +433,147 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 			t.Fatal(msg)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestPoolCooperativePreemption(t *testing.T) {
+	// End-to-end cooperative preemption: the low-priority runner blocks
+	// until its ctx is cancelled, snapshots its checkpoint, and returns;
+	// the pool parks it (paused, checkpoint kept) and the high-priority
+	// thought runs. No work is discarded.
+	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+
+	lowCtxErr := make(chan error, 1)
+	lowRuns := 0
+	var lowMu sync.Mutex
+	runner := RunnerFunc(func(ctx context.Context, t *Thought) error {
+		if t.ID == "low" {
+			lowMu.Lock()
+			run := lowRuns
+			lowRuns++
+			lowMu.Unlock()
+			if run == 0 {
+				// First run: block until preempted, snapshot, return.
+				<-ctx.Done()
+				t.Checkpoint = []byte("low-progress")
+				lowCtxErr <- ctx.Err()
+				return ctx.Err()
+			}
+			return nil // resumed run completes normally
+		}
+		return nil // high-priority thought completes immediately
+	})
+	p := NewPool(q, runner, 1)
+	p.Start()
+
+	if err := q.Enqueue(newThought("low", 5)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := q.GetThought("low")
+		return got != nil && got.Status == ThoughtRunning
+	}, "low should start")
+
+	if err := q.Enqueue(newThought("high", 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, func() bool {
+		got, _ := q.GetThought("high")
+		return got != nil && got.Status == ThoughtComplete
+	}, "high should complete after preemption")
+
+	paused, _ := q.GetThought("low")
+	if paused.Status != ThoughtPaused {
+		t.Fatalf("low status = %q, want paused", paused.Status)
+	}
+	if string(paused.Checkpoint) != "low-progress" {
+		t.Fatalf("checkpoint = %q, want runner snapshot", paused.Checkpoint)
+	}
+	select {
+	case err := <-lowCtxErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("low runner error = %v, want context.Canceled", err)
+		}
+	default:
+		t.Fatal("low runner never observed cancellation")
+	}
+
+	// Resume the victim: it completes normally afterwards.
+	if err := q.Resume("low"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := q.GetThought("low")
+		return got != nil && got.Status == ThoughtComplete
+	}, "resumed low should complete")
+	p.StopAndWait()
+}
+
+func TestPoolStopTwiceNoPanic(t *testing.T) {
+	// Regression: Stop closed the done channel unguarded; a second
+	// Stop panicked with 'close of closed channel'.
+	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	p := NewPool(q, RunnerFunc(func(_ context.Context, _ *Thought) error { return nil }), 1)
+	p.Start()
+	p.Stop()
+	p.Stop() // must not panic
+	p.StopAndWait()
+	p.StopAndWait() // must not panic
+}
+
+func TestGetThoughtReturnsCopies(t *testing.T) {
+	// Regression: GetThought/GetThoughts returned live internal
+	// pointers — any external read raced with queue mutations.
+	q, _ := NewQueue(Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err := q.Enqueue(newThought("t", 4)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.GetThought("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Metadata = map[string]string{"mutated": "yes"}
+	got.Status = ThoughtComplete
+
+	fresh, _ := q.GetThought("t")
+	if fresh.Status != ThoughtPending {
+		t.Fatalf("status = %q after mutating the copy, want pending", fresh.Status)
+	}
+	if _, ok := fresh.Metadata["mutated"]; ok {
+		t.Fatal("metadata mutated through copy")
+	}
+	// GetThoughts too.
+	list := q.GetThoughts()
+	if len(list) != 1 || list[0].Status != ThoughtPending {
+		t.Fatalf("GetThoughts = %+v", list)
+	}
+	list[0].Status = ThoughtComplete
+	again := q.GetThoughts()
+	if again[0].Status != ThoughtPending {
+		t.Fatal("GetThoughts list not copied")
+	}
+}
+
+func TestTerminalThoughtsNotScheduled(t *testing.T) {
+	// Terminal thoughts leave the schedulable lists but remain
+	// queryable (in memory for terminal slice, in the store).
+	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err := q.Enqueue(newThought("t", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+	if err := q.Complete("t"); err != nil {
+		t.Fatal(err)
+	}
+	// Dequeue must not re-claim the terminal thought.
+	if _, ok := q.Dequeue(); ok {
+		t.Fatal("terminal thought re-claimed")
+	}
+	got, err := q.GetThought("t")
+	if err != nil || got.Status != ThoughtComplete {
+		t.Fatalf("terminal thought query: %v, %+v", err, got)
 	}
 }

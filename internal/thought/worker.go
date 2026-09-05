@@ -9,6 +9,14 @@ import (
 // thought ≈ one agent run: the agent-runtime adapter prompts the agent
 // with the thought's prompt/context and returns. Runners must respect
 // ctx cancellation.
+//
+// Checkpoint ownership: the runner owns the thought until it returns.
+// On ctx cancellation (preemption or Pool.Cancel) the runner SHOULD
+// snapshot its progress into t.Checkpoint before returning — the
+// worker parks the thought via Pause with that checkpoint, so Resume
+// can continue from it. The thought pointer Dequeue hands to the
+// runner is the queue's live object; mutations to Checkpoint are
+// visible to the worker and preserved by Pause.
 type Runner interface {
 	Run(ctx context.Context, t *Thought) error
 }
@@ -24,6 +32,7 @@ type Pool struct {
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	stop     bool
+	stopOnce sync.Once
 	wake     chan struct{}
 	done     chan struct{} // closed by Stop to release idle workers
 	started  bool
@@ -61,8 +70,19 @@ func (p *Pool) Start() {
 	p.mu.Unlock()
 
 	p.queue.OnEvent(func(ev QueueEvent) {
-		if ev.Kind == EventEnqueued || ev.Kind == EventResumed {
+		switch ev.Kind {
+		case EventEnqueued, EventResumed:
 			p.wakeWorker()
+		case EventPreempted:
+			// Cooperative preemption: cancel the victim's run ctx. The
+			// runner snapshots its checkpoint and returns; the worker
+			// then parks the thought via Pause.
+			p.cancelsM.Lock()
+			cancel, ok := p.cancels[ev.ThoughtID]
+			p.cancelsM.Unlock()
+			if ok {
+				cancel()
+			}
 		}
 	})
 	for i := 0; i < p.workers; i++ {
@@ -85,7 +105,7 @@ func (p *Pool) Stop() {
 	p.mu.Lock()
 	p.stop = true
 	p.mu.Unlock()
-	close(p.done) // broadcast to all idle workers
+	p.stopOnce.Do(func() { close(p.done) }) // broadcast once to all idle workers
 }
 
 // Wait blocks until all workers exit.
@@ -146,17 +166,29 @@ func (p *Pool) worker(n int) {
 
 		if err != nil {
 			if cancelled {
-				// Cancelled via Pool.Cancel: park the thought for
-				// resume rather than failing it.
-				_ = p.queue.Pause(t.ID, t.Checkpoint)
+				// Cancelled (preemption or Pool.Cancel): park the
+				// thought with the runner's checkpoint for resume.
+				if perr := p.queue.Pause(t.ID, t.Checkpoint); perr != nil {
+					p.emitPersistError(t.ID, perr)
+				}
 			} else {
-				_ = p.queue.Fail(t.ID, err.Error())
+				if ferr := p.queue.Fail(t.ID, err.Error()); ferr != nil {
+					p.emitPersistError(t.ID, ferr)
+				}
 			}
 		} else {
-			_ = p.queue.Complete(t.ID)
+			if cerr := p.queue.Complete(t.ID); cerr != nil {
+				p.emitPersistError(t.ID, cerr)
+			}
 		}
 
 		// Slot freed — a pending thought may now be claimable.
 		p.wakeWorker()
 	}
+}
+
+// emitPersistError surfaces persistence failures that would otherwise
+// be swallowed (the thought's in-memory and stored state can diverge).
+func (p *Pool) emitPersistError(thoughtID string, err error) {
+	p.queue.emit(EventPersistFailed, thoughtID, err.Error())
 }

@@ -43,6 +43,12 @@ type Thought struct {
 
 	LogPath    string
 	Checkpoint []byte // last checkpoint state (for resume)
+
+	// PreemptRequested is set by the queue when a higher-priority
+	// thought needs this running thought's slot. The runner honours it
+	// via ctx cancellation: snapshot progress into Checkpoint and
+	// return; the worker then parks the thought (running → paused).
+	PreemptRequested bool
 }
 
 // Sentinel lifecycle errors.
@@ -90,6 +96,22 @@ func (t *Thought) Retry() error {
 	t.WorkerID = ""
 	t.UpdatedAt = time.Now().UTC()
 	return nil
+}
+
+// Clone returns a deep copy — safe to hand to callers while the queue
+// keeps mutating the original (GetThought/GetThoughts use this).
+func (t *Thought) Clone() *Thought {
+	out := *t
+	if t.Metadata != nil {
+		out.Metadata = make(map[string]string, len(t.Metadata))
+		for k, v := range t.Metadata {
+			out.Metadata[k] = v
+		}
+	}
+	if t.Checkpoint != nil {
+		out.Checkpoint = append([]byte(nil), t.Checkpoint...)
+	}
+	return &out
 }
 
 // EffectivePriority returns the priority clamped to the 1-10 range.
