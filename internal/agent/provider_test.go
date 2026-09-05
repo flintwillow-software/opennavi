@@ -7,186 +7,167 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/flintwillow-software/opennavi/internal/llm"
 )
 
-// drain collects every event the provider emits until the channel closes.
-func drain(t *testing.T, ch <-chan Event) []Event {
-	t.Helper()
-	var evts []Event
-	timeout := time.After(2 * time.Second)
-	for {
-		select {
-		case ev, ok := <-ch:
-			if !ok {
-				return evts
-			}
-			evts = append(evts, ev)
-		case <-timeout:
-			t.Fatalf("provider stream did not close; got %d events", len(evts))
-		}
+func TestToLLMMessages(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: []Content{TextContent("be brief")}},
+		{Role: "user", Content: []Content{TextContent("hello")}},
+		{Role: "assistant", Content: []Content{TextContent("calling")}, ToolCalls: []ToolCall{{
+			ToolCallID: "call_0", Name: "file_read", Arguments: json.RawMessage(`{"path":"x"}`),
+		}}},
+		{Role: "tool", Content: []Content{TextContent("file contents")}},
+	}
+	got := toLLMMessages(msgs)
+
+	if len(got) != 4 {
+		t.Fatalf("got %d messages, want 4", len(got))
+	}
+	if got[0].Role != llm.RoleSystem || got[0].Content != "be brief" {
+		t.Fatalf("system = %+v", got[0])
+	}
+	if got[1].Role != llm.RoleUser || got[1].Content != "hello" {
+		t.Fatalf("user = %+v", got[1])
+	}
+	if got[2].Role != llm.RoleAssistant || got[2].Content != "calling" {
+		t.Fatalf("assistant = %+v", got[2])
+	}
+	if len(got[2].ToolCalls) != 1 || got[2].ToolCalls[0].ID != "call_0" || got[2].ToolCalls[0].Name != "file_read" {
+		t.Fatalf("tool call = %+v", got[2].ToolCalls[0])
+	}
+	if !strings.Contains(string(got[2].ToolCalls[0].Arguments), "path") {
+		t.Fatalf("arguments = %s", got[2].ToolCalls[0].Arguments)
+	}
+	if got[3].Role != llm.RoleTool || got[3].Content != "file contents" {
+		t.Fatalf("tool = %+v", got[3])
 	}
 }
 
-func TestOllamaProviderStreamContent(t *testing.T) {
+func TestAgentConfigToLLM(t *testing.T) {
+	cfg := agentConfigToLLM(AgentConfig{Model: "qwen3.8:27b", Temperature: 0.7, MaxTokens: 512})
+	if cfg.Provider != "ollama" || cfg.Model != "qwen3.8:27b" || cfg.Temperature != 0.7 || cfg.MaxTokens != 512 {
+		t.Fatalf("config = %+v", cfg)
+	}
+}
+
+func TestProviderStreamRemapsLLMEvents(t *testing.T) {
+	// The adapter wraps llm.OllamaProvider; inject the scripted llm
+	// mock underneath and verify the agent-side event mapping,
+	// including the ToolCallID passthrough.
+	inner := llm.NewMockProvider([]llm.StreamEvent{
+		{Type: llm.StreamEventMessageStart},
+		{Type: llm.StreamEventContentDelta, Content: "Hello"},
+		{Type: llm.StreamEventToolCallStart, ToolCall: &llm.ToolCallDelta{
+			ID: "call_7", Name: "file_read", Arguments: `{"path":"x"}`,
+		}},
+		{Type: llm.StreamEventMessageEnd},
+		{Type: llm.StreamEventStop},
+	})
+	p := &OllamaProvider{inner: inner}
+
+	ch, err := p.Stream(context.Background(),
+		[]Message{{Role: "user", Content: []Content{TextContent("hi")}}},
+		nil, AgentConfig{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var types []string
+	var toolUpdate *ToolUpdate
+	for ev := range ch {
+		types = append(types, string(ev.Type))
+		if ev.Type == EventToolCall {
+			toolUpdate = ev.Tool
+		}
+	}
+	want := []string{"message_start", "content_delta", "tool_call", "message_end", "stop"}
+	if strings.Join(types, ",") != strings.Join(want, ",") {
+		t.Fatalf("event types = %v, want %v", types, want)
+	}
+	if toolUpdate == nil || toolUpdate.ToolCallID != "call_7" || toolUpdate.Name != "file_read" {
+		t.Fatalf("tool update = %+v", toolUpdate)
+	}
+	if !strings.Contains(string(toolUpdate.Input), "path") {
+		t.Fatalf("tool input = %s", toolUpdate.Input)
+	}
+}
+
+func TestProviderStreamDelegatesToOllamaWire(t *testing.T) {
+	// End-to-end through the adapter: an Ollama-shaped NDJSON server
+	// comes back as agent events.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		var req ollamaChatRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("decode request: %v", err)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Write([]byte(`{"message":{"role":"assistant","content":"hi there"}}` + "\n"))
+		w.Write([]byte(`{"done":true}` + "\n"))
+	}))
+	defer srv.Close()
+
+	p := NewOllamaProviderAt(srv.URL)
+	ch, err := p.Stream(context.Background(),
+		[]Message{{Role: "user", Content: []Content{TextContent("hello")}}},
+		nil, AgentConfig{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var content strings.Builder
+	for ev := range ch {
+		if ev.Type == EventContentDelta {
+			content.WriteString(ev.Content)
+		}
+	}
+	if content.String() != "hi there" {
+		t.Fatalf("content = %q", content.String())
+	}
+}
+
+func TestProviderStreamErrorDelegation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "model missing", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	p := NewOllamaProviderAt(srv.URL)
+	if _, err := p.Stream(context.Background(), nil, nil, AgentConfig{Model: "m"}); err == nil {
+		t.Fatal("expected delegated stream error")
+	}
+}
+
+func TestProviderPingAndListModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if !req.Stream {
-			t.Errorf("request.stream = false, want true")
-		}
-		if req.Model != "test-model" {
-			t.Errorf("request.model = %q", req.Model)
-		}
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Write([]byte(`{"message":{"role":"assistant","content":"Hel"}}` + "\n"))
-		w.Write([]byte(`{"message":{"role":"assistant","content":"lo"}}` + "\n"))
-		w.Write([]byte(`{"done":true}` + "\n"))
+		w.Write([]byte(`{"models":[{"name":"qwen3.8:27b"},{"name":"gemma4:12b"}]}`))
 	}))
 	defer srv.Close()
 
-	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	ch, err := p.Stream(context.Background(), []Message{{Role: "user", Content: []Content{{Text: "hi"}}}}, nil, AgentConfig{Model: "test-model"})
+	p := NewOllamaProviderAt(srv.URL)
+	if err := p.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	models, err := p.ListModels(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	evts := drain(t, ch)
-
-	want := []string{string(EventMessageStart), string(EventContentDelta), string(EventContentDelta), string(EventMessageEnd), string(EventStop)}
-	if len(evts) != len(want) {
-		t.Fatalf("got %d events %v, want %v", len(evts), evts, want)
-	}
-	for i, ty := range want {
-		if string(evts[i].Type) != ty {
-			t.Fatalf("event[%d] = %q, want %q", i, evts[i].Type, ty)
-		}
-	}
-	if evts[1].Content != "Hel" || evts[2].Content != "lo" {
-		t.Fatalf("deltas = %q, %q", evts[1].Content, evts[2].Content)
+	if len(models) != 2 || models[0] != "qwen3.8:27b" {
+		t.Fatalf("models = %v", models)
 	}
 }
 
-func TestOllamaProviderStreamToolCall(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req ollamaChatRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Tools) != 1 || req.Tools[0].Function.Name != "my_tool" {
-			t.Errorf("tools in request = %+v", req.Tools)
-		}
-		w.Write([]byte(`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"my_tool","arguments":{"x":1}}}]}}` + "\n"))
-		w.Write([]byte(`{"done":true}` + "\n"))
-	}))
-	defer srv.Close()
-
-	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	tools := []AgentTool{{Name: "my_tool", Description: "d"}}
-	ch, err := p.Stream(context.Background(), nil, tools, AgentConfig{Model: "m"})
-	if err != nil {
+func TestProviderCloseDelegates(t *testing.T) {
+	inner := llm.NewMockProvider()
+	p := &OllamaProvider{inner: inner}
+	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	evts := drain(t, ch)
-
-	var sawTool bool
-	for _, ev := range evts {
-		if ev.Type == EventToolCall && ev.Tool != nil && ev.Tool.Name == "my_tool" {
-			sawTool = true
-			if !strings.Contains(string(ev.Tool.Input), `"x"`) {
-				t.Fatalf("tool arguments = %s, want marshalled map", ev.Tool.Input)
-			}
-		}
-	}
-	if !sawTool {
-		t.Fatalf("no tool_call event in %v", evts)
-	}
-	if last := evts[len(evts)-1]; last.Type != EventStop {
-		t.Fatalf("last event = %q, want stop", last.Type)
-	}
-}
-
-func TestOllamaProviderHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	_, err := p.Stream(context.Background(), nil, nil, AgentConfig{Model: "missing"})
-	if err == nil {
-		t.Fatal("expected error for non-200 response")
-	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Fatalf("error = %v, want status code mentioned", err)
-	}
-}
-
-func TestOllamaProviderNoModel(t *testing.T) {
-	p := &OllamaProvider{BaseURL: "http://localhost:1"}
-	if _, err := p.Stream(context.Background(), nil, nil, AgentConfig{}); err == nil {
-		t.Fatal("expected error when no model configured")
-	}
-}
-
-func TestOllamaProviderContextCancel(t *testing.T) {
-	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Write([]byte(`{"message":{"content":"partial"}}` + "\n"))
-		w.(http.Flusher).Flush()
-		<-release // hold the stream open until the test finishes
-	}))
-	defer func() { close(release); srv.Close() }()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client()}
-	ch, err := p.Stream(ctx, nil, nil, AgentConfig{Model: "m"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// First event arrives; then cancel and expect the channel to close.
-	<-ch
-	cancel()
-	drain(t, ch)
-}
-
-func TestOllamaHostFromEnv(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"", "http://localhost:11434"},
-		{"10.0.0.50:11434", "http://10.0.0.50:11434"},
-		{"http://host:1234", "http://host:1234"},
-		{"https://host:1234/", "https://host:1234"},
-	}
-	for _, c := range cases {
-		t.Setenv("OLLAMA_HOST", c.in)
-		if got := OllamaHostFromEnv(); got != c.want {
-			t.Errorf("OLLAMA_HOST=%q: got %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestToOllamaMessages(t *testing.T) {
-	msgs := []Message{
-		{Role: "user", Content: []Content{{Text: "hello"}, {Text: "world"}}},
-		{Role: "assistant", ToolCalls: []ToolCall{{Name: "f", Arguments: []byte(`{"a":1}`)}}},
-	}
-	out := toOllamaMessages(msgs)
-	if len(out) != 2 {
-		t.Fatalf("got %d messages", len(out))
-	}
-	if out[0].Content != "hello\nworld" {
-		t.Fatalf("content = %q, want blocks flattened", out[0].Content)
-	}
-	if len(out[1].ToolCalls) != 1 || out[1].ToolCalls[0].Function.Name != "f" {
-		t.Fatalf("tool calls = %+v", out[1].ToolCalls)
-	}
-	if out[1].ToolCalls[0].Function.Arguments["a"] != float64(1) {
-		t.Fatalf("arguments = %+v", out[1].ToolCalls[0].Function.Arguments)
-	}
+	// The mock's Close is a no-op; this just proves delegation compiles
+	// and runs without error.
 }

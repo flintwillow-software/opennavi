@@ -126,3 +126,17 @@ func jsonSchema(v any) json.RawMessage {
 	}
 	return data
 }
+
+// FlattenContent concatenates the text of all content blocks.
+func FlattenContent(blocks []Content) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Text != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
