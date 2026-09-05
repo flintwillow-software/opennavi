@@ -577,3 +577,77 @@ func TestTerminalThoughtsNotScheduled(t *testing.T) {
 		t.Fatalf("terminal thought query: %v, %+v", err, got)
 	}
 }
+
+func TestRetryNoDuplicatePendingEntry(t *testing.T) {
+	// Regression: Fail parks the failed thought in q.pending; Retry
+	// appended it again, leaving a ghost entry that persisted forever.
+	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err := q.Enqueue(newThought("t", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+	if err := q.Fail("t", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Retry("t"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly one entry — no ghost.
+	count := 0
+	for _, tt := range q.GetThoughts() {
+		if tt.ID == "t" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("thought t appears %d times in GetThoughts, want 1", count)
+	}
+	// And it's claimable.
+	got, ok := q.Dequeue()
+	if !ok || got.ID != "t" {
+		t.Fatalf("retried thought not claimable: %v, %v", got, ok)
+	}
+}
+
+func TestPoolCopyInCopyOutIsolatesRunner(t *testing.T) {
+	// The runner receives a Clone: its mutations (Checkpoint AND other
+	// fields) must not race with GetThought readers, and non-checkpoint
+	// mutations are isolated (discarded) while the checkpoint merges
+	// back through Pause.
+	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	runner := RunnerFunc(func(ctx context.Context, t *Thought) error {
+		t.SessionID = "runner-set-this"    // isolated: must NOT leak
+		t.Checkpoint = []byte("runner-cp") // merges back via Pause
+		<-ctx.Done()                       // cancelled by Pool.Cancel
+		return ctx.Err()
+	})
+	p := NewPool(q, runner, 1)
+	p.Start()
+	if err := q.Enqueue(newThought("low", 5)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := q.GetThought("low")
+		return got != nil && got.Status == ThoughtRunning
+	}, "low should start")
+
+	// Concurrent inspection while the runner mutates its clone: must be
+	// race-free (run under -race on the reviewer's machine).
+	p.Cancel("low")
+	waitFor(t, func() bool {
+		got, _ := q.GetThought("low")
+		return got != nil && got.Status == ThoughtPaused
+	}, "low should be parked after cancel")
+
+	paused, _ := q.GetThought("low")
+	if string(paused.Checkpoint) != "runner-cp" {
+		t.Fatalf("checkpoint = %q, want runner snapshot merged back", paused.Checkpoint)
+	}
+	if paused.SessionID == "runner-set-this" {
+		t.Fatal("runner SessionID mutation leaked into queue state")
+	}
+	p.StopAndWait()
+}

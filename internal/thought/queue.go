@@ -238,7 +238,15 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 		q.running = append(q.running, t)
 		q.emit(EventStarted, t.ID, fmt.Sprintf("slot %s", slotID))
 		_ = q.save(t)
-		return t, true
+		// Copy-in/copy-out: the worker/runner gets a Clone and owns it
+		// until the thought reaches a terminal state. Runner mutations
+		// (Checkpoint, and anything else) never race with external
+		// GetThought readers — they work on the clone; the worker merges
+		// the checkpoint back via Pause on cancellation/preemption.
+		// Mutations to other fields (SessionID, LogPath, ...) are
+		// isolated to the clone and discarded.
+		claimed := t.Clone()
+		return claimed, true
 	}
 	return nil, false
 }
@@ -568,6 +576,22 @@ func (q *ThoughtQueue) save(t *Thought) error {
 func (q *ThoughtQueue) Retry(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	// Fail parks failed thoughts in q.pending: flip in place —
+	// appending again would duplicate the entry (ghost thought).
+	if t, _ := q.findIn(q.pending, id); t != nil {
+		if t.Status != ThoughtFailed {
+			return fmt.Errorf("thought: %s: %w: status %s is not failed", id, ErrInvalidTransition, t.Status)
+		}
+		if err := t.Retry(); err != nil {
+			return err
+		}
+		q.sortPending()
+		q.emit(EventEnqueued, id, "retry")
+		return q.save(t)
+	}
+
+	// Coming from elsewhere (e.g. the terminal list): re-queue.
 	t, err := q.lookup(id)
 	if err != nil {
 		return err
@@ -576,14 +600,10 @@ func (q *ThoughtQueue) Retry(id string) error {
 		return err
 	}
 	q.pending = append(q.pending, t)
-	q.sortPending()
-	// Remove from the terminal list if present.
-	for i, r := range q.running {
-		if r.ID == id && r.Status == ThoughtFailed {
-			q.running = append(q.running[:i], q.running[i+1:]...)
-			break
-		}
+	if _, idx := q.findIn(q.terminal, id); idx >= 0 {
+		q.terminal = append(q.terminal[:idx], q.terminal[idx+1:]...)
 	}
+	q.sortPending()
 	q.emit(EventEnqueued, id, "retry")
 	return q.save(t)
 }
