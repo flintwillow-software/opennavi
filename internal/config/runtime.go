@@ -97,14 +97,18 @@ func MergeRuntime(file RuntimeConfig, flags RuntimeConfig) RuntimeConfig {
 
 	// Post-merge env resolution for provider secrets/endpoints that
 	// depend on the FINAL primary (the env layer runs before flags, so
-	// the final primary is not known until here). Explicit flags always
-	// win: both fills are gated on the flag value being empty.
-	if strings.HasPrefix(out.Provider.Primary, "ollama") && out.Provider.Endpoint == "" {
+	// the final primary is not known until here).
+	//
+	// Precedence for these fields is file < env < flags: the fills are
+	// gated on the FLAG value being empty (not the merged value) -
+	// gating on the merged value would let a file-layer key block the
+	// env fill, inverting the chain.
+	if strings.HasPrefix(out.Provider.Primary, "ollama") && flags.Provider.Endpoint == "" {
 		if v := os.Getenv("OLLAMA_HOST"); v != "" {
 			out.Provider.Endpoint = v
 		}
 	}
-	if out.Provider.Primary == "openrouter" && out.Provider.APIKey == "" {
+	if out.Provider.Primary == "openrouter" && flags.Provider.APIKey == "" {
 		if v := os.Getenv("OPENROUTER_API_KEY"); v != "" {
 			out.Provider.APIKey = v
 		}

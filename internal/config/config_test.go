@@ -282,3 +282,41 @@ func TestEnvKeyNotAppliedToOtherPrimaries(t *testing.T) {
 		t.Fatalf("api key = %q, want empty (primary is ollama)", got.Provider.APIKey)
 	}
 }
+
+func TestEnvKeyWinsOverFile(t *testing.T) {
+	// Regression: the env fill was gated on the MERGED key value, so a
+	// file-layer api_key blocked the env fill (file > env, inverting
+	// the chain). Gate is now the flags value: file < env < flags.
+	t.Setenv("OPENROUTER_API_KEY", "env-key")
+	file := RuntimeConfig{Provider: ProviderConfig{
+		Primary: "openrouter",
+		APIKey:  "file-key",
+	}}
+	got := MergeRuntime(file, RuntimeConfig{})
+	if got.Provider.APIKey != "env-key" {
+		t.Fatalf("api key = %q, want env-key (env beats file)", got.Provider.APIKey)
+	}
+}
+
+func TestFileKeyWhenNoEnvAndNoFlag(t *testing.T) {
+	// With neither env nor flag set, the file-layer key stands.
+	os.Unsetenv("OPENROUTER_API_KEY")
+	file := RuntimeConfig{Provider: ProviderConfig{
+		Primary: "openrouter",
+		APIKey:  "file-key",
+	}}
+	got := MergeRuntime(file, RuntimeConfig{})
+	if got.Provider.APIKey != "file-key" {
+		t.Fatalf("api key = %q, want file-key", got.Provider.APIKey)
+	}
+}
+
+func TestFlagKeyWinsOverFile(t *testing.T) {
+	os.Unsetenv("OPENROUTER_API_KEY")
+	file := RuntimeConfig{Provider: ProviderConfig{Primary: "openrouter", APIKey: "file-key"}}
+	flags := RuntimeConfig{Provider: ProviderConfig{Primary: "openrouter", APIKey: "flag-key"}}
+	got := MergeRuntime(file, flags)
+	if got.Provider.APIKey != "flag-key" {
+		t.Fatalf("api key = %q, want flag-key", got.Provider.APIKey)
+	}
+}
