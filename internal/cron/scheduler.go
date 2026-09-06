@@ -47,7 +47,6 @@ type scheduledDef struct {
 	def  ScheduleDef
 	expr *CronExpr
 	loc  *time.Location
-	next time.Time
 }
 
 // NewScheduler builds a scheduler over the given enqueuer.
@@ -127,7 +126,8 @@ func (s *Scheduler) Stop() {
 }
 
 // fireNow enqueues thoughts for every schedule whose expression
-// matches the current time. Used by the tick loop and tests.
+// matches the current time (in the schedule's location). Used by the
+// tick loop and tests.
 func (s *Scheduler) fireNow(now time.Time) {
 	s.mu.Lock()
 	scheds := make([]*scheduledDef, 0, len(s.schedules))
