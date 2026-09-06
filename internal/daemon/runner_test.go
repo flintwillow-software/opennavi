@@ -9,13 +9,19 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
 
 func scriptedRunner(t *testing.T, streams ...[]llm.StreamEvent) *AgentRunner {
 	t.Helper()
-	return NewAgentRunner(agentRunnerDeps{chain: llm.NewMockProvider(streams...)})
+	s := testStore(t)
+	sessionM := session.NewSessionManager(s)
+	return NewAgentRunner(agentRunnerDeps{
+		chain:    llm.NewMockProvider(streams...),
+		sessionM: sessionM,
+	})
 }
 
 func TestAgentRunnerCompletesThought(t *testing.T) {

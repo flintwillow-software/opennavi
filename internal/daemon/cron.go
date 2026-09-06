@@ -24,12 +24,24 @@ func WireCron(db *sql.DB, defs config.DefinitionCronConfig, q *thought.ThoughtQu
 	state := cron.NewStateStore(db)
 	sched := cron.NewScheduler(q)
 
-	// RecordFire wiring: the queue's started event is the claim
-	// boundary (spec §3.2 worker picks up thought → running).
+	// RecordFire wiring: the queue's started event is the claim boundary
+	// (spec §3.2 worker picks up thought → running). Schedule mapping via
+	// thought.Metadata["schedule"] (set at fire time by the cron
+	// scheduler) — keying by thought ID never meets MissedTick, which
+	// reads LastFired(schedule-name).
 	q.OnEvent(func(ev thought.QueueEvent) {
-		if ev.Kind == thought.EventStarted {
-			_ = state.RecordFire(ev.ThoughtID, time.Now().UTC())
+		if ev.Kind != thought.EventStarted {
+			return
 		}
+		got, gerr := q.GetThought(ev.ThoughtID)
+		if gerr != nil {
+			return
+		}
+		schedule := got.Metadata["schedule"]
+		if schedule == "" {
+			return
+		}
+		_ = state.RecordFire(schedule, time.Now().UTC())
 	})
 
 	for _, sd := range defs.ToSchedulerDefs() {

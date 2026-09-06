@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
@@ -34,6 +35,7 @@ type agentRunnerDeps struct {
 	sessionM      *session.SessionManager
 	model         string
 	systemPrompt  string
+	workDir       string
 	compactBudget int
 }
 
@@ -98,15 +100,15 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 
 	// Park on cancellation (ruling: park-with-checkpoint is the
 	// terminal path for interrupted thoughts — never kill-and-lose).
+	// Spec §2.2 pairs checkpoint-save with session-log flush: persist
+	// the conversation via SessionManager before returning.
 	if ctx.Err() != nil {
 		checkpoint, cerr := encodeCheckpoint(a.State().Clone().Messages)
 		if cerr == nil {
 			t.Checkpoint = checkpoint
 		}
-		// Session log flush (spec §2.2 pairs checkpoint-save with
-		// session-log flush).
-		if r.deps.sessionM != nil {
-			_, _ = r.deps.sessionM.CreateSession("daemon", t.ID)
+		if perr := r.persistConversation(t, a.State().Clone().Messages); perr != nil {
+			fmt.Fprintf(os.Stderr, "daemon: session flush for %s: %v\n", t.ID, perr)
 		}
 		return ctx.Err()
 	}
@@ -120,8 +122,8 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		return fmt.Errorf("daemon: thought %s ended in error state", t.ID)
 	default:
 		// Completed: persist the conversation as a session record.
-		if r.deps.sessionM != nil {
-			_, _ = r.deps.sessionM.CreateSession("daemon", t.ID)
+		if perr := r.persistConversation(t, a.State().Clone().Messages); perr != nil {
+			fmt.Fprintf(os.Stderr, "daemon: session flush for %s: %v\n", t.ID, perr)
 		}
 		return nil
 	}
@@ -193,4 +195,25 @@ func decodeCheckpoint(blob []byte) ([]agent.AgentMessage, error) {
 		return nil, fmt.Errorf("daemon: decode checkpoint payload: %w", err)
 	}
 	return msgs, nil
+}
+
+// persistConversation records the agent conversation as session
+// entries (spec §2.2 session-log flush; #240 ruling — sessions record
+// history). Creates the session if needed, then appends one entry per
+// agent message.
+func (r *AgentRunner) persistConversation(t *thought.Thought, msgs []agent.AgentMessage) error {
+	sess, err := r.deps.sessionM.CreateSession("daemon", t.ID)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		content := m.Content
+		if m.Role == agent.RoleTool && m.ToolResult != "" {
+			content = m.ToolResult
+		}
+		e := session.NewEntry(session.Role(strings.ToLower(m.Role.String())), content)
+		e.ToolCallID = m.ToolCallID
+		sess.AppendEntry(e)
+	}
+	return r.deps.sessionM.SaveSession(sess)
 }

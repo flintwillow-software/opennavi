@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
@@ -42,6 +41,7 @@ type RuntimeParams struct {
 	Model          string // CLI model override (flags layer)
 	OllamaHost     string // CLI host override (flags layer)
 	CompactBudget  int    // compaction budget (0 = off)
+	WorkDir        string // working directory for file/shell tools
 	SystemPrompt   string // CLI system prompt override
 	Workers        int    // pool worker count (0 = 2)
 }
@@ -133,50 +133,10 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
-	// Cron scheduler wiring (#242 seam): MigrateState, scheduler with
-	// definition-derived schedule defs, RecordFire wiring (queue started
-	// events advance last_fired/fire_count), and MissedTick for
-	// schedules whose next_due passed while down.
-	if err := cron.MigrateState(store.DB()); err != nil {
+	sched, cerr := WireCron(store.DB(), def.Cron, q)
+	if cerr != nil {
 		store.Close()
-		return nil, err
-	}
-	state := cron.NewStateStore(store.DB())
-	sched := cron.NewScheduler(q)
-	sched.OnEvent(func(ev thought.QueueEvent) {
-		if ev.Kind == thought.EventStarted {
-			_ = state.RecordFire(ev.ThoughtID, time.Now().UTC())
-		}
-	})
-	for _, sd := range def.Cron.ToSchedulerDefs() {
-		if err := sched.Add(sd); err != nil {
-			store.Close()
-			return nil, err
-		}
-	}
-	// MissedTick: schedules whose next_due passed while down enqueue
-	// one coalescing thought at startup (crash-recovery coalescing,
-	// spec section 3.5).
-	for _, sd := range def.Cron.ToSchedulerDefs() {
-		last, lerr := state.LastFired(sd.Name)
-		if lerr != nil {
-			store.Close()
-			return nil, lerr
-		}
-		if last.IsZero() {
-			continue
-		}
-		if sd.Expr != "" {
-			if ce, perr := cron.Parse(sd.Expr); perr == nil {
-				next := ce.Next(last)
-				if next.Before(time.Now()) {
-					if merr := sched.MissedTick(sd.Name); merr != nil {
-						store.Close()
-						return nil, merr
-					}
-				}
-			}
-		}
+		return nil, cerr
 	}
 	sessionM := session.NewSessionManager(store)
 	runner := NewAgentRunner(agentRunnerDeps{
@@ -184,6 +144,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		sessionM:      sessionM,
 		model:         rc.Provider.Model,
 		systemPrompt:  params.SystemPrompt,
+		workDir:       params.WorkDir,
 		compactBudget: params.CompactBudget,
 	})
 	workers := params.Workers
@@ -281,16 +242,22 @@ func unmarshalState(blob []byte) ([]agent.AgentMessage, error) {
 // parked-with-checkpoint on cancellation). No thought is killed-and-
 // lost; park-with-checkpoint is the spec-correct terminal path.
 func (d *Runtime) Run(ctx context.Context) error {
-	// Cron scheduler first: it stops accepting new ticks immediately.
+	// Start the scheduler (begins ticking against the queue).
+	if d.Scheduler != nil {
+		d.Scheduler.Start()
+	}
+
+	// Block until ctx is done (signal.NotifyContext in the command),
+	// then shut down gracefully.
+	<-ctx.Done()
+
+	// Graceful: scheduler stops ticking, pool drains in-flight thoughts
+	// (park-with-checkpoint is the terminal path for interrupted runs),
+	// store close is the final flush.
 	if d.Scheduler != nil {
 		d.Scheduler.Stop()
 	}
-
-	// Pool drains in-flight thoughts.
 	d.Pool.StopAndWait()
-
-	// Session/store flush: SQLite commits are synchronous (nothing
-	// buffered), so closing the store is the final flush.
 	return d.Store.Close()
 }
 
