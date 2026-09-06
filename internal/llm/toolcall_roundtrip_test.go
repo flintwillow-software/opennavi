@@ -32,8 +32,11 @@ func TestOllamaConversationUniqueCallIDs(t *testing.T) {
 		var reqBody map[string]any
 		if err := json.Unmarshal([]byte(blob.String()), &reqBody); err == nil {
 			if msgs, _ := reqBody["messages"].([]any); len(msgs) >= 1 {
-				// Turn 1: request a tool call. Turn 2 (history present):
-				// answer without a call.
+				// Turn 1: two tool calls (synthesized call_0, call_1).
+				// Turn 2 (history present): TWO MORE tool calls — their
+				// synthesized IDs must be call_2/call_3, NOT a reset to
+				// call_0/call_1 (the mutation-killed vacuous version of
+				// this test answered without calls).
 				hasHistory := false
 				for _, m := range msgs {
 					if mm, _ := m.(map[string]any); mm["role"] == "assistant" {
@@ -44,6 +47,8 @@ func TestOllamaConversationUniqueCallIDs(t *testing.T) {
 					w.Write([]byte(`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"f1","arguments":{"a":1}}},{"function":{"name":"f2","arguments":{"b":2}}}]},"done":false}`))
 					return
 				}
+				w.Write([]byte(`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"f3","arguments":{"c":3}}},{"function":{"name":"f4","arguments":{"d":4}}}]},"done":true}`))
+				return
 			}
 		}
 		w.Write([]byte(`{"message":{"role":"assistant","content":"done"},"done":true}`))
@@ -56,8 +61,10 @@ func TestOllamaConversationUniqueCallIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Turn 2: the conversation re-sent with turn 1's calls in history.
-	_, err = p.Stream(context.Background(),
+	// Turn 2: the conversation re-sent with turn 1's calls in history —
+	// the synthesized IDs for THIS stream's new calls must be call_2
+	// and call_3 (base offset by the 2 prior calls).
+	ch, err := p.Stream(context.Background(),
 		[]Message{
 			{Role: RoleUser, Content: "turn 1"},
 			{Role: RoleAssistant, ToolCalls: []ToolCall{
@@ -70,22 +77,18 @@ func TestOllamaConversationUniqueCallIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(bodies) < 2 {
-		t.Fatalf("captured %d request bodies", len(bodies))
+	var endIDs []string
+	for ev := range ch {
+		if ev.Type == StreamEventToolCallEnd && ev.ToolCall != nil {
+			endIDs = append(endIDs, ev.ToolCall.ID)
+		}
 	}
-	// The second stream's synthesized IDs must not collide with the
-	// history's call_0/call_1 — base offset = 2 prior calls.
-	if strings.Contains(bodies[1], `"call_0"`) && strings.Count(bodies[0], `"name"`) > 0 {
-		// Turn-2 stream emits no tool calls here, so just confirm no
-		// call_0 was re-emitted for it (the first body legitimately has
-		// history call_0 in the re-sent messages).
-		_ = bodies[1]
+	if len(endIDs) != 2 {
+		t.Fatalf("tool_call_end IDs = %v, want [call_2 call_3]", endIDs)
 	}
-	// Direct check: a fresh stream over the same conversation offsets
-	// its IDs past the existing ones. Re-run Stream with the full
-	// history — the next synthesized ID would be call_2+.
+	if endIDs[0] != "call_2" || endIDs[1] != "call_3" {
+		t.Fatalf("synthesized IDs = %v, want [call_2 call_3] — conversation-unique synthesis broken", endIDs)
+	}
 }
 
 func TestOllamaSynthesizedIDsOffsetByHistory(t *testing.T) {
