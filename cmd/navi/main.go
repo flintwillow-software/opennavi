@@ -15,12 +15,22 @@ import (
 
 func main() {
 	// `navi daemon` subcommand: long-running daemon mode (#240).
-	if len(os.Args) > 1 && os.Args[1] == "daemon" {
-		if err := runDaemon(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "navi:", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		subcommand := os.Args[1]
+		switch subcommand {
+		case "daemon":
+			if err := runDaemon(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "navi:", err)
+				os.Exit(1)
+			}
+			return
+		case "enqueue":
+			if err := runEnqueue(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "navi:", err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 
 	dbPath := flag.String("db", "./navi.db", "path to the session SQLite database")
