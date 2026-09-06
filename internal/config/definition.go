@@ -64,6 +64,7 @@ type NaviDefinition struct {
 	Skills       []SkillDefinition         `yaml:"skills,omitempty"`
 	Interfaces   map[string]InterfaceEntry `yaml:"interfaces,omitempty"`
 	ThoughtQueue *ThoughtQueueConfig       `yaml:"thought_queue,omitempty"`
+	Cron         DefinitionCronConfig      `yaml:"cron,omitempty"`
 	Extensions   ExtensionConfig           `yaml:"extensions,omitempty"`
 	Permissions  struct {
 		Allow []PermissionRule `yaml:"allow,omitempty"`
@@ -108,6 +109,9 @@ func (d *NaviDefinition) Validate() error {
 	}
 
 	if err := validatePersonality(d.Personality); err != nil {
+		return err
+	}
+	if err := d.Cron.Validate(); err != nil {
 		return err
 	}
 	return nil
