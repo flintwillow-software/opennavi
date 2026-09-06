@@ -1,19 +1,32 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/flintwillow-software/opennavi/internal/cron"
+)
 
 // CronScheduleDef is one named cron schedule in the navi definition
 // (spec §01 Cron interface: tasks defined in navi code or config).
 // Static, developer-authored — navi.yaml is the source of truth for
 // schedule definitions (see #239 plan amendment); SQLite persists tick
 // state only.
+//
+// Enabled is *bool with nil = enabled: schedules are ON unless turned
+// off (cron convention), and an omitted field must never silently
+// disable a schedule.
 type CronScheduleDef struct {
 	Name     string `yaml:"name"`
 	Expr     string `yaml:"expr"`
 	Prompt   string `yaml:"prompt"`
 	Priority int    `yaml:"priority,omitempty"`
 	TZ       string `yaml:"tz,omitempty"`
-	Enabled  bool   `yaml:"enabled"`
+	Enabled  *bool  `yaml:"enabled"`
+}
+
+// IsEnabled implements the nil-true convention.
+func (s CronScheduleDef) IsEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
 }
 
 // DefinitionCronConfig is the `cron:` block in the navi definition.
@@ -44,4 +57,21 @@ func (c DefinitionCronConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ToSchedulerDefs converts validated definition schedules to the
+// scheduler's ScheduleDef shape (nil-Enabled → not disabled).
+func (c DefinitionCronConfig) ToSchedulerDefs() []cron.ScheduleDef {
+	out := make([]cron.ScheduleDef, 0, len(c.Schedules))
+	for _, s := range c.Schedules {
+		out = append(out, cron.ScheduleDef{
+			Name:     s.Name,
+			Expr:     s.Expr,
+			Prompt:   s.Prompt,
+			Priority: s.Priority,
+			TZ:       s.TZ,
+			Disabled: s.Enabled != nil && !*s.Enabled,
+		})
+	}
+	return out
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/thought"
@@ -17,7 +18,10 @@ type ScheduleDef struct {
 	Prompt   string // thought prompt / task template
 	Priority int    // 1-10 (default 3: cron-triggered, spec §2.3)
 	TZ       string // IANA timezone ("" = time.Local)
-	Enabled  bool
+	// Disabled schedules are skipped by the tick loop. The definition
+	// layer uses *bool (nil = enabled); the scheduler normalizes to a
+	// flat flag.
+	Disabled bool
 }
 
 // Enqueuer is what the scheduler feeds (agent-agnostic: implemented by
@@ -41,6 +45,9 @@ type Scheduler struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	running   bool
+
+	idSeq         uint64        // monotonic component for collision-proof thought IDs
+	errorHandlers []func(error) // tick-loop error observers
 }
 
 type scheduledDef struct {
@@ -65,6 +72,24 @@ func (s *Scheduler) SetClock(fn clockFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clock = fn
+}
+
+// OnError registers an observer for tick-loop errors (e.g. failed
+// enqueues). Called synchronously from the tick loop.
+func (s *Scheduler) OnError(fn func(error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errorHandlers = append(s.errorHandlers, fn)
+}
+
+// emitError fans a tick-loop error out to registered observers.
+func (s *Scheduler) emitError(err error) {
+	s.mu.Lock()
+	handlers := append([]func(error){}, s.errorHandlers...)
+	s.mu.Unlock()
+	for _, fn := range handlers {
+		fn(err)
+	}
 }
 
 // Add registers a schedule definition. Errors on invalid cron
@@ -96,14 +121,25 @@ func (s *Scheduler) Add(def ScheduleDef) error {
 		return fmt.Errorf("cron: duplicate schedule %q", def.Name)
 	}
 	s.schedules[def.Name] = &scheduledDef{def: def, expr: expr, loc: loc}
+
+	// Schedule changes take effect without waiting out the current
+	// timer.
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
-// Remove unregisters a schedule.
+// Remove unregisters a schedule and signals the loop.
 func (s *Scheduler) Remove(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.schedules, name)
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Start launches the tick loop.
@@ -126,9 +162,11 @@ func (s *Scheduler) Stop() {
 }
 
 // fireNow enqueues thoughts for every schedule whose expression
-// matches the current time (in the schedule's location). Used by the
-// tick loop and tests.
-func (s *Scheduler) fireNow(now time.Time) {
+// matches the current time (in the schedule's location). Returns the
+// first enqueue error (never silently swallowed — a swallowed enqueue
+// error is a lost scheduled task with zero trace). Used by the tick
+// loop and tests.
+func (s *Scheduler) fireNow(now time.Time) error {
 	s.mu.Lock()
 	scheds := make([]*scheduledDef, 0, len(s.schedules))
 	for _, sd := range s.schedules {
@@ -137,14 +175,18 @@ func (s *Scheduler) fireNow(now time.Time) {
 	s.mu.Unlock()
 
 	for _, sd := range scheds {
-		if !sd.def.Enabled {
+		if sd.def.Disabled {
 			continue
 		}
 		if !sd.expr.Matches(now.In(sd.loc)) {
 			continue
 		}
+		// Collision-proof ID: wall-second + monotonic counter (fireNow
+		// and MissedTick can hit the same wall second, exactly the
+		// crash-recovery scenario).
+		id := fmt.Sprintf("cron-%s-%s-%d", sd.def.Name, now.UTC().Format("20060102T150405"), atomic.AddUint64(&s.idSeq, 1))
 		t := &thought.Thought{
-			ID:        fmt.Sprintf("cron-%s-%s", sd.def.Name, now.UTC().Format("20060102T150405")),
+			ID:        id,
 			Prompt:    sd.def.Prompt,
 			Priority:  sd.def.Priority,
 			Status:    thought.ThoughtPending,
@@ -153,9 +195,10 @@ func (s *Scheduler) fireNow(now time.Time) {
 			Metadata:  map[string]string{"schedule": sd.def.Name},
 		}
 		if err := s.queue.Enqueue(t); err != nil {
-			continue
+			return fmt.Errorf("cron: enqueue %s: %w", id, err)
 		}
 	}
+	return nil
 }
 
 func (s *Scheduler) loop() {
@@ -165,7 +208,7 @@ func (s *Scheduler) loop() {
 		var next time.Time
 		now := s.clock()
 		for _, sd := range s.schedules {
-			if !sd.def.Enabled {
+			if sd.def.Disabled {
 				continue
 			}
 			if n := sd.expr.Next(now); n.Before(next) || next.IsZero() {
@@ -190,7 +233,11 @@ func (s *Scheduler) loop() {
 			timer.Stop()
 			return
 		case <-timer.C:
-			s.fireNow(s.clock())
+			// Note: loop() calls Next() under s.mu (up to ~2.6M-iteration
+			// scan for pathological exprs) — fine at MVP scale.
+			if err := s.fireNow(s.clock()); err != nil {
+				s.emitError(err)
+			}
 		case <-s.wake:
 			timer.Stop() // schedules changed; recompute
 		}
