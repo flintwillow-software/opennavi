@@ -127,7 +127,9 @@ func validateName(name string) error {
 }
 
 // validateInterfaces checks conflicting HTTP-listening interfaces
-// (spec §05 rule 3).
+// (spec §05 rule 3). Scope: only the static definition's interface
+// entries are validated here — runtime interface selection (#141) is
+// separate by design.
 func validateInterfaces(ifaces map[string]InterfaceEntry) error {
 	gateway, webui := ifaces["gateway"], ifaces["webui"]
 	if gateway.Enabled && webui.Enabled {

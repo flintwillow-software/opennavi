@@ -247,3 +247,38 @@ personality: "dir: "`))
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestEnvKeyWithFlagSelectedOpenrouter(t *testing.T) {
+	// Regression: OPENROUTER_API_KEY was dropped when the FLAGS layer
+	// selected openrouter — applyEnv gated the key on the file-layer
+	// primary. Env secrets must resolve against the FINAL primary.
+	t.Setenv("OPENROUTER_API_KEY", "env-key")
+	flags := RuntimeConfig{Provider: ProviderConfig{Primary: "openrouter"}}
+	got := MergeRuntime(RuntimeConfig{}, flags)
+	if got.Provider.APIKey != "env-key" {
+		t.Fatalf("api key = %q, want env-key (post-merge env resolution)", got.Provider.APIKey)
+	}
+}
+
+func TestFlagKeyWinsOverEnv(t *testing.T) {
+	// Invariant: explicit flags always win over env secrets.
+	t.Setenv("OPENROUTER_API_KEY", "env-key")
+	flags := RuntimeConfig{Provider: ProviderConfig{
+		Primary: "openrouter",
+		APIKey:  "flag-key",
+	}}
+	got := MergeRuntime(RuntimeConfig{}, flags)
+	if got.Provider.APIKey != "flag-key" {
+		t.Fatalf("api key = %q, want flag-key (flags > env)", got.Provider.APIKey)
+	}
+}
+
+func TestEnvKeyNotAppliedToOtherPrimaries(t *testing.T) {
+	// The env secret resolves only against its own provider.
+	t.Setenv("OPENROUTER_API_KEY", "env-key")
+	flags := RuntimeConfig{Provider: ProviderConfig{Primary: "ollama"}}
+	got := MergeRuntime(RuntimeConfig{}, flags)
+	if got.Provider.APIKey != "" {
+		t.Fatalf("api key = %q, want empty (primary is ollama)", got.Provider.APIKey)
+	}
+}

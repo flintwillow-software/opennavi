@@ -95,12 +95,18 @@ func MergeRuntime(file RuntimeConfig, flags RuntimeConfig) RuntimeConfig {
 	// Layer 4: flags (explicit CLI values win).
 	mergeRuntime(&out, flags)
 
-	// OLLAMA_HOST fills the endpoint only when the FINAL primary is
-	// ollama — the env layer runs before flags, so the final primary
-	// is not known until here.
+	// Post-merge env resolution for provider secrets/endpoints that
+	// depend on the FINAL primary (the env layer runs before flags, so
+	// the final primary is not known until here). Explicit flags always
+	// win: both fills are gated on the flag value being empty.
 	if strings.HasPrefix(out.Provider.Primary, "ollama") && out.Provider.Endpoint == "" {
 		if v := os.Getenv("OLLAMA_HOST"); v != "" {
 			out.Provider.Endpoint = v
+		}
+	}
+	if out.Provider.Primary == "openrouter" && out.Provider.APIKey == "" {
+		if v := os.Getenv("OPENROUTER_API_KEY"); v != "" {
+			out.Provider.APIKey = v
 		}
 	}
 	return out
@@ -155,12 +161,10 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 }
 
 // applyEnv applies environment overrides (layer 3). Known variables:
-// OLLAMA_HOST, OPENROUTER_API_KEY, NAVI_SESSION_KEY, NAVI_SESSION_DB,
-// NAVI_MODEL.
+// OLLAMA_HOST, OPENROUTER_API_KEY (post-merge), NAVI_SESSION_DB,
+// NAVI_MODEL. NAVI_SESSION_KEY is consumed by the cipher seam
+// (sqlite.CipherFromEnv), not by this package.
 func applyEnv(rc *RuntimeConfig) {
-	if v := os.Getenv("OPENROUTER_API_KEY"); v != "" && rc.Provider.Primary == "openrouter" {
-		rc.Provider.APIKey = v
-	}
 	if v := os.Getenv("NAVI_SESSION_DB"); v != "" {
 		rc.SessionDB = v
 	}
