@@ -14,18 +14,46 @@ import (
 // directly to the shared SQLite queue DB (daemon MVP step 3, #241).
 // If the daemon isn't running, the thought is enqueued and picked up
 // on next daemon start.
+//
+// Flags and the positional prompt can appear in any order: the args
+// are partitioned manually (flag.NewFlagSet.Parse stops at the first
+// positional, which would drop -db/-priority placed after the prompt).
+// A token starting with "-" is a flag; everything else is a prompt
+// word. Both `enqueue "prompt" -db X` and `enqueue -db X "prompt"`
+// work.
 func runEnqueue(args []string) error {
 	fs := flag.NewFlagSet("enqueue", flag.ExitOnError)
 	priority := fs.Int("priority", 4, "thought priority 1-10 (1 = critical, 4 = normal)")
 	dbPath := fs.String("db", "", "path to the session SQLite database")
-	if err := fs.Parse(args); err != nil {
+
+	// Partition: flags (with values) vs prompt positionals.
+	var flags []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			flags = append(flags, arg)
+			// Known value-taking flags consume the next token. Go's flag
+			// package accepts both -flag and --flag spellings.
+			switch strings.TrimLeft(arg, "-") {
+			case "priority", "db":
+				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+			continue
+		}
+		positional = append(positional, arg)
+	}
+
+	if err := fs.Parse(flags); err != nil {
 		return err
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(positional) == 0 {
 		return fmt.Errorf("enqueue: prompt is required (navi enqueue \"prompt\" [-priority N] [-db path])")
 	}
-	prompt := strings.Join(rest, " ")
+	prompt := strings.Join(positional, " ")
 
 	if *priority < 1 || *priority > 10 {
 		return fmt.Errorf("enqueue: priority %d out of range [1..10]", *priority)
