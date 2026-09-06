@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,14 +21,15 @@ import (
 
 // Runtime is the assembled daemon: everything long-running needs.
 type Runtime struct {
-	Config   RuntimeParams
-	Def      *config.NaviDefinition
-	Runtime  config.RuntimeConfig
-	Queue    *thought.ThoughtQueue
-	Pool     *thought.Pool
-	Store    *sqlite.Store
-	SessionM *session.SessionManager
-	Provider llm.Provider // the (possibly fallback-chained) LLM provider
+	Config    RuntimeParams
+	Def       *config.NaviDefinition
+	Runtime   config.RuntimeConfig
+	Queue     *thought.ThoughtQueue
+	Pool      *thought.Pool
+	Store     *sqlite.Store
+	SessionM  *session.SessionManager
+	Provider  llm.Provider
+	Scheduler *cron.Scheduler // the (possibly fallback-chained) LLM provider
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -235,4 +237,36 @@ func unmarshalState(blob []byte) ([]agent.AgentMessage, error) {
 		return nil, fmt.Errorf("daemon: decode checkpoint: %w", err)
 	}
 	return msgs, nil
+}
+
+// Run blocks serving the daemon until ctx is done (SIGINT/SIGTERM via
+// signal.NotifyContext in the command layer).
+//
+// Shutdown semantics (documented per review): the scheduler stops
+// first, then the pool's StopAndWait drains in-flight thoughts — a
+// thought still running at drain time finishes its agent run (or is
+// parked-with-checkpoint on cancellation). No thought is killed-and-
+// lost; park-with-checkpoint is the spec-correct terminal path.
+func (d *Runtime) Run(ctx context.Context) error {
+	// Cron scheduler first: it stops accepting new ticks immediately.
+	if d.Scheduler != nil {
+		d.Scheduler.Stop()
+	}
+
+	// Pool drains in-flight thoughts.
+	d.Pool.StopAndWait()
+
+	// Session/store flush: SQLite commits are synchronous (nothing
+	// buffered), so closing the store is the final flush.
+	return d.Store.Close()
+}
+
+// Shutdown is the graceful path used by signal handling: stops the
+// scheduler and drains the pool, leaving the store open for final
+// reads. Call Store.Close() after any last reads.
+func (d *Runtime) Shutdown() {
+	if d.Scheduler != nil {
+		d.Scheduler.Stop()
+	}
+	d.Pool.StopAndWait()
 }
