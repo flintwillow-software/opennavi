@@ -139,6 +139,49 @@ var migrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_thoughts_status ON thoughts(status)`,
 	`CREATE INDEX IF NOT EXISTS idx_thoughts_priority ON thoughts(priority)`,
+	// 4: memory store (#181) — four-scope memory (spec 06-memory/
+	// 00-memory-system.md): user/navi are document scopes (one row per
+	// subject); memories is the long-term entry archive with FTS5
+	// search. The session tier maps to the #149 session system, not
+	// this table. Expiry pruning deletes rows where expires_at < now.
+	`CREATE TABLE IF NOT EXISTS memories (
+		id TEXT PRIMARY KEY,
+		scope TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		content TEXT NOT NULL,
+		source TEXT,
+		tags TEXT,
+		importance REAL NOT NULL DEFAULT 0.5,
+		expires_at DATETIME,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		UNIQUE(scope, subject, id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope, subject)`,
+	`CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at)`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+		content,
+		scope UNINDEXED,
+		subject UNINDEXED,
+		content='memories',
+		content_rowid='rowid',
+		tokenize='unicode61'
+	)`,
+	`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+		INSERT INTO memories_fts(rowid, content, scope, subject)
+		VALUES (new.rowid, new.content, new.scope, new.subject);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+		INSERT INTO memories_fts(memories_fts, rowid, content, scope, subject)
+		VALUES ('delete', old.rowid, old.content, old.scope, old.subject);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+		INSERT INTO memories_fts(memories_fts, rowid, content, scope, subject)
+		VALUES ('delete', old.rowid, old.content, old.scope, old.subject);
+		INSERT INTO memories_fts(rowid, content, scope, subject)
+		VALUES (new.rowid, new.content, new.scope, new.subject);
+	END`,
+	`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
