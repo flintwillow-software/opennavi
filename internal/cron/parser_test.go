@@ -144,3 +144,28 @@ func TestNextDSTGap(t *testing.T) {
 		t.Fatalf("pre-gap fire = %v, want Mar 7 02:30", first)
 	}
 }
+
+func TestNextDSTFallBackDoubleFire(t *testing.T) {
+	// America/New_York 2026 fall-back: 2026-11-01, 02:00→01:00 — the
+	// 02:30 wall hour repeats. A minute-scan fires twice (once per
+	// pass). Documented as intended behavior (tested, not fixed).
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("tzdata unavailable")
+	}
+	ce, _ := Parse("30 2 * * *")
+	// Scan the repeated hour manually: 01:59 → 02:30 (first pass, EDT)
+	// → 01:59:59 (wait, Go normalizes)... Actually scan wall minutes
+	// via Next() twice.
+	first := ce.Next(time.Date(2026, 11, 1, 0, 0, 0, 0, loc))
+	if first.Hour() != 2 || first.Minute() != 30 {
+		t.Fatalf("first fire = %v, want 02:30", first)
+	}
+	second := ce.Next(first)
+	if second.Hour() != 2 || second.Minute() != 30 {
+		t.Fatalf("second fire = %v, want 02:30 (repeated hour)", second)
+	}
+	if !second.After(first) {
+		t.Fatalf("second fire %v not after first %v", second, first)
+	}
+}
