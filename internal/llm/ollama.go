@@ -126,6 +126,10 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools [
 			NumPredict:  config.MaxTokens,
 		},
 	}
+	// Synthesized call IDs must be unique within the WHOLE conversation
+	callSeq := countPriorToolCalls(messages)
+	// (the next request re-sends prior turns), so the base is offset by
+	// the tool calls already present in the incoming message list.
 
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -150,7 +154,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools [
 	}
 
 	out := make(chan StreamEvent, 32)
-	go p.consume(ctx, resp.Body, out)
+	go p.consume(ctx, resp.Body, out, callSeq)
 	return out, nil
 }
 
@@ -159,13 +163,12 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools [
 // Tool calls arrive complete (Ollama doesn't stream partial calls), so
 // each maps to a tool_call_start + tool_call_end pair with a
 // synthesized ID (Ollama never supplies one — #219).
-func (p *OllamaProvider) consume(ctx context.Context, body io.ReadCloser, out chan StreamEvent) {
+func (p *OllamaProvider) consume(ctx context.Context, body io.ReadCloser, out chan StreamEvent, callSeq int) {
 	defer close(out)
 	defer body.Close()
 
 	dec := json.NewDecoder(body)
 	started := false
-	callSeq := 0
 
 	for {
 		var chunk ollamaChatResponse
@@ -468,4 +471,15 @@ func (p *OllamaProvider) Close() error {
 // Optional: the agent adapter calls Close via this when present.
 type CloseIdler interface {
 	CloseIdleConnections()
+}
+
+// countPriorToolCalls counts tool calls across all messages in the
+// conversation so synthesized IDs (call_<base+seq>) never collide with
+// earlier turns when the conversation is re-sent.
+func countPriorToolCalls(messages []Message) int {
+	n := 0
+	for _, m := range messages {
+		n += len(m.ToolCalls)
+	}
+	return n
 }
