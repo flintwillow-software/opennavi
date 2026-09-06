@@ -46,8 +46,9 @@ type Scheduler struct {
 	wg        sync.WaitGroup
 	running   bool
 
-	idSeq         uint64        // monotonic component for collision-proof thought IDs
-	errorHandlers []func(error) // tick-loop error observers
+	idSeq         uint64                     // monotonic component for collision-proof thought IDs
+	errorHandlers []func(error)              // tick-loop error observers
+	eventHandlers []func(thought.QueueEvent) // queue event observers (RecordFire wiring)
 }
 
 type scheduledDef struct {
@@ -241,5 +242,23 @@ func (s *Scheduler) loop() {
 		case <-s.wake:
 			timer.Stop() // schedules changed; recompute
 		}
+	}
+}
+
+// OnEvent registers an observer for queue events (e.g. RecordFire
+// wiring in the daemon: started events advance the schedule state).
+func (s *Scheduler) OnEvent(fn func(thought.QueueEvent)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventHandlers = append(s.eventHandlers, fn)
+}
+
+// emitQueueEvent fans a queue event out to registered observers.
+func (s *Scheduler) emitQueueEvent(ev thought.QueueEvent) {
+	s.mu.Lock()
+	handlers := append([]func(thought.QueueEvent){}, s.eventHandlers...)
+	s.mu.Unlock()
+	for _, fn := range handlers {
+		fn(ev)
 	}
 }

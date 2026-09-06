@@ -265,3 +265,11 @@ func (a *Agent) setState(next *AgentState) {
 func (a *Agent) String() string {
 	return fmt.Sprintf("agent{status=%s}", a.State().Status)
 }
+
+// Done exposes the run-finished channel so long-running supervisors
+// can observe the current run's termination.
+func (a *Agent) Done() <-chan struct{} {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.done
+}

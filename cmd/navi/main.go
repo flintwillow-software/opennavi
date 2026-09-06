@@ -14,6 +14,15 @@ import (
 )
 
 func main() {
+	// `navi daemon` subcommand: long-running daemon mode (#240).
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		if err := runDaemon(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "navi:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	dbPath := flag.String("db", "./navi.db", "path to the session SQLite database")
 	model := flag.String("model", "", "Ollama model name (required)")
 	ollamaHost := flag.String("ollama-host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")

@@ -3,6 +3,7 @@ package thought
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // Runner executes one claimed thought to completion (or error). One
@@ -190,5 +191,5 @@ func (p *Pool) worker(n int) {
 // emitPersistError surfaces persistence failures that would otherwise
 // be swallowed (the thought's in-memory and stored state can diverge).
 func (p *Pool) emitPersistError(thoughtID string, err error) {
-	p.queue.emit(EventPersistFailed, thoughtID, err.Error())
+	p.queue.emit([]QueueEvent{{Kind: EventPersistFailed, ThoughtID: thoughtID, Detail: err.Error(), At: time.Now().UTC()}})
 }

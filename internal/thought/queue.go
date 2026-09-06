@@ -166,18 +166,6 @@ func (q *ThoughtQueue) OnEvent(fn func(QueueEvent)) {
 	q.handlers = append(q.handlers, fn)
 }
 
-func (q *ThoughtQueue) emit(kind QueueEventKind, thoughtID, detail string) {
-	ev := QueueEvent{Kind: kind, ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC()}
-	q.eventsMu.Lock()
-	handlers := append([]func(QueueEvent){}, q.handlers...)
-	q.eventsMu.Unlock()
-	for _, fn := range handlers {
-		fn(ev)
-	}
-}
-
-// ── public API (spec §3.3) ───────────────────────────────────────────────
-
 // Enqueue adds a thought to the pending queue (priority-sorted). With
 // PolicyReject and no slot available (including via preemption), it
 // returns an error immediately; with PolicyQueue/PolicyBlock the
@@ -191,16 +179,22 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 		return fmt.Errorf("%w: enqueue requires pending status, got %s", ErrInvalidTransition, t.Status)
 	}
 
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	// Events collected under lock, emitted after unlock — OnEvent
+	// handlers may re-enter the queue (e.g. the daemon's RecordFire
+	// wiring calls GetThought), which would deadlock if emit ran under
+	// q.mu.
+	var evts []QueueEvent
 
+	q.mu.Lock()
 	if _, exists := q.findByID(t.ID); exists {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: duplicate ID %s", t.ID)
 	}
 
 	// Reject policy: reject when NO slot is immediately available and
 	// the thought can't preempt one.
 	if q.cfg.SlotExhaustion == PolicyReject && q.findSlotFor(t) == "" && q.preemptCandidate(t) == "" {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: all slots full (policy: reject)")
 	}
 
@@ -212,19 +206,27 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 	q.sortPending()
 	if q.findSlotFor(t) == "" {
 		if victim := q.preemptCandidate(t); victim != "" {
-			q.preempt(victim, t)
+			q.preempt(victim, t, &evts)
 		}
 	}
-	q.emit(EventEnqueued, t.ID, fmt.Sprintf("priority %d", t.EffectivePriority()))
-	return q.save(t)
+	collect(&evts, EventEnqueued, t.ID, fmt.Sprintf("priority %d", t.EffectivePriority()))
+	saveErr := q.save(t)
+	q.mu.Unlock()
+
+	q.emit(evts)
+	if saveErr != nil {
+		return saveErr
+	}
+	return nil
 }
 
 // Dequeue claims the highest-priority pending thought for which a slot
 // is available, transitions it to running, and allocates the slot
 // (spec §3.3). Returns ok=false when nothing is claimable.
 func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
+	var evts []QueueEvent
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	for i, t := range q.pending {
 		slotID := q.findSlotFor(t)
 		if slotID == "" {
@@ -236,8 +238,8 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 		q.claimSlot(t, slotID)
 		q.pending = append(q.pending[:i], q.pending[i+1:]...)
 		q.running = append(q.running, t)
-		q.emit(EventStarted, t.ID, fmt.Sprintf("slot %s", slotID))
-		_ = q.save(t)
+		collect(&evts, EventStarted, t.ID, fmt.Sprintf("slot %s", slotID))
+		saveErr := q.save(t)
 		// Copy-in/copy-out: the worker/runner gets a Clone and owns it
 		// until the thought reaches a terminal state. Runner mutations
 		// (Checkpoint, and anything else) never race with external
@@ -246,8 +248,14 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 		// Mutations to other fields (SessionID, LogPath, ...) are
 		// isolated to the clone and discarded.
 		claimed := t.Clone()
+		q.mu.Unlock()
+
+		// Emit outside q.mu — OnEvent handlers may re-enter the queue.
+		q.emit(evts)
+		_ = saveErr
 		return claimed, true
 	}
+	q.mu.Unlock()
 	return nil, false
 }
 
@@ -289,10 +297,10 @@ func (q *ThoughtQueue) Pause(id string, checkpoint []byte) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.paused = append(q.paused, t)
-	q.emit(EventPausedEv, id, "")
 	if err := q.save(t); err != nil {
 		return err
 	}
+	q.emit([]QueueEvent{{Kind: EventPausedEv, ThoughtID: id, At: time.Now().UTC()}})
 	return nil
 }
 
@@ -311,10 +319,10 @@ func (q *ThoughtQueue) Resume(id string) error {
 	q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 	q.pending = append(q.pending, t)
 	q.sortPending()
-	q.emit(EventResumed, id, "")
 	if err := q.save(t); err != nil {
 		return err
 	}
+	q.emit([]QueueEvent{{Kind: EventResumed, ThoughtID: id, At: time.Now().UTC()}})
 	return nil
 }
 
@@ -333,7 +341,7 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		}
 		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
 		q.running = append(q.running, t) // terminal: kept for inspection
-		q.emit(EventCancelled, id, "")
+		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
 		return q.save(t)
 	}
 	if t, idx := q.findIn(q.paused, id); t != nil {
@@ -342,7 +350,7 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		}
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.running = append(q.running, t)
-		q.emit(EventCancelled, id, "")
+		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
 		return q.save(t)
 	}
 	return fmt.Errorf("thought: %s: %w", id, ErrThoughtNotFound)
@@ -365,7 +373,7 @@ func (q *ThoughtQueue) Complete(id string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.terminal = append(q.terminal, t)
-	q.emit(EventCompleted, id, "")
+	q.emit([]QueueEvent{{Kind: EventCompleted, ThoughtID: id, At: time.Now().UTC()}})
 	return q.save(t)
 }
 
@@ -386,7 +394,7 @@ func (q *ThoughtQueue) Fail(id string, detail string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.pending = append(q.pending, t) // failed awaits Retry
-	q.emit(EventFailed, id, detail)
+	q.emit([]QueueEvent{{Kind: EventFailed, ThoughtID: id, Detail: detail, At: time.Now().UTC()}})
 	return q.save(t)
 }
 
@@ -477,7 +485,7 @@ func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 // preempt pauses the victim running thought (freeing its slot, spec
 // §2.2 running → paused) and parks it as paused for later resume;
 // the caller's thought then starts on the freed slot.
-func (q *ThoughtQueue) preempt(victimID string, by *Thought) {
+func (q *ThoughtQueue) preempt(victimID string, by *Thought, evts *[]QueueEvent) {
 	// Cooperative preemption (caller holds q.mu): mark the victim — it
 	// keeps running until its runner honours the ctx cancellation the
 	// pool sends on this event, snapshots its checkpoint, and returns;
@@ -490,7 +498,7 @@ func (q *ThoughtQueue) preempt(victimID string, by *Thought) {
 	}
 	t.PreemptRequested = true
 	_ = q.save(t)
-	q.emit(EventPreempted, victimID, fmt.Sprintf("by %s (priority %d)", by.ID, by.EffectivePriority()))
+	collect(evts, EventPreempted, victimID, fmt.Sprintf("by %s (priority %d)", by.ID, by.EffectivePriority()))
 }
 
 // claimSlot moves a thought to running on the given slot. Caller holds mu.
@@ -587,7 +595,7 @@ func (q *ThoughtQueue) Retry(id string) error {
 			return err
 		}
 		q.sortPending()
-		q.emit(EventEnqueued, id, "retry")
+		q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
 		return q.save(t)
 	}
 
@@ -604,6 +612,24 @@ func (q *ThoughtQueue) Retry(id string) error {
 		q.terminal = append(q.terminal[:idx], q.terminal[idx+1:]...)
 	}
 	q.sortPending()
-	q.emit(EventEnqueued, id, "retry")
+	q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
 	return q.save(t)
+}
+
+// collect appends an event to the pending list (call under q.mu).
+func collect(evts *[]QueueEvent, kind QueueEventKind, thoughtID, detail string) {
+	*evts = append(*evts, QueueEvent{Kind: kind, ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC()})
+}
+
+// emit fans events out to registered observers. MUST be called without
+// q.mu held — handlers may re-enter the queue.
+func (q *ThoughtQueue) emit(evts []QueueEvent) {
+	q.eventsMu.Lock()
+	handlers := append([]func(QueueEvent){}, q.handlers...)
+	q.eventsMu.Unlock()
+	for _, fn := range handlers {
+		for _, ev := range evts {
+			fn(ev)
+		}
+	}
 }
