@@ -80,11 +80,12 @@ func (ss *StateStore) SetNextDue(name string, due time.Time) error {
 	return nil
 }
 
-// MissedTick coalesces missed windows: a thought is enqueued ONCE for
-// a schedule whose next_due passed while the daemon was down, and the
-// state row is advanced so restarts don't double-fire. Implements the
-// spec's crash-recovery spirit (queue survives restarts; missed ticks
-// coalesce).
+// MissedTick is a caller-invoked primitive: it enqueues ONE coalescing
+// thought for a schedule whose next_due passed while the daemon was
+// down. State tracking (RecordFire/next_due advancement) is wired by
+// the daemon core in #240 — nothing advances state rows today, and
+// repeated calls in the same wall second WILL collide on the thought
+// ID (the monotonic-counter fix lands with that wiring).
 func (s *Scheduler) MissedTick(name string) error {
 	s.mu.Lock()
 	sd, ok := s.schedules[name]
