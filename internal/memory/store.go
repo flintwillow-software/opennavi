@@ -85,6 +85,9 @@ func (s *Store) Get(scope Scope, key string) (Entry, error) {
 	if !scope.Valid() {
 		return Entry{}, fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
+	if key == "" {
+		return Entry{}, fmt.Errorf("memory: empty key")
+	}
 	var (
 		e                Entry
 		tags             sql.NullString
@@ -131,6 +134,31 @@ func (s *Store) ListEntries(limit int) ([]Entry, error) {
 		FROM memories WHERE scope = ? ORDER BY updated_at DESC LIMIT ?`, string(ScopeMemories), limit)
 	if err != nil {
 		return nil, fmt.Errorf("memory: list entries: %w", err)
+	}
+	defer rows.Close()
+	out := []Entry{}
+	for rows.Next() {
+		var (
+			e                Entry
+			tags             sql.NullString
+			expires          sql.NullString
+			created, updated sql.NullString
+		)
+		if err := scanEntry(rows, &e, &tags, &expires, &created, &updated); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// listEntriesAll returns ALL memories-scope entries (export uses this:
+// truncation would silently drop archive history).
+func (s *Store) listEntriesAll() ([]Entry, error) {
+	rows, err := s.db.Query(`SELECT id, scope, subject, content, source, tags, importance, expires_at, created_at, updated_at
+		FROM memories WHERE scope = ? ORDER BY updated_at DESC`, string(ScopeMemories))
+	if err != nil {
+		return nil, fmt.Errorf("memory: list all entries: %w", err)
 	}
 	defer rows.Close()
 	out := []Entry{}
@@ -196,6 +224,9 @@ func (s *Store) Delete(scope Scope, key string) error {
 	if !scope.Valid() {
 		return fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
+	if key == "" {
+		return fmt.Errorf("memory: empty key")
+	}
 	res, err := s.db.Exec(`DELETE FROM memories WHERE scope = ? AND (subject = ? OR id = ?)`,
 		string(scope), key, key)
 	if err != nil {
@@ -232,7 +263,11 @@ func (s *Store) Prune() (int64, error) {
 // whitespace-separated terms ORed together, quote and apostrophe
 // characters stripped, FTS5 operator tokens rejected.
 func ftsQuery(query string) (string, error) {
-	stripped := strings.NewReplacer(`"`, "", "'", "").Replace(query)
+	// Lowercase everything before splitting: unicode61 is
+	// case-insensitive, so semantics are preserved — but FTS5 KEYWORDS
+	// (OR/AND/NEAR) in free text would otherwise parse as operators and
+	// syntax-error the query. After lowercasing they are plain terms.
+	stripped := strings.NewReplacer(`"`, "", "'", "").Replace(strings.ToLower(query))
 	terms := strings.Fields(stripped)
 	if len(terms) == 0 {
 		if strings.TrimSpace(query) != "" {
@@ -288,4 +323,11 @@ func nullableTime(t *time.Time) any {
 	return formatTime(*t)
 }
 
-func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+// formatTime renders times in a FIXED-WIDTH RFC3339 variant (always 9
+// fractional digits). RFC3339Nano trims trailing zeros, which breaks
+// lexical ordering (Prune compares timestamps in SQL) - e.g.
+// "T10:00:00Z" > "T10:00:00.5Z" lexically. Fixed width is order-total.
+// Reading old RFC3339Nano values still works (time.Parse accepts it).
+func formatTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z")
+}

@@ -21,7 +21,7 @@ func (s *Store) ExportMarkdown(scope Scope, dir string) ([]string, error) {
 		return nil, fmt.Errorf("memory: export mkdir %s: %w", dir, err)
 	}
 
-	var entries []Entry
+	var paths []string
 	switch scope {
 	case ScopeUser, ScopeNavi:
 		subjects, err := s.ListSubjects(scope)
@@ -33,10 +33,17 @@ func (s *Store) ExportMarkdown(scope Scope, dir string) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, e)
+			path := filepath.Join(dir, e.Subject+".md")
+			if err := os.WriteFile(path, []byte(renderDocument(e)), 0o644); err != nil {
+				return nil, fmt.Errorf("memory: export %s: %w", path, err)
+			}
+			paths = append(paths, path)
 		}
+		return paths, nil
+
 	case ScopeMemories:
-		all, err := s.ListEntries(0)
+		// Unbounded: export must never silently truncate archive history.
+		all, err := s.listEntriesAll()
 		if err != nil {
 			return nil, err
 		}
@@ -61,23 +68,17 @@ func (s *Store) ExportMarkdown(scope Scope, dir string) ([]string, error) {
 			if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
 				return nil, fmt.Errorf("memory: export %s: %w", path, err)
 			}
+			paths = append(paths, path)
 		}
-		return nil, nil
-	}
+		return paths, nil
 
-	var paths []string
-	for _, e := range entries {
-		path := filepath.Join(dir, e.Subject+".md")
-		if err := os.WriteFile(path, []byte(renderDocument(e)), 0o644); err != nil {
-			return nil, fmt.Errorf("memory: export %s: %w", path, err)
-		}
-		paths = append(paths, path)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
-	return paths, nil
 }
 
-// renderDocument renders a user/navi document with frontmatter-style
-// metadata followed by the content.
+// renderDocument renders a user/navi document with metadata followed by
+// the content.
 func renderDocument(e Entry) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s: %s\n\n", scopeTitle(e.Scope), e.Subject)

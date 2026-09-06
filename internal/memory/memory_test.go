@@ -2,6 +2,7 @@ package memory
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,5 +266,83 @@ func TestSearchQueryApostrophe(t *testing.T) {
 	s := testStore(t)
 	if _, err := s.Search("don't", 10); err != nil {
 		t.Fatalf("apostrophe query errored: %v", err)
+	}
+}
+
+func TestSearchCaseInsensitiveKeywords(t *testing.T) {
+	// Regression: uppercase FTS5 keywords in free text ("cats OR dogs")
+	// parsed as operators and syntax-errored the query. The query is
+	// lowercased before splitting, so keywords become plain terms.
+	s := testStore(t)
+	if _, err := s.AddEntry(Entry{Scope: ScopeMemories, Subject: "pets",
+		Content: "cats and dogs get along"}); err != nil {
+		t.Fatal(err)
+	}
+	results, err := s.Search("cats OR dogs", 10)
+	if err != nil {
+		t.Fatalf("uppercase OR errored: %v", err)
+	}
+	if len(results) != 1 || results[0].Subject != "pets" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestExportMarkdownMemoriesReturnsPaths(t *testing.T) {
+	// Regression: ExportMarkdown(memories) returned nil paths and
+	// silently truncated at ListEntries' 50 default.
+	s := testStore(t)
+	for i := 0; i < 60; i++ {
+		if _, err := s.AddEntry(Entry{Scope: ScopeMemories,
+			Subject: fmt.Sprintf("entry-%d", i),
+			Content: fmt.Sprintf("fact number %d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memDir := t.TempDir()
+	paths, err := s.ExportMarkdown(ScopeMemories, memDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no paths returned for memories export")
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("exported file missing: %v", err)
+		}
+	}
+	// Unbounded: all 60 entries present across the date files.
+	total := 0
+	for _, p := range paths {
+		blob, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += strings.Count(string(blob), "fact number ")
+	}
+	if total != 60 {
+		t.Fatalf("exported %d entries, want 60 (no truncation)", total)
+	}
+}
+
+func TestPruneSameSecondExpiry(t *testing.T) {
+	// Regression: Prune compared RFC3339Nano strings lexically —
+	// trailing-zero trimming made "T10:00:00Z" (expired, whole-second)
+	// compare GREATER than "T10:00:00.5Z" (now), so same-second expired
+	// entries survived pruning. formatTime is now fixed-width.
+	s := testStore(t)
+	expired := time.Now().Add(-time.Hour).Truncate(time.Second) // whole second
+	if _, err := s.AddEntry(Entry{Scope: ScopeMemories, Subject: "old",
+		Content: "stale", ExpiresAt: &expired}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond) // now is strictly after the whole-second expiry
+
+	n, err := s.Prune()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("pruned %d, want 1 (same-second lexical bug)", n)
 	}
 }
