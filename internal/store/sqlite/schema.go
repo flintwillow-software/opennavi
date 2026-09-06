@@ -182,6 +182,16 @@ var migrations = []string{
 		VALUES (new.rowid, new.content, new.scope, new.subject);
 	END`,
 	`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`,
+	// 5: memory vector index (#182) — Tier 5 knowledge base. Pure-Go
+	// design: embeddings stored as BLOBs in the same DB, brute-force
+	// cosine in Go (sqlite-vec/vec0 is a C extension, unshippable under
+	// CGO_ENABLED=0). Embeddings come from Ollama /api/embeddings.
+	`CREATE TABLE IF NOT EXISTS memory_embeddings (
+		memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+		embedding BLOB NOT NULL,
+		dims INTEGER NOT NULL,
+		created_at DATETIME NOT NULL
+	)`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
