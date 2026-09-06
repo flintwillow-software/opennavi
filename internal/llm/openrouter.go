@@ -21,6 +21,16 @@ type OpenRouterProvider struct {
 	client  *http.Client
 }
 
+// NewOpenRouterProviderWithClient builds a provider with a custom HTTP
+// client (daemon wiring uses the shared client; tests inject httptest
+// clients).
+func NewOpenRouterProviderWithClient(baseURL, apiKey string, client *http.Client) *OpenRouterProvider {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &OpenRouterProvider{BaseURL: baseURL, APIKey: apiKey, client: client}
+}
+
 // DefaultOpenRouterURL is the OpenRouter API base URL.
 const DefaultOpenRouterURL = "https://openrouter.ai/api/v1"
 
