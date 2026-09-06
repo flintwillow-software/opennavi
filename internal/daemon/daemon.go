@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
@@ -29,7 +30,7 @@ type Runtime struct {
 	Store     *sqlite.Store
 	SessionM  *session.SessionManager
 	Provider  llm.Provider
-	Scheduler *cron.Scheduler // the (possibly fallback-chained) LLM provider
+	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -133,17 +134,48 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 
 	// Cron scheduler wiring (#242 seam): MigrateState, scheduler with
-	// definition-derived schedule defs, MissedTick for schedules whose
-	// next_due passed while down.
+	// definition-derived schedule defs, RecordFire wiring (queue started
+	// events advance last_fired/fire_count), and MissedTick for
+	// schedules whose next_due passed while down.
 	if err := cron.MigrateState(store.DB()); err != nil {
 		store.Close()
 		return nil, err
 	}
+	state := cron.NewStateStore(store.DB())
 	sched := cron.NewScheduler(q)
+	sched.OnEvent(func(ev thought.QueueEvent) {
+		if ev.Kind == thought.EventStarted {
+			_ = state.RecordFire(ev.ThoughtID, time.Now().UTC())
+		}
+	})
 	for _, sd := range def.Cron.ToSchedulerDefs() {
 		if err := sched.Add(sd); err != nil {
 			store.Close()
 			return nil, err
+		}
+	}
+	// MissedTick: schedules whose next_due passed while down enqueue
+	// one coalescing thought at startup (crash-recovery coalescing,
+	// spec section 3.5).
+	for _, sd := range def.Cron.ToSchedulerDefs() {
+		last, lerr := state.LastFired(sd.Name)
+		if lerr != nil {
+			store.Close()
+			return nil, lerr
+		}
+		if last.IsZero() {
+			continue
+		}
+		if sd.Expr != "" {
+			if ce, perr := cron.Parse(sd.Expr); perr == nil {
+				next := ce.Next(last)
+				if next.Before(time.Now()) {
+					if merr := sched.MissedTick(sd.Name); merr != nil {
+						store.Close()
+						return nil, merr
+					}
+				}
+			}
 		}
 	}
 	sessionM := session.NewSessionManager(store)
@@ -161,14 +193,15 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	pool := thought.NewPool(q, runner, workers)
 
 	return &Runtime{
-		Config:   params,
-		Def:      def,
-		Runtime:  rc,
-		Queue:    q,
-		Pool:     pool,
-		Store:    store,
-		SessionM: sessionM,
-		Provider: chain,
+		Config:    params,
+		Def:       def,
+		Runtime:   rc,
+		Queue:     q,
+		Pool:      pool,
+		Scheduler: sched,
+		Store:     store,
+		SessionM:  sessionM,
+		Provider:  chain,
 	}, nil
 }
 

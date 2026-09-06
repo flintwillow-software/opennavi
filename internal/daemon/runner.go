@@ -64,13 +64,12 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 
 	// Crash recovery / resume: restore a checkpoint if present and
 	// restorable; a stale/corrupt checkpoint degrades to a fresh run
-	// (ruling condition 3) with the reason surfaced via the returned
-	// error path's detail (pool Fail detail).
+	// (ruling condition 3). Degrading never loses the thought — the
+	// worst case is a re-run from the prompt.
 	if len(t.Checkpoint) > 0 {
 		msgs, err := decodeCheckpoint(t.Checkpoint)
 		if err != nil {
-			// Degrade: log-and-continue with a fresh agent.
-			t.Checkpoint = nil
+			t.Checkpoint = nil // degrade to fresh run
 		} else {
 			state := &agent.AgentState{Status: agent.StatusIdle, Messages: msgs}
 			if lerr := a.LoadState(state); lerr != nil {
@@ -79,13 +78,38 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		}
 	}
 
+	// Bridge the daemon ctx to the agent: agent runs derive their own
+	// context internally; the only interrupt path is Abort. Without
+	// this, Pool.Cancel/preemption/StopAndWait cannot interrupt a
+	// running thought.
+	go func() {
+		select {
+		case <-ctx.Done():
+			a.Abort()
+		case <-a.Done():
+		}
+	}()
+
 	if err := a.Prompt(t.Prompt, nil); err != nil {
 		return fmt.Errorf("daemon: prompt thought %s: %w", t.ID, err)
 	}
 
-	// Wait for the run to finish — including ctx cancellation, which
-	// the agent loop surfaces as an abort.
 	a.WaitForIdle()
+
+	// Park on cancellation (ruling: park-with-checkpoint is the
+	// terminal path for interrupted thoughts — never kill-and-lose).
+	if ctx.Err() != nil {
+		checkpoint, cerr := encodeCheckpoint(a.State().Clone().Messages)
+		if cerr == nil {
+			t.Checkpoint = checkpoint
+		}
+		// Session log flush (spec §2.2 pairs checkpoint-save with
+		// session-log flush).
+		if r.deps.sessionM != nil {
+			_, _ = r.deps.sessionM.CreateSession("daemon", t.ID)
+		}
+		return ctx.Err()
+	}
 
 	st := a.State()
 	switch st.Status {
@@ -95,6 +119,10 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		}
 		return fmt.Errorf("daemon: thought %s ended in error state", t.ID)
 	default:
+		// Completed: persist the conversation as a session record.
+		if r.deps.sessionM != nil {
+			_, _ = r.deps.sessionM.CreateSession("daemon", t.ID)
+		}
 		return nil
 	}
 }
