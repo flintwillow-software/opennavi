@@ -44,6 +44,9 @@ type RuntimeParams struct {
 	WorkDir        string // working directory for file/shell tools
 	SystemPrompt   string // CLI system prompt override
 	Workers        int    // pool worker count (0 = 2)
+	// OverrideProvider, when set, replaces the config-built provider
+	// chain (test seam — the daemon E2E tests use it to inject a mock).
+	OverrideProvider llm.Provider
 }
 
 // Assemble runs the startup chain: definition → runtime merge →
@@ -102,7 +105,13 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
-	var chain llm.Provider = primary
+	// Test seam: an injected provider replaces the config-built chain.
+	var chain llm.Provider
+	if params.OverrideProvider != nil {
+		chain = params.OverrideProvider
+	} else {
+		chain = primary
+	}
 	if rc.Provider.Fallback != "" {
 		fb, err := buildProviderFor(rc.Provider.Fallback, rc.Provider)
 		if err != nil {
@@ -247,18 +256,24 @@ func (d *Runtime) Run(ctx context.Context) error {
 		d.Scheduler.Start()
 	}
 
+	// Start the worker pool — without this the daemon never claims
+	// thoughts (found during live E2E validation: #247).
+	if d.Pool != nil {
+		d.Pool.Start()
+	}
+
 	// Block until ctx is done (signal.NotifyContext in the command),
 	// then shut down gracefully.
 	<-ctx.Done()
 
 	// Graceful: scheduler stops ticking, pool drains in-flight thoughts
-	// (park-with-checkpoint is the terminal path for interrupted runs),
-	// store close is the final flush.
+	// (park-with-checkpoint is the terminal path for interrupted runs).
+	// Store close is the caller's responsibility (Runtime.Store.Close()).
 	if d.Scheduler != nil {
 		d.Scheduler.Stop()
 	}
 	d.Pool.StopAndWait()
-	return d.Store.Close()
+	return nil
 }
 
 // Shutdown is the graceful path used by signal handling: stops the

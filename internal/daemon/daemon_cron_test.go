@@ -48,3 +48,50 @@ func TestWireCronRecordFire(t *testing.T) {
 	}
 	_ = sched
 }
+
+func TestWireCronRecordFireLastFiredAssert(t *testing.T) {
+	// Strengthened: asserts LastFired actually lands in schedule_state
+	// (not just that the enqueue succeeded).
+	rt, err := Assemble(testParams(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Store.Close()
+
+	defs := config.DefinitionCronConfig{
+		Schedules: []config.CronScheduleDef{{
+			Name:   "lf-cron",
+			Expr:   "* * * * *",
+			Prompt: "prompt",
+		}},
+	}
+	sched, err := WireCron(rt.Store.DB(), defs, rt.Queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tt := &thought.Thought{
+		ID: "lf-1", Prompt: "p", Status: thought.ThoughtPending,
+		Metadata: map[string]string{"schedule": "lf-cron"},
+	}
+	if err := rt.Queue.Enqueue(tt); err != nil {
+		t.Fatal(err)
+	}
+	_, ok := rt.Queue.Dequeue()
+	if !ok {
+		t.Fatal("claim failed")
+	}
+	_ = sched
+
+	// LastFired must land (the WireCron handler records on EventStarted).
+	got, gerr := rt.Store.DB().Query(
+		`SELECT last_fired FROM schedule_state WHERE schedule_name = ?`, "lf-cron")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	defer got.Close()
+	hasRow := got.Next()
+	if !hasRow {
+		t.Fatal("schedule_state.last_fired row missing for lf-cron")
+	}
+}

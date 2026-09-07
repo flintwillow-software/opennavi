@@ -4,21 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 )
-
-// testStore assembles a minimal Runtime over a temp DB and returns its
-// sqlite store (memory tests share the DB via New(sqlite store's DB)).
-func testStore(t *testing.T) *sqlite.Store {
-	t.Helper()
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "daemon.db"), sqlite.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	return st
-}
 
 func testParams(t *testing.T) RuntimeParams {
 	t.Helper()

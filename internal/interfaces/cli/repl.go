@@ -15,6 +15,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 )
@@ -199,7 +200,13 @@ func (r *repl) ensureAgent(sess *session.Session) error {
 		}
 	}
 	a := agent.NewAgent(cfg)
-	a.Provider = agent.NewOllamaProvider()
+	// OllamaHost fallback chain: flag > env > default (same pattern as
+	// the #237 merge chain and llm.OllamaHostFromEnv).
+	host := r.cfg.OllamaHost
+	if host == "" {
+		host = llm.OllamaHostFromEnv()
+	}
+	a.Provider = agent.NewOllamaProviderAt(host)
 
 	// Event visibility: stream deltas inline, call out tools and
 	// compaction explicitly — seeing the loop is the point of manual
