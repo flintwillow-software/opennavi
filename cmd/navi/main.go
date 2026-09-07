@@ -21,6 +21,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "health":
+			if err := runHealth(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "navi:", err)
+				os.Exit(1)
+			}
+			return
+
 		case "enqueue":
 			if err := runEnqueue(os.Args[2:]); err != nil {
 				fmt.Fprintln(os.Stderr, "navi:", err)
