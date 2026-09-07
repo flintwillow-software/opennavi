@@ -199,7 +199,7 @@ func (r *repl) ensureAgent(sess *session.Session) error {
 		}
 	}
 	a := agent.NewAgent(cfg)
-	a.Provider = agent.NewOllamaProvider()
+	a.Provider = agent.NewOllamaProviderAt(r.cfg.OllamaHost)
 
 	// Event visibility: stream deltas inline, call out tools and
 	// compaction explicitly — seeing the loop is the point of manual
