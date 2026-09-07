@@ -143,13 +143,23 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
+	// Test seam: an injected logger replaces the env-built one.
+	var logger *logging.Logger
+	if params.Logger != nil {
+		logger = params.Logger
+	} else {
+		logger = logging.WireFromEnv()
+	}
+
 	sched, cerr := WireCron(store.DB(), def.Cron, q)
 	if cerr != nil {
 		store.Close()
 		return nil, cerr
 	}
+	sched.OnDebug(func(msg string, fields map[string]any) {
+		logger.Debug(msg, fields)
+	})
 	sessionM := session.NewSessionManager(store)
-	logger := logging.WireFromEnv()
 	runner := NewAgentRunner(agentRunnerDeps{
 		chain:         chain,
 		sessionM:      sessionM,

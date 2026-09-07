@@ -41,5 +41,8 @@ func WireLogging(logger *logging.Logger, q *thought.ThoughtQueue, sched *cron.Sc
 		sched.OnError(func(err error) {
 			logger.Error("scheduler error", map[string]any{"error": err.Error()})
 		})
+		sched.OnDebug(func(msg string, fields map[string]any) {
+			logger.Debug(msg, fields)
+		})
 	}
 }
