@@ -50,5 +50,12 @@ func runDaemon(args []string) error {
 	}
 
 	fmt.Println("navi daemon running — Ctrl+C to stop")
-	return rt.Run(ctx)
+	runErr := rt.Run(ctx)
+	// Store.Close is the final flush (spec §2.2: "closing the store is
+	// the final flush") — Run returns without closing it so callers can
+	// do last reads; runDaemon owns the close.
+	if cerr := rt.Store.Close(); cerr != nil {
+		fmt.Fprintf(os.Stderr, "navi daemon: store close: %v\n", cerr)
+	}
+	return runErr
 }
