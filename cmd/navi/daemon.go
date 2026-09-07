@@ -32,7 +32,6 @@ func runDaemon(args []string) error {
 		return fmt.Errorf("daemon: --model is required")
 	}
 
-	// Signal-aware context: SIGINT/SIGTERM cancel it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
