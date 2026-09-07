@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
+	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 )
 
 // runDaemon is the `navi daemon` subcommand: a long-running process
@@ -25,12 +27,26 @@ func runDaemon(args []string) error {
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	compactBudget := fs.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
 	workers := fs.Int("workers", 2, "thought worker count")
+	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
+	logFile := fs.String("log-file", "", "log file path (default stderr)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *model == "" {
 		return fmt.Errorf("daemon: --model is required")
 	}
+
+	// Structured logger.
+	var lw io.Writer = os.Stderr
+	if *logFile != "" {
+		f, ferr := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if ferr != nil {
+			return fmt.Errorf("daemon: open log file %s: %w", *logFile, ferr)
+		}
+		defer f.Close()
+		lw = f
+	}
+	logger := logging.New(lw, logging.ParseLevel(*logLevel), nil)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -44,18 +60,18 @@ func runDaemon(args []string) error {
 		WorkDir:        *workDir,
 		CompactBudget:  *compactBudget,
 		Workers:        *workers,
+		Logger:         logger,
 	})
 	if err != nil {
 		return err
 	}
+	logger.Info("daemon started", map[string]any{"model": *model, "db": *dbPath})
 
 	fmt.Println("navi daemon running — Ctrl+C to stop")
 	runErr := rt.Run(ctx)
-	// Store.Close is the final flush (spec §2.2: "closing the store is
-	// the final flush") — Run returns without closing it so callers can
-	// do last reads; runDaemon owns the close.
 	if cerr := rt.Store.Close(); cerr != nil {
 		fmt.Fprintf(os.Stderr, "navi daemon: store close: %v\n", cerr)
 	}
+	logger.Info("daemon stopped", nil)
 	return runErr
 }

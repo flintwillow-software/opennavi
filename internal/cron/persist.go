@@ -94,6 +94,7 @@ func (s *Scheduler) MissedTick(name string) error {
 	if !ok {
 		return fmt.Errorf("cron: schedule %q not found", name)
 	}
+	s.dbg("missed tick coalesced", map[string]any{"schedule": name})
 
 	t := &thought.Thought{
 		ID:        fmt.Sprintf("cron-%s-%s", name, now.UTC().Format("20060102T150405")),

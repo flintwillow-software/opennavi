@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
@@ -37,6 +39,7 @@ type agentRunnerDeps struct {
 	systemPrompt  string
 	workDir       string
 	compactBudget int
+	logger        *logging.Logger
 }
 
 // NewAgentRunner builds the agent-backed Runner.
@@ -56,6 +59,7 @@ func NewAgentRunner(deps agentRunnerDeps) *AgentRunner {
 // thought prompt (ruling condition 3): an unrestorable checkpoint
 // never wedges a worker or loses the thought — worst case is a re-run.
 func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
+	start := time.Now()
 	// One agent per thought: fresh state isolation (spec: one worker
 	// per thought, isolated processing).
 	a := agent.NewAgent(agent.AgentConfig{
@@ -97,6 +101,13 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	}
 
 	a.WaitForIdle()
+
+	if r.deps.logger != nil {
+		r.deps.logger.Info("thought complete", map[string]any{
+			"thought":     t.ID,
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
+	}
 
 	// Park on cancellation (ruling: park-with-checkpoint is the
 	// terminal path for interrupted thoughts — never kill-and-lose).

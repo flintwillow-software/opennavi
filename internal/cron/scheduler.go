@@ -46,9 +46,10 @@ type Scheduler struct {
 	wg        sync.WaitGroup
 	running   bool
 
-	idSeq         uint64                     // monotonic component for collision-proof thought IDs
-	errorHandlers []func(error)              // tick-loop error observers
-	eventHandlers []func(thought.QueueEvent) // queue event observers (RecordFire wiring)
+	idSeq         uint64                                  // monotonic component for collision-proof thought IDs
+	errorHandlers []func(error)                           // tick-loop error observers
+	eventHandlers []func(thought.QueueEvent)              // queue event observers (RecordFire wiring)
+	debugFn       func(msg string, fields map[string]any) // debug-level observer
 }
 
 type scheduledDef struct {
@@ -198,6 +199,7 @@ func (s *Scheduler) fireNow(now time.Time) error {
 		if err := s.queue.Enqueue(t); err != nil {
 			return fmt.Errorf("cron: enqueue %s: %w", id, err)
 		}
+		s.dbg("tick fired", map[string]any{"schedule": sd.def.Name, "thought": id})
 	}
 	return nil
 }
@@ -260,5 +262,20 @@ func (s *Scheduler) emitQueueEvent(ev thought.QueueEvent) {
 	s.mu.Unlock()
 	for _, fn := range handlers {
 		fn(ev)
+	}
+}
+
+// OnDebug registers an observer for debug-level scheduler events
+// (tick fires, MissedTick coalescing). Called synchronously.
+func (s *Scheduler) OnDebug(fn func(msg string, fields map[string]any)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.debugFn = fn
+}
+
+// dbg fires a debug-level event if a debug observer is registered.
+func (s *Scheduler) dbg(msg string, fields map[string]any) {
+	if s.debugFn != nil {
+		s.debugFn(msg, fields)
 	}
 }

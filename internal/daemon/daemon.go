@@ -14,6 +14,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/thought"
@@ -30,23 +31,23 @@ type Runtime struct {
 	SessionM  *session.SessionManager
 	Provider  llm.Provider
 	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
+	Logger    *logging.Logger
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
 // merged through the #237 chain's flags layer by the caller).
 type RuntimeParams struct {
-	DefinitionPath string // navi.yaml (empty = minimal built-in definition)
-	RuntimeFile    string // runtime config YAML ("" = none)
-	SessionDB      string // final session DB path (post-merge)
-	Model          string // CLI model override (flags layer)
-	OllamaHost     string // CLI host override (flags layer)
-	CompactBudget  int    // compaction budget (0 = off)
-	WorkDir        string // working directory for file/shell tools
-	SystemPrompt   string // CLI system prompt override
-	Workers        int    // pool worker count (0 = 2)
-	// OverrideProvider, when set, replaces the config-built provider
-	// chain (test seam — the daemon E2E tests use it to inject a mock).
-	OverrideProvider llm.Provider
+	DefinitionPath   string          // navi.yaml (empty = minimal built-in definition)
+	RuntimeFile      string          // runtime config YAML ("" = none)
+	SessionDB        string          // final session DB path (post-merge)
+	Model            string          // CLI model override (flags layer)
+	OllamaHost       string          // CLI host override (flags layer)
+	CompactBudget    int             // compaction budget (0 = off)
+	WorkDir          string          // working directory for file/shell tools
+	SystemPrompt     string          // CLI system prompt override
+	Workers          int             // pool worker count (0 = 2)
+	Logger           *logging.Logger // structured logger (nil = default stderr/info)
+	OverrideProvider llm.Provider    // test seam: replaces the config-built chain
 }
 
 // Assemble runs the startup chain: definition → runtime merge →
@@ -142,11 +143,22 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
+	// Test seam: an injected logger replaces the env-built one.
+	var logger *logging.Logger
+	if params.Logger != nil {
+		logger = params.Logger
+	} else {
+		logger = logging.WireFromEnv()
+	}
+
 	sched, cerr := WireCron(store.DB(), def.Cron, q)
 	if cerr != nil {
 		store.Close()
 		return nil, cerr
 	}
+	sched.OnDebug(func(msg string, fields map[string]any) {
+		logger.Debug(msg, fields)
+	})
 	sessionM := session.NewSessionManager(store)
 	runner := NewAgentRunner(agentRunnerDeps{
 		chain:         chain,
@@ -155,7 +167,9 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		systemPrompt:  params.SystemPrompt,
 		workDir:       params.WorkDir,
 		compactBudget: params.CompactBudget,
+		logger:        logger,
 	})
+	WireLogging(logger, q, sched)
 	workers := params.Workers
 	if workers <= 0 {
 		workers = 2
