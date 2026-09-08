@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Out of Scope sections to all spec and case study documents
 - RESULTS.md with measurable outcomes and lessons learned
 
+- GitHub Action workflow enforcing changelog entries in PRs (#255)
 ## [1.0.0] - YYYY-MM-DD
 
 ### Added
