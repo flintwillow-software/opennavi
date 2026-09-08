@@ -41,8 +41,8 @@ jobs:
               return;
             }
 
-            // Step 2: fetch the CHANGELOG.md diff between base and head,
-            // scoped to added lines (lines starting with '+').
+            // Step 2: fetch the unified diff for CHANGELOG.md between
+            // base and head SHAs.
             const diff = await github.rest.repos.compareCommits({
               owner, repo,
               base: baseSha,
@@ -61,42 +61,48 @@ jobs:
               return;
             }
 
-            // Get the patch (diff content) for CHANGELOG.md.
+            // Step 3: reconstruct the post-change CHANGELOG.md from the
+            // diff. In a unified diff, context lines start with ' ' (space)
+            // and added lines start with '+'. The section headings are
+            // CONTEXT lines (unchanged), not added lines — so we must
+            // include context lines when reconstructing content to track
+            // section state.
             const patch = changelogFile.patch || '';
+            const contentLines = [];
+            for (const line of patch.split('\n')) {
+              if (line.startsWith('+') && !line.startsWith('+++')) {
+                contentLines.push(line.slice(1));
+              } else if (line.startsWith(' ') && !line.startsWith('---')) {
+                contentLines.push(line.slice(1));
+              }
+              // Deleted lines ('-') are the pre-change content — skip.
+            }
 
-            // Parse the added lines that fall within the Unreleased section.
-            // Walk the patch hunks looking for lines between the
-            // '## [Unreleased]' heading and the next '## [' heading.
-            const addedLines = patch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++'));
-
-            // Reconstruct the post-change CHANGELOG.md content by stripping
-            // the +/- prefixes from the unified diff.
+            // Walk the reconstructed post-change content, tracking section
+            // state by '## [' headings, looking for substantive entries
+            // under Unreleased.
             let inUnreleased = false;
             let hasSubstantiveEntry = false;
 
-            for (const line of addedLines) {
-              const content = line.slice(1); // strip +/- prefix
-              if (/^##\s+\[/i.test(content)) {
-                // Version heading — check if it's Unreleased
-                inUnreleased = /unreleased/i.test(content);
+            for (const line of contentLines) {
+              if (/^##\s+\[/i.test(line)) {
+                inUnreleased = /unreleased/i.test(line);
                 continue;
               }
               if (!inUnreleased) continue;
-              // Skip blank lines, section headers (###), and diff metadata.
-              const trimmed = content.trim();
-              if (trimmed === '' || trimmed.startsWith('###') || trimmed.startsWith('---') || trimmed.startsWith('===')) {
-                continue;
-              }
+
+              const trimmed = line.trim();
+              if (trimmed === '') continue;
+              // Subsection headers (###) are structural, not entries.
+              if (trimmed.startsWith('###')) continue;
               // A substantive entry: a bullet or non-heading content line.
-              if (trimmed.startsWith('-') || trimmed.startsWith('*') || (trimmed.length > 0 && !trimmed.startsWith('#'))) {
-                hasSubstantiveEntry = true;
-                break;
-              }
+              hasSubstantiveEntry = true;
+              break;
             }
 
             if (!hasSubstantiveEntry) {
               core.setFailed(
-                'CHANGELOG.md was modified but no substantive entry was added under the `## [Unreleased]` section.\n' +
+                'CHANGELOG.md was modified but no substantive entry was found under the `## [Unreleased]` section.\n' +
                 'Please add a bullet (e.g. `- Added feature X`) under `## [Unreleased]` describing what this PR changed.\n' +
                 'Blank lines, section headers, and version headings do not count.'
               );
