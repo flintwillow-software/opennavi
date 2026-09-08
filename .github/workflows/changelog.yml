@@ -13,10 +13,22 @@ jobs:
     name: Verify changelog entry
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR body for changelog markers
+      - name: Checkout (full history for diff)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check CHANGELOG.md adds a substantive entry under ## [Unreleased]
         uses: actions/github-script@v7
         with:
           script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+            const baseSha = context.payload.pull_request.base.sha;
+            const headSha = context.payload.pull_request.head.sha;
+
+            // Step 1: verify the PR body has a Closes #N or Semver hint.
             const body = context.payload.pull_request.body || '';
             const hasCloses = /closes\s+#\d+/i.test(body);
             const hasSemver = /semver:\s*(patch|minor|major)/i.test(body);
@@ -24,7 +36,71 @@ jobs:
               core.setFailed(
                 'PR body must include a changelog-relevant marker:\n' +
                 '  - `Closes #N` (links the issue)\n' +
-                '  - `Semver: patch|minor|major` (version hint)\n' +
-                'See .github/workflows/changelog.yml for details.'
+                '  - `Semver: patch|minor|major` (version hint)'
               );
+              return;
             }
+
+            // Step 2: fetch the CHANGELOG.md diff between base and head,
+            // scoped to added lines (lines starting with '+').
+            const diff = await github.rest.repos.compareCommits({
+              owner, repo,
+              base: baseSha,
+              head: headSha,
+            });
+
+            const files = diff.data.files || [];
+            const changelogFile = files.find(f => f.filename === 'CHANGELOG.md');
+
+            if (!changelogFile) {
+              core.setFailed(
+                'This PR does not modify CHANGELOG.md.\n' +
+                'Please add a changelog entry under the `## [Unreleased]` section\n' +
+                'describing what this PR changed.'
+              );
+              return;
+            }
+
+            // Get the patch (diff content) for CHANGELOG.md.
+            const patch = changelogFile.patch || '';
+
+            // Parse the added lines that fall within the Unreleased section.
+            // Walk the patch hunks looking for lines between the
+            // '## [Unreleased]' heading and the next '## [' heading.
+            const addedLines = patch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++'));
+
+            // Reconstruct the post-change CHANGELOG.md content by stripping
+            // the +/- prefixes from the unified diff.
+            let inUnreleased = false;
+            let hasSubstantiveEntry = false;
+
+            for (const line of addedLines) {
+              const content = line.slice(1); // strip +/- prefix
+              if (/^##\s+\[/i.test(content)) {
+                // Version heading — check if it's Unreleased
+                inUnreleased = /unreleased/i.test(content);
+                continue;
+              }
+              if (!inUnreleased) continue;
+              // Skip blank lines, section headers (###), and diff metadata.
+              const trimmed = content.trim();
+              if (trimmed === '' || trimmed.startsWith('###') || trimmed.startsWith('---') || trimmed.startsWith('===')) {
+                continue;
+              }
+              // A substantive entry: a bullet or non-heading content line.
+              if (trimmed.startsWith('-') || trimmed.startsWith('*') || (trimmed.length > 0 && !trimmed.startsWith('#'))) {
+                hasSubstantiveEntry = true;
+                break;
+              }
+            }
+
+            if (!hasSubstantiveEntry) {
+              core.setFailed(
+                'CHANGELOG.md was modified but no substantive entry was added under the `## [Unreleased]` section.\n' +
+                'Please add a bullet (e.g. `- Added feature X`) under `## [Unreleased]` describing what this PR changed.\n' +
+                'Blank lines, section headers, and version headings do not count.'
+              );
+              return;
+            }
+
+            core.info('CHANGELOG.md Unreleased section updated ✓');
