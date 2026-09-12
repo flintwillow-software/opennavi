@@ -378,7 +378,7 @@ The system SHALL enforce the IAM-style permission policy before any tool executi
 The system SHALL apply deny rules with precedence over allow rules in the permission policy.
 
 #### Scenario: Conflicting allow and deny rules
-- **GIVEN** a policy allows `bash` with read and execute actions
+- **GIVEN** a policy allows `shell_exec` with read and execute actions
 - **WHEN** the agent attempts an action also matched by a deny rule such as `*rm*`
 - **THEN** the deny rule SHALL take precedence
 - **AND** the tool call SHALL be rejected
@@ -574,3 +574,4 @@ The system SHALL produce build errors with clear messages for invalid definition
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S000200 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-12 | S000200 | 0.2.1 | Renamed `bash` → `shell_exec` in deny-precedence scenario (namespaced tool names per S130400 §04) |

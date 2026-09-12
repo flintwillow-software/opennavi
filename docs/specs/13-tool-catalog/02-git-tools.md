@@ -1,7 +1,7 @@
 ---
-status: draft
+status: active
 created: '2026-08-15'
-updated: '2026-08-15'
+updated: '2026-09-12'
 tags:
   - spec
   - tool-catalog
@@ -125,3 +125,4 @@ The system SHALL provide a `git_commit` tool that commits staged changes with a 
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-15 | S130200 | 0.2.0 | Initial git tools spec |
+| 2026-09-12 | S130200 | 0.2.1 | Status promoted draft → active |

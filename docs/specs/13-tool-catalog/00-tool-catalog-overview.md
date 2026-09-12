@@ -1,7 +1,7 @@
 ---
-status: draft
+status: active
 created: '2026-08-15'
-updated: '2026-08-15'
+updated: '2026-09-12'
 tags:
   - spec
   - tool-catalog
@@ -21,7 +21,7 @@ The tool catalog is the standard set of tools compiled into every navi binary. E
 
 | Field | Description |
 |-------|-------------|
-| `name` | Unique tool name (e.g. `read`, `bash`) |
+| `name` | Unique tool name (e.g. `file_read`, `shell_exec`) |
 | `description` | LLM-facing description of what the tool does |
 | `inputSchema` | Typed JSON schema for arguments |
 | `outputFormat` | Format hint for rendering (`text`, `json`, `diff`, `markdown`) |
@@ -46,9 +46,9 @@ Tools are classified into three access levels, enforced by the IAM permission mo
 
 | Level | Definition | Catalog Tools |
 |-------|------------|---------------|
-| **Read-only** | Observe state; no modification | read, grep, find, git_diff, git_log, git_status, ast_parse, symbol_search |
-| **Write** | Modify files, git state, or config | write, edit, git_commit |
-| **Execute** | Run external processes | bash, test_run |
+| **Read-only** | Observe state; no modification | file_read, file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search |
+| **Write** | Modify files, git state, or config | file_write, file_edit, git_commit |
+| **Execute** | Run external processes | shell_exec, test_run |
 
 ### Requirement: Tool Access Control
 
@@ -57,13 +57,13 @@ The system SHALL enforce access control on catalog tools, allowing read-only too
 #### Scenario: Read-only tool without write permission
 
 - **GIVEN** a navi with read-only permissions only
-- **WHEN** the agent calls a read-only tool such as `read` or `grep`
-- **THEN** the tool SHALL execute normally
+- **WHEN** the agent calls a read-only tool such as `file_read` or `file_grep`
+- **THEN** the tool SHALL execute normally (e.g. `file_read` or `file_grep`)
 
 #### Scenario: Write tool without write permission
 
 - **GIVEN** a navi without write permission
-- **WHEN** the agent calls a write tool such as `edit`
+- **WHEN** the agent calls a write tool such as `file_edit`
 - **THEN** the system SHALL deny the call and return a permission error to the LLM
 
 ## 02 Tool Registration
@@ -73,8 +73,8 @@ Tools are registered into the navi at build time. The navi definition lists whic
 ```go
 navi := sdk.Build(naviDef{
     Tools: []ToolDefinition{
-        {Name: "read", Enabled: true},
-        {Name: "bash", Enabled: true},
+        {Name: "file_read", Enabled: true},
+        {Name: "shell_exec", Enabled: true},
         {Name: "git_commit", Enabled: true},
     },
 })
@@ -86,7 +86,7 @@ The system SHALL register catalog tools at build time, compiling only the tools 
 
 #### Scenario: Enabling a subset of tools
 
-- **GIVEN** a navi definition enables only `read` and `bash`
+- **GIVEN** a navi definition enables only `file_read` and `shell_exec`
 - **WHEN** the navi is built
 - **THEN** only those two tools SHALL be available to the agent
 - **AND** the binary SHALL not include the other catalog tools
@@ -97,12 +97,12 @@ Each catalog tool declares a recovery strategy from [S010400](../01-agent-runtim
 
 | Strategy | Applied To |
 |----------|-----------|
-| Partial output on truncation | read (large files), bash (streaming, timeout) |
-| Atomic write + backup on conflict | write |
-| No-match returns unchanged; partial on overlap | edit |
+| Partial output on truncation | file_read (large files), shell_exec (streaming, timeout) |
+| Atomic write + backup on conflict | file_write |
+| No-match returns unchanged; partial on overlap | file_edit |
 | Rollback on failure | git_commit |
-| Capture stdout/stderr + timeout | bash, test_run |
-| N/A (pure reads) | grep, find, git_diff, git_log, git_status, ast_parse, symbol_search |
+| Capture stdout/stderr + timeout | shell_exec, test_run |
+| N/A (pure reads) | file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search |
 
 ### Requirement: Per-Tool Recovery Strategy
 
@@ -110,7 +110,7 @@ The system SHALL apply the declared recovery strategy per tool, so a failed tool
 
 #### Scenario: Bash timeout partial output
 
-- **GIVEN** a `bash` tool call that times out after producing partial output
+- **GIVEN** a `shell_exec` tool call that times out after producing partial output
 - **WHEN** the tool fails
 - **THEN** the system SHALL return the partial output with a truncation notice and the timeout error
 
@@ -119,3 +119,4 @@ The system SHALL apply the declared recovery strategy per tool, so a failed tool
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-15 | S130000 | 0.2.0 | Initial tool catalog overview spec |
+| 2026-09-12 | S130000 | 0.2.1 | Renamed tools to namespaced names per S130400 §04 (file_read, shell_exec, file_grep, file_find, code_ast_parse, code_symbol_search) |
