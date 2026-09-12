@@ -372,7 +372,7 @@ THEN the system SHALL truncate the content at the limit and append a [TRUNCATED:
 
 ### 4.1 Scenario: Some Tools Succeed, Others Fail
 
-When the agent calls multiple tools in parallel (e.g., `read` on file A, `query_grafana`, `bash ls /tmp`), some may succeed while others fail. The system must:
+When the agent calls multiple tools in parallel (e.g., `file_read` on file A, `query_grafana`, `shell_exec ls /tmp`), some may succeed while others fail. The system must:
 - Return successful results to the LLM immediately
 - Include error/partial information for failed tools
 - Allow the LLM to decide whether to retry or continue
@@ -1035,3 +1035,4 @@ THEN the system SHALL apply the configured timeout for that tool category.
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S010400 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-12 | S010400 | 0.2.1 | Renamed `read` → `file_read`, `bash` → `shell_exec` in parallel-failure example (namespaced tool names per S130400 §04) |

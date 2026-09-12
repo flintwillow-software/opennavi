@@ -7,7 +7,7 @@ tags:
   - component
   - navi-core
 priority: high
-spec-refs: [000000, 000100, 000200, 000300, 000400, 000500, 000600, 000700]
+spec-refs: [000000, 000100, 000200, 000300, 000400, 000500, 000600, 000700, 000800]
 ---
 
 # 00 Navi Core
@@ -26,6 +26,7 @@ spec-refs: [000000, 000100, 000200, 000300, 000400, 000500, 000600, 000700]
 | [S000500 Trust & Signing](05-trust-signing-model.md) | Trust & Signing | draft | Code signing, verification, extension trust |
 | [S000600 Extension Contract](06-extension-contract.md) | Extension Contract | draft | Plugin protocol, sandboxing, lifecycle |
 | [S000700 Binary Distribution](07-binary-distribution.md) | Binary Distribution | draft | Homebrew tap, direct download, signing, updates |
+| [S000800 SDK Surface](08-sdk-surface.md) | SDK Surface | draft | Public module boundary, consistency contract, tool surface, authoring workflow |
 
 > `spec-refs` lists the codes of the features in this component.
 
@@ -33,8 +34,9 @@ spec-refs: [000000, 000100, 000200, 000300, 000400, 000500, 000600, 000700]
 
 - Compiled binaries, not runtime loading — tools and skills compiled into the navi at build time
 - Interface selection at build time — only selected delivery modes are compiled in
-- Extensions as signed standplugins — separate binaries with their own trust model
+- Extensions as signed standplugins — separate binaries with their own trust model (register through the same tool registry)
 - Signature verification before execution — users verify before running
+- The module is the SDK — public packages (`sdk`, `agent`, `tools`, `store`, `llm`) are the authoring contract; `internal/` is closed implementation (S000800)
 
 ## Related
 

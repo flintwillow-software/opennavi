@@ -574,7 +574,7 @@ The system SHALL check a plugin's declared capabilities before executing any of 
 
 #### Scenario: Capability Denial
 - GIVEN a plugin without the `CanExecShell` capability
-- WHEN a `bash` or `sh` tool call is requested from it
+- WHEN a `shell_exec` tool call is requested from it
 - THEN the system SHALL return a non-recoverable `OpenNaviError` with `Kind: ErrKindPlugin` and code `CAPABILITY_DENIED`
 - AND it SHALL deny file tools unless the plugin declares file read or write capability
 - AND it SHALL truncate tool output to `MaxOutputBytes` with an `... [truncated]` suffix when exceeded
@@ -731,3 +731,4 @@ The system SHALL fall back to a secondary LLM provider when the primary provider
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S080200 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-12 | S080200 | 0.2.1 | Renamed `bash`/`sh` → `shell_exec` in capability-denial scenario (namespaced tool names per S130400 §04) |
