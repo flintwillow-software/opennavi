@@ -7,7 +7,7 @@ tags:
   - component
   - tool-catalog
 priority: high
-spec-refs: [130000, 130100, 130200, 130300, 130400]
+spec-refs: [130000, 130100, 130200, 130300, 130400, 130500]
 ---
 
 # 13 Tool Catalog
@@ -23,6 +23,7 @@ spec-refs: [130000, 130100, 130200, 130300, 130400]
 | [S130200 Git Tools](02-git-tools.md) | Git Tools | active | git_diff, git_log, git_status, git_commit schemas + recovery |
 | [S130300 Search, Test & Code Intelligence](03-search-test-code-intel.md) | Search, Test & Code Intelligence | active | file_grep, file_find, test_run, code_ast_parse, code_symbol_search schemas + recovery |
 | [S130400 Tool Registry & Discovery](04-tool-registry.md) | Tool Registry & Discovery | active | SDK ToolDefinition, registered vs active, provenance, discovery queries, namespace naming, validation |
+| [S130500 Agent Utility Tools](05-agent-utility-tools.md) | Agent Utility Tools | active | todo_read/write/update, time_read, note_read/write, http_request schemas + recovery; stateful tool storage seam |
 
 > `spec-refs` lists the codes of the features in this component.
 
@@ -35,6 +36,7 @@ spec-refs: [130000, 130100, 130200, 130300, 130400]
 - Error recovery strategies reuse the framework from [S010400 Tool Error Recovery](../01-agent-runtime/04-tool-error-recovery.md)
 - Tools are compiled into the binary at build time ([S000300 Builder & Compiler](../00-navi-core/03-builder-compiler.md)); runtime standplugin extensions register through the same registry (S000600)
 - Custom/author tools ship via the SDK registry or the extension contract — the catalog covers the standard set
+- Utility tools (S130500) introduce the stateful-tool seam: `todo_*` and `note_*` receive a per-navi store handle at registration and persist through the store layer; `http_request` enforces SSRF guards and credential-reference auth (S100400), never exposing secrets to the LLM
 
 ## Related
 

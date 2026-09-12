@@ -77,7 +77,7 @@ Each change is named for its primary spec code: `docs/changes/<version>/<NN>-<ke
 | 10 | [Integrations](10-integrations/README.md) | planned | 6 | [100000—100500] | 2025-08-13 |
 | 11 | [Creative Pipeline](11-creative-pipeline/README.md) | planned | 5 | [110000—110400] | 2025-08-13 |
 | 12 | [Avatar](12-avatar/README.md) | planned | 3 | [120000—120200] | 2025-08-13 |
-| 13 | [Tool Catalog](13-tool-catalog/README.md) | active | 5 | [130000—130400] | 2026-09-12 |
+| 13 | [Tool Catalog](13-tool-catalog/README.md) | active | 6 | [130000—130500] | 2026-09-12 |
 | 14 | [Agent Roles](14-agent-roles/README.md) | draft | 10 | [140000—140900] | 2026-08-15 |
 
 ## Related

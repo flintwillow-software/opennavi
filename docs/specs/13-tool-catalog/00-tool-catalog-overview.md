@@ -46,9 +46,9 @@ Tools are classified into three access levels, enforced by the IAM permission mo
 
 | Level | Definition | Catalog Tools |
 |-------|------------|---------------|
-| **Read-only** | Observe state; no modification | file_read, file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search |
-| **Write** | Modify files, git state, or config | file_write, file_edit, git_commit |
-| **Execute** | Run external processes | shell_exec, test_run |
+| **Read-only** | Observe state; no modification | file_read, file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search, todo_read, time_read, note_read |
+| **Write** | Modify files, git state, or config | file_write, file_edit, git_commit, todo_write, todo_update, note_write |
+| **Execute** | Run external processes | shell_exec, test_run, http_request |
 
 ### Requirement: Tool Access Control
 
@@ -102,7 +102,9 @@ Each catalog tool declares a recovery strategy from [S010400](../01-agent-runtim
 | No-match returns unchanged; partial on overlap | file_edit |
 | Rollback on failure | git_commit |
 | Capture stdout/stderr + timeout | shell_exec, test_run |
-| N/A (pure reads) | file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search |
+| Atomic transaction + rollback on failure | todo_write, todo_update, note_write |
+| Capture response on failure | http_request |
+| N/A (pure reads) | file_grep, file_find, git_diff, git_log, git_status, code_ast_parse, code_symbol_search, todo_read, time_read, note_read |
 
 ### Requirement: Per-Tool Recovery Strategy
 
@@ -120,3 +122,4 @@ The system SHALL apply the declared recovery strategy per tool, so a failed tool
 |------|--------|---------|--------|
 | 2026-08-15 | S130000 | 0.2.0 | Initial tool catalog overview spec |
 | 2026-09-12 | S130000 | 0.2.1 | Renamed tools to namespaced names per S130400 §04 (file_read, shell_exec, file_grep, file_find, code_ast_parse, code_symbol_search) |
+| 2026-09-12 | S130000 | 0.2.2 | Added agent utility tools to access-control and recovery mappings (S130500) |

@@ -204,6 +204,10 @@ Tool names follow a `namespace_action` pattern so tools group by domain and neve
 | `git` | `git_diff`, `git_log`, `git_status`, `git_commit` |
 | `code` | `code_ast_parse`, `code_symbol_search` |
 | `test` | `test_run` |
+| `todo` | `todo_read`, `todo_write`, `todo_update` |
+| `time` | `time_read` |
+| `note` | `note_read`, `note_write` |
+| `http` | `http_request` |
 | `github` | `github_issue_read`, `github_issue_write` |
 | `plane` | `plane_issue_read`, `plane_issue_write` |
 
@@ -303,3 +307,4 @@ The system SHALL run a tool's `prepareArguments` hook (when declared) before val
 |------|--------|---------|--------|
 | 2026-09-08 | S130400 | 0.2.0 | Initial tool registry & discovery spec |
 | 2026-09-12 | S130400 | 0.2.1 | Status promoted draft → active |
+| 2026-09-12 | S130400 | 0.2.2 | Added todo/time/note/http namespaces to §04 table (S130500) |
