@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // runEnqueue is the `navi enqueue` subcommand: writes a thought

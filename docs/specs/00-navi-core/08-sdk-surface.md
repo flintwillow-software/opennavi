@@ -190,3 +190,4 @@ The system SHALL build the starter template against the SDK in CI, on the defaul
 | 2026-09-08 | S000800 | 0.2.0 | Initial SDK surface spec |
 | 2026-09-13 | S000805 | 0.3.0 | Go-only authoring (removed YAML equivalence); added template-build guardrail for the public surface (S000312) |
 | 2026-09-13 | S000805 | 0.3.1 | Guardrail covers the two-template set (navi-code, navi-daemon) per S000313 |
+| 2026-09-13 | S000800 | 0.3.2 | llm/ and store/ (+ store/sqlite) promoted to public packages; session data model moved to store/ (NAVI-276) |

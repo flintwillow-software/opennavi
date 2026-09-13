@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 func TestToLLMMessages(t *testing.T) {

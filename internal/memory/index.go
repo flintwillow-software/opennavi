@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // Index is the vector index over the memories tier (spec §05 Tier 5):

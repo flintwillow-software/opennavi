@@ -15,9 +15,9 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
+	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // Config configures the CLI interface.

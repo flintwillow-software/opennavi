@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // liveEmbedder returns an Ollama embedder against $OLLAMA_HOST (or

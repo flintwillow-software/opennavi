@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/flintwillow-software/opennavi/internal/session"
+	"github.com/flintwillow-software/opennavi/store"
 )
 
 // exportMessage is one line/element of the export format (spec §07.2).
@@ -40,7 +40,7 @@ type exportHeaderLine struct {
 	CreatedAt string `json:"created_at"`
 }
 
-func exportMessages(sess *session.Session) ([]exportMessage, error) {
+func exportMessages(sess *store.Session) ([]exportMessage, error) {
 	out := make([]exportMessage, 0, len(sess.Entries))
 	for _, e := range sess.Entries {
 		m := exportMessage{
@@ -64,7 +64,7 @@ func exportMessages(sess *session.Session) ([]exportMessage, error) {
 
 // ExportJSON writes the session to path in the machine-readable JSON
 // format from spec §07.2.
-func (s *Store) ExportJSON(sess *session.Session, path string) error {
+func (s *Store) ExportJSON(sess *store.Session, path string) error {
 	msgs, err := exportMessages(sess)
 	if err != nil {
 		return err
@@ -89,7 +89,7 @@ func (s *Store) ExportJSON(sess *session.Session, path string) error {
 // ExportJSONL writes the session as newline-delimited JSON: line one is
 // the session header, then one message object per line (spec §01.2 —
 // the human-readable, portable backup format that ImportJSONL reads).
-func (s *Store) ExportJSONL(sess *session.Session, path string) error {
+func (s *Store) ExportJSONL(sess *store.Session, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("sqlite: create jsonl %s: %w", path, err)

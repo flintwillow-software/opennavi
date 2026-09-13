@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
-	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // checkpointPrefix is the self-describing magic for the checkpoint

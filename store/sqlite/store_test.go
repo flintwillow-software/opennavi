@@ -12,30 +12,31 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/session"
+	"github.com/flintwillow-software/opennavi/store"
 )
 
-func testSession(id string, n int) *session.Session {
-	s := session.NewSession("agent-1", "/tmp/work")
+func testSession(id string, n int) *store.Session {
+	s := store.NewSession("agent-1", "/tmp/work")
 	if id != "" {
 		s.ID = id
 	}
 	s.Name = "test session"
 	s.Profile = "p1"
-	s.AppendEntry(session.NewEntry(session.RoleUser, "hello"))
-	s.AppendEntry(func() session.SessionEntry {
-		e := session.NewEntry(session.RoleAssistant, "calling tool")
+	s.AppendEntry(store.NewEntry(store.RoleUser, "hello"))
+	s.AppendEntry(func() store.SessionEntry {
+		e := store.NewEntry(store.RoleAssistant, "calling tool")
 		e.ToolCallID = "tc_1_0"
 		e.ToolName = "file_read"
 		e.ToolInput = json.RawMessage(`{"path":"x.txt"}`)
 		return e
 	}())
-	s.AppendEntry(func() session.SessionEntry {
-		e := session.NewEntry(session.RoleTool, "file contents")
+	s.AppendEntry(func() store.SessionEntry {
+		e := store.NewEntry(store.RoleTool, "file contents")
 		e.ToolCallID = "tc_1_0"
 		return e
 	}())
 	for i := 0; i < n; i++ {
-		s.AppendEntry(session.NewEntry(session.RoleUser, fmt.Sprintf("extra %d", i)))
+		s.AppendEntry(store.NewEntry(store.RoleUser, fmt.Sprintf("extra %d", i)))
 	}
 	return s
 }
@@ -62,7 +63,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.ID != want.ID || got.AgentID != want.AgentID || got.Name != want.Name ||
-		got.Profile != want.Profile || got.WorkDir != want.WorkDir || got.Status != session.StatusActive {
+		got.Profile != want.Profile || got.WorkDir != want.WorkDir || got.Status != store.StatusActive {
 		t.Fatalf("metadata mismatch: %+v", got)
 	}
 	if len(got.Entries) != len(want.Entries) {
@@ -122,7 +123,7 @@ func TestCurrentPositionPersists(t *testing.T) {
 	}
 
 	// Empty sessions store NULL and load with Current == -1.
-	empty := session.NewSession("a", "")
+	empty := store.NewSession("a", "")
 	if err := st.SaveSession(empty); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestSaveSessionWholeRowReplace(t *testing.T) {
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
-	s.AppendEntry(session.NewEntry(session.RoleUser, "later"))
+	s.AppendEntry(store.NewEntry(store.RoleUser, "later"))
 	s.Tags = []string{"new"}
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
@@ -165,7 +166,7 @@ func TestSaveSessionWholeRowReplace(t *testing.T) {
 
 func TestLoadMissingAndDelete(t *testing.T) {
 	st := openTestStore(t, Options{})
-	if _, err := st.LoadSession("nope"); !errors.Is(err, session.ErrSessionNotFound) {
+	if _, err := st.LoadSession("nope"); !errors.Is(err, store.ErrSessionNotFound) {
 		t.Fatalf("load error = %v", err)
 	}
 	s := testSession("", 0)
@@ -175,10 +176,10 @@ func TestLoadMissingAndDelete(t *testing.T) {
 	if err := st.DeleteSession(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteSession(s.ID); !errors.Is(err, session.ErrSessionNotFound) {
+	if err := st.DeleteSession(s.ID); !errors.Is(err, store.ErrSessionNotFound) {
 		t.Fatalf("double delete error = %v", err)
 	}
-	if _, err := st.LoadSession(s.ID); !errors.Is(err, session.ErrSessionNotFound) {
+	if _, err := st.LoadSession(s.ID); !errors.Is(err, store.ErrSessionNotFound) {
 		t.Fatalf("load after delete error = %v", err)
 	}
 }
@@ -186,12 +187,12 @@ func TestLoadMissingAndDelete(t *testing.T) {
 func TestListSessionsFiltersAndOrder(t *testing.T) {
 	st := openTestStore(t, Options{})
 
-	mk := func(agentID, profile string, status session.Status, tags []string, age time.Duration) *session.Session {
-		s := session.NewSession(agentID, "")
+	mk := func(agentID, profile string, status store.Status, tags []string, age time.Duration) *store.Session {
+		s := store.NewSession(agentID, "")
 		s.Profile = profile
 		s.Status = status
 		s.Tags = tags
-		s.AppendEntry(session.NewEntry(session.RoleUser, "m"))
+		s.AppendEntry(store.NewEntry(store.RoleUser, "m"))
 		s.UpdatedAt = time.Now().Add(-age)
 		if err := st.SaveSession(s); err != nil {
 			t.Fatal(err)
@@ -199,11 +200,11 @@ func TestListSessionsFiltersAndOrder(t *testing.T) {
 		return s
 	}
 
-	mk("a1", "p1", session.StatusActive, []string{"work"}, 1*time.Hour)
-	mk("a1", "p1", session.StatusPaused, nil, 2*time.Hour)
-	third := mk("a2", "p2", session.StatusActive, []string{"work", "urgent"}, 3*time.Hour)
+	mk("a1", "p1", store.StatusActive, []string{"work"}, 1*time.Hour)
+	mk("a1", "p1", store.StatusPaused, nil, 2*time.Hour)
+	third := mk("a2", "p2", store.StatusActive, []string{"work", "urgent"}, 3*time.Hour)
 
-	all, err := st.ListSessions(session.ListOptions{})
+	all, err := st.ListSessions(store.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,27 +215,27 @@ func TestListSessionsFiltersAndOrder(t *testing.T) {
 		t.Fatalf("message_count = %d", all[0].MessageCount)
 	}
 
-	byAgent, _ := st.ListSessions(session.ListOptions{AgentID: "a1"})
+	byAgent, _ := st.ListSessions(store.ListOptions{AgentID: "a1"})
 	if len(byAgent) != 2 {
 		t.Fatalf("agent filter: %d", len(byAgent))
 	}
-	paused, _ := st.ListSessions(session.ListOptions{Status: session.StatusPaused})
+	paused, _ := st.ListSessions(store.ListOptions{Status: store.StatusPaused})
 	if len(paused) != 1 {
 		t.Fatalf("status filter: %d", len(paused))
 	}
-	tagged, _ := st.ListSessions(session.ListOptions{Tags: []string{"urgent"}})
+	tagged, _ := st.ListSessions(store.ListOptions{Tags: []string{"urgent"}})
 	if len(tagged) != 1 || tagged[0].ID != third.ID {
 		t.Fatalf("tag filter: %+v", tagged)
 	}
-	since, _ := st.ListSessions(session.ListOptions{Since: time.Now().Add(-90 * time.Minute)})
+	since, _ := st.ListSessions(store.ListOptions{Since: time.Now().Add(-90 * time.Minute)})
 	if len(since) != 1 {
 		t.Fatalf("since filter: %d", len(since))
 	}
-	limited, _ := st.ListSessions(session.ListOptions{Limit: 1})
+	limited, _ := st.ListSessions(store.ListOptions{Limit: 1})
 	if len(limited) != 1 {
 		t.Fatalf("limit: %d", len(limited))
 	}
-	offset, _ := st.ListSessions(session.ListOptions{Offset: 2})
+	offset, _ := st.ListSessions(store.ListOptions{Offset: 2})
 	if len(offset) != 1 || offset[0].ID != third.ID {
 		t.Fatalf("offset: %+v", offset)
 	}
@@ -252,7 +253,7 @@ func TestForkPersistenceRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, msg := range []string{"one", "two", "three"} {
-		parent.AppendEntry(session.NewEntry(session.RoleUser, msg))
+		parent.AppendEntry(store.NewEntry(store.RoleUser, msg))
 	}
 	if err := m.SaveSession(parent); err != nil {
 		t.Fatal(err)
@@ -262,7 +263,7 @@ func TestForkPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork.AppendEntry(session.NewEntry(session.RoleAssistant, "branch reply"))
+	fork.AppendEntry(store.NewEntry(store.RoleAssistant, "branch reply"))
 	if err := m.SaveSession(fork); err != nil {
 		t.Fatalf("save fork (shared entry IDs): %v", err)
 	}
@@ -336,7 +337,7 @@ func TestEncryptedRoundTrip(t *testing.T) {
 	st := openTestStore(t, Options{Cipher: cipher})
 
 	s := testSession("", 1)
-	s.AppendEntry(session.NewEntry(session.RoleUser, "secret payload"))
+	s.AppendEntry(store.NewEntry(store.RoleUser, "secret payload"))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -447,8 +448,8 @@ func TestConcurrentSaveDifferentSessions(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s := session.NewSession(fmt.Sprintf("agent-%d", i), "")
-			s.AppendEntry(session.NewEntry(session.RoleUser, fmt.Sprintf("msg %d", i)))
+			s := store.NewSession(fmt.Sprintf("agent-%d", i), "")
+			s.AppendEntry(store.NewEntry(store.RoleUser, fmt.Sprintf("msg %d", i)))
 			if err := st.SaveSession(s); err != nil {
 				errs <- err
 			}
@@ -459,7 +460,7 @@ func TestConcurrentSaveDifferentSessions(t *testing.T) {
 	for err := range errs {
 		t.Fatal(err)
 	}
-	list, err := st.ListSessions(session.ListOptions{})
+	list, err := st.ListSessions(store.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
