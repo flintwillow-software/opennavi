@@ -67,3 +67,27 @@ jobs:
           EOF
           (cd templates/navi-code && go build ./... && go vet ./...)
           (cd templates/navi-daemon && go build ./... && go vet ./...)
+
+  sdk-consumer:
+    name: external SDK consumer (S000800 public surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # tools/sdk-consumer is its own Go module (the consumer injects
+      # its own replace; the shipped templates never carry one). It
+      # imports every public package — sdk, agent, llm, store,
+      # store/sqlite, tools/registry — and exercises the runtime API,
+      # so a change that leaks internal types into a public signature
+      # or breaks the authoring surface fails here, on the PR.
+      - name: Consume the public SDK from an external module
+        run: |
+          cd tools/sdk-consumer
+          go build ./...
+          go vet ./...
+          go run .

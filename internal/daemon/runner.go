@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"

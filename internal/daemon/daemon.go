@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
