@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Replaced bare `.gitignore` patterns (`navi`, `navi.db`) with anchored artifact-dir entries (`/bin/`, `/data/`) — bare patterns match at any directory level and silently ignore new files under `cmd/navi/` (#246)
+
+### Added
+- `justfile` with CI-gate parity (`build` → `bin/navi`, `vet`, `fmt-check`, `test-race`, `ci`) and run wrappers (`daemon`, `health`, `enqueue`) that keep runtime state under `data/navi.db`; artifact-dir convention documented in `AGENTS.md` (#246)
 - Migrated `docs/spec/` to the spec-tree standard (`docs/specs/`) — 13 numbered components, spec codes (6-digit `component.feature.subfeature`), `spec-refs` frontmatter, SHALL + GIVEN/WHEN/THEN requirement grammar, and Status History on every feature
 - Added `docs/changes/` versioned change tracker, shipped `docs/templates/` skeletons, and synced the `specs-*` skills into `.pi/skills/`
 - Deprecated product-spec files (REQUIREMENTS/DESIGN/IMPLEMENTATION/TESTING) folded into numbered feature files
