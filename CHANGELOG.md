@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `sdk/` public package (S000800): `NaviDef` authoring types (name, version, personality, skills, tools, interfaces, extensions, permissions) and the `Build()` entry point with full definition validation; the S000300 builder pipeline remains pending, so `Build` fails with `ErrBuilderUnavailable` (NAVI-273)
+- Starter templates per S000313: `templates/navi-code/` (CLI coding agent) and `templates/navi-daemon/` (daemon-style) as nested Go modules pinned to the published SDK, each with an author tool registered through `tools/registry` and an example runtime config (NAVI-273)
+- CI: starter-template build job against the SDK on main and release tags (S000805 guardrail) (NAVI-273)
+
 ### Changed
 - Replaced bare `.gitignore` patterns (`navi`, `navi.db`) with anchored artifact-dir entries (`/bin/`, `/data/`) — bare patterns match at any directory level and silently ignore new files under `cmd/navi/` (#246)
 - Specs are Go-only for navi definitions: removed the `naviconfig.yaml` alternative (S000207/S000100/S000300), added the in-repo starter template + `navi init` scaffolding spec (S000312) and the SDK-surface template guardrail (S000805)
