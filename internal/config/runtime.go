@@ -40,10 +40,20 @@ type ToolPolicy struct {
 	Timeout map[string]time.Duration `yaml:"timeouts,omitempty"`
 }
 
+// ThoughtQueueConfig tunes the daemon's thought queue (deployment
+// tuning: worker concurrency and priority slots). Runtime side of the
+// S000200 §04 split — queue throughput is an operator concern, not a
+// compiled-definition concern.
+type ThoughtQueueConfig struct {
+	MaxConcurrent  int    `yaml:"max_concurrent,omitempty"`
+	PrioritySlots  int    `yaml:"priority_slots,omitempty"`
+	SlotExhaustion string `yaml:"slot_exhaustion,omitempty"`
+}
+
 // RuntimeConfig is the user-modifiable configuration (spec "Static
 // Definition vs. Runtime Config Separation"): LLM provider keys,
 // session settings, tool policy overrides. It never modifies the
-// compiled NaviDefinition.
+// compiled-in Go navi definition (S000200 §04).
 type RuntimeConfig struct {
 	Provider ProviderConfig `yaml:"provider,omitempty"`
 	Tools    ToolPolicy     `yaml:"tools,omitempty"`
@@ -51,6 +61,10 @@ type RuntimeConfig struct {
 	SessionDB string `yaml:"session_db,omitempty"`
 	// EmbedModel is the local embedding model (memory Tier 5).
 	EmbedModel string `yaml:"embed_model,omitempty"`
+	// ThoughtQueue tunes the daemon's thought queue (nil = defaults).
+	ThoughtQueue *ThoughtQueueConfig `yaml:"thought_queue,omitempty"`
+	// Cron declares the daemon's cron schedules (nil = none).
+	Cron *CronConfig `yaml:"cron,omitempty"`
 }
 
 // DefaultRuntimeConfig is the baked-in baseline of the merge chain.
@@ -162,6 +176,14 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	if src.EmbedModel != "" {
 		dst.EmbedModel = src.EmbedModel
 	}
+	if src.ThoughtQueue != nil {
+		tq := *src.ThoughtQueue
+		dst.ThoughtQueue = &tq
+	}
+	if src.Cron != nil {
+		c := *src.Cron
+		dst.Cron = &c
+	}
 }
 
 // applyEnv applies environment overrides (layer 3). Known variables:
@@ -177,16 +199,27 @@ func applyEnv(rc *RuntimeConfig) {
 	}
 }
 
-// Validate checks the runtime config against a definition: referenced
-// tools must exist in the compiled set.
-func (rc RuntimeConfig) Validate(d *NaviDefinition) error {
-	defined := map[string]bool{}
-	for _, t := range d.Tools {
-		defined[t.Name] = true
+// Validate checks the runtime config's self-contained invariants:
+// thought-queue tuning bounds and cron schedule consistency. There is
+// deliberately no cross-check against a navi definition — under the
+// go-first split (S000200 §04, S000207) the compiled definition is not
+// visible to the runtime-config layer; the navi binary itself enforces
+// its compiled-in tool policy.
+func (rc RuntimeConfig) Validate() error {
+	if tq := rc.ThoughtQueue; tq != nil {
+		if tq.MaxConcurrent < 0 {
+			return fmt.Errorf("config: thought_queue.max_concurrent %d must be >= 0", tq.MaxConcurrent)
+		}
+		if tq.PrioritySlots < 0 {
+			return fmt.Errorf("config: thought_queue.priority_slots %d must be >= 0", tq.PrioritySlots)
+		}
+		if tq.SlotExhaustion != "" && tq.SlotExhaustion != "queue" && tq.SlotExhaustion != "reject" {
+			return fmt.Errorf("config: thought_queue.slot_exhaustion %q must be \"queue\" or \"reject\"", tq.SlotExhaustion)
+		}
 	}
-	for _, name := range append(append([]string{}, rc.Tools.Allowed...), rc.Tools.Blocked...) {
-		if !defined[name] {
-			return fmt.Errorf("config: tool %q not defined in navi definition", name)
+	if rc.Cron != nil {
+		if err := rc.Cron.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

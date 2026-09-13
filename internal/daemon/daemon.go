@@ -10,20 +10,19 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
-	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // Runtime is the assembled daemon: everything long-running needs.
 type Runtime struct {
 	Config    RuntimeParams
-	Def       *config.NaviDefinition
 	Runtime   config.RuntimeConfig
 	Queue     *thought.ThoughtQueue
 	Pool      *thought.Pool
@@ -35,9 +34,11 @@ type Runtime struct {
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
-// merged through the #237 chain's flags layer by the caller).
+// merged through the #237 chain's flags layer by the caller). Under
+// the go-first authoring split (S000200 §04, S000207) there is no
+// navi.yaml: definition-level concerns are compiled into the navi
+// binary, and the daemon consumes only runtime config.
 type RuntimeParams struct {
-	DefinitionPath   string          // navi.yaml (empty = minimal built-in definition)
 	RuntimeFile      string          // runtime config YAML ("" = none)
 	SessionDB        string          // final session DB path (post-merge)
 	Model            string          // CLI model override (flags layer)
@@ -50,20 +51,9 @@ type RuntimeParams struct {
 	OverrideProvider llm.Provider    // test seam: replaces the config-built chain
 }
 
-// Assemble runs the startup chain: definition → runtime merge →
-// store → provider registry (ollama/openrouter/mock) → queue → pool.
+// Assemble runs the startup chain: runtime merge → store → provider
+// registry (ollama/openrouter/mock) → queue → pool.
 func Assemble(params RuntimeParams) (*Runtime, error) {
-	var def *config.NaviDefinition
-	if params.DefinitionPath != "" {
-		loaded, err := config.LoadDefinition(params.DefinitionPath)
-		if err != nil {
-			return nil, err
-		}
-		def = loaded
-	} else {
-		def = &config.NaviDefinition{Name: "navi", Version: "0.1.0"}
-	}
-
 	// Runtime merge chain (defaults → file → env → flags): the flags
 	// layer is pre-merged by the caller into RuntimeParams fields.
 	fileRC := config.RuntimeConfig{}
@@ -83,8 +73,11 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 	rc := config.MergeRuntime(fileRC, flags)
 
-	// Validate tool policy against the compiled definition.
-	if err := rc.Validate(def); err != nil {
+	// Validate the runtime config's self-contained invariants (queue
+	// bounds, cron schedules). The compiled navi definition is not
+	// visible here by design; the navi binary enforces its own
+	// compiled-in tool policy.
+	if err := rc.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -133,8 +126,8 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 	defCfg := thought.Config{
-		MaxConcurrent:  thoughtQueueMax(def),
-		PrioritySlots:  thoughtPrioritySlots(def),
+		MaxConcurrent:  thoughtQueueMax(rc),
+		PrioritySlots:  thoughtPrioritySlots(rc),
 		SlotExhaustion: thought.PolicyQueue,
 	}
 	q, err := thought.NewQueue(defCfg, thoughtStore)
@@ -151,7 +144,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		logger = logging.WireFromEnv()
 	}
 
-	sched, cerr := WireCron(store.DB(), def.Cron, q)
+	sched, cerr := WireCron(store.DB(), rc.Cron, q)
 	if cerr != nil {
 		store.Close()
 		return nil, cerr
@@ -178,7 +171,6 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 
 	return &Runtime{
 		Config:    params,
-		Def:       def,
 		Runtime:   rc,
 		Queue:     q,
 		Pool:      pool,
@@ -189,16 +181,16 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}, nil
 }
 
-func thoughtQueueMax(def *config.NaviDefinition) int {
-	if def.ThoughtQueue != nil && def.ThoughtQueue.MaxConcurrent > 0 {
-		return def.ThoughtQueue.MaxConcurrent
+func thoughtQueueMax(rc config.RuntimeConfig) int {
+	if rc.ThoughtQueue != nil && rc.ThoughtQueue.MaxConcurrent > 0 {
+		return rc.ThoughtQueue.MaxConcurrent
 	}
 	return 1
 }
 
-func thoughtPrioritySlots(def *config.NaviDefinition) int {
-	if def.ThoughtQueue != nil {
-		return def.ThoughtQueue.PrioritySlots
+func thoughtPrioritySlots(rc config.RuntimeConfig) int {
+	if rc.ThoughtQueue != nil {
+		return rc.ThoughtQueue.PrioritySlots
 	}
 	return 0
 }

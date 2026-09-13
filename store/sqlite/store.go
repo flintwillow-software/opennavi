@@ -1,3 +1,11 @@
+// Package sqlite is the public SQLite implementation of store.Store
+// (S000800 §01): sessions, thoughts, and memory share one encrypted
+// database. Open with Open/OpenDB; encryption is selected via
+// CipherFromEnv or an explicit Cipher.
+//
+// The ThoughtStore seam (thought_store.go) is retained here for the
+// internal daemon; its queue-facing surface moves behind the public
+// agent boundary with the phase-2 promotion (NAVI-277).
 package sqlite
 
 import (
@@ -7,15 +15,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/session"
+	"github.com/flintwillow-software/opennavi/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO)
 )
 
-// Store implements session.Store backed by SQLite. SaveSession is a
+// Store implements store.Store backed by SQLite. SaveSession is a
 // whole-row replace inside one transaction: upsert the session row,
 // delete and reinsert all message rows and tags. Manager read-modify-
 // write methods rely on this store-level atomicity.
+//
+// Public surface note: session-facing methods operate on the public
+// store data model only. ThoughtStore methods intentionally reference
+// internal queue types and are not part of the authoring contract.
 type Store struct {
 	db     *sql.DB
 	cipher Cipher
@@ -73,7 +85,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // ── SaveSession: whole-row replace in one transaction ────────────────────
 
-func (s *Store) SaveSession(sess *session.Session) error {
+func (s *Store) SaveSession(sess *store.Session) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("sqlite: begin save: %w", err)
@@ -144,8 +156,8 @@ func (s *Store) SaveSession(sess *session.Session) error {
 
 // ── LoadSession ──────────────────────────────────────────────────────────
 
-func (s *Store) LoadSession(id string) (*session.Session, error) {
-	sess := &session.Session{}
+func (s *Store) LoadSession(id string) (*store.Session, error) {
+	sess := &store.Session{}
 	var status string
 	var createdAt, updatedAt string
 	var storedCurrent sql.NullInt64
@@ -154,12 +166,12 @@ func (s *Store) LoadSession(id string) (*session.Session, error) {
 		Scan(&sess.ID, &sess.Name, &sess.AgentID, &sess.Profile, &sess.WorkDir,
 			&sess.BranchID, &sess.ParentID, &sess.Label, &status, &storedCurrent, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
-		return nil, session.ErrSessionNotFound
+		return nil, store.ErrSessionNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: load session %s: %w", id, err)
 	}
-	sess.Status = session.Status(status)
+	sess.Status = store.Status(status)
 	if sess.CreatedAt, err = parseTime(createdAt); err != nil {
 		return nil, err
 	}
@@ -174,9 +186,9 @@ func (s *Store) LoadSession(id string) (*session.Session, error) {
 	}
 	defer rows.Close()
 
-	sess.Entries = []session.SessionEntry{}
+	sess.Entries = []store.SessionEntry{}
 	for rows.Next() {
-		var e session.SessionEntry
+		var e store.SessionEntry
 		var role, content string
 		var entryIndex int
 		var toolInput sql.NullString
@@ -185,7 +197,7 @@ func (s *Store) LoadSession(id string) (*session.Session, error) {
 		if err := rows.Scan(&e.ID, &entryIndex, &role, &content, &e.ToolCallID, &e.ToolName, &toolInput, &compacted, &created); err != nil {
 			return nil, fmt.Errorf("sqlite: scan message in %s: %w", id, err)
 		}
-		e.Role = session.Role(role)
+		e.Role = store.Role(role)
 		plain, err := s.decodeText([]byte(content))
 		if err != nil {
 			return nil, err
@@ -258,14 +270,14 @@ func (s *Store) DeleteSession(id string) error {
 		return fmt.Errorf("sqlite: delete session %s: rows: %w", id, err)
 	}
 	if n == 0 {
-		return session.ErrSessionNotFound
+		return store.ErrSessionNotFound
 	}
 	return nil
 }
 
 // ── ListSessions ─────────────────────────────────────────────────────────
 
-func (s *Store) ListSessions(opts session.ListOptions) ([]session.SessionInfo, error) {
+func (s *Store) ListSessions(opts store.ListOptions) ([]store.SessionInfo, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	if opts.Profile != "" {
@@ -311,7 +323,7 @@ func (s *Store) ListSessions(opts session.ListOptions) ([]session.SessionInfo, e
 	}
 	defer rows.Close()
 
-	out := []session.SessionInfo{}
+	out := []store.SessionInfo{}
 	for rows.Next() {
 		info, err := scanSessionInfo(rows)
 		if err != nil {
@@ -324,14 +336,14 @@ func (s *Store) ListSessions(opts session.ListOptions) ([]session.SessionInfo, e
 
 // scanSessionInfo scans one row of the shared session-list projection
 // (metadata + message count + JSON tag array).
-func scanSessionInfo(rows *sql.Rows) (session.SessionInfo, error) {
-	var info session.SessionInfo
+func scanSessionInfo(rows *sql.Rows) (store.SessionInfo, error) {
+	var info store.SessionInfo
 	var status, createdAt, updatedAt string
 	var tags sql.NullString
 	if err := rows.Scan(&info.ID, &info.Name, &info.AgentID, &createdAt, &updatedAt, &status, &info.MessageCount, &tags); err != nil {
 		return info, fmt.Errorf("sqlite: scan session list: %w", err)
 	}
-	info.Status = session.Status(status)
+	info.Status = store.Status(status)
 	var err error
 	if info.CreatedAt, err = parseTime(createdAt); err != nil {
 		return info, err

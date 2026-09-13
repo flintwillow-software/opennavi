@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // sqlOpen opens the shared SQLite store database with migrations

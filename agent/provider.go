@@ -1,7 +1,7 @@
 package agent
 
 // Agent-facing provider seam. The concrete Ollama client lives in the
-// provider layer (internal/llm, #187) — this file adapts it onto the
+// provider layer (llm, #187) — this file adapts it onto the
 // agent's own Message/Event types so the run loop is untouched. When
 // the provider layer matures further (#184+), this adapter is the only
 // place that changes.
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // OllamaProvider adapts the provider layer's Ollama client onto the
