@@ -18,14 +18,14 @@ func TestWireCronRecordFire(t *testing.T) {
 	}
 	defer rt.Store.Close()
 
-	defs := config.DefinitionCronConfig{
-		Schedules: []config.CronScheduleDef{{
+	defs := config.CronConfig{
+		Schedules: []config.CronSchedule{{
 			Name:   "test-cron",
 			Expr:   "* * * * *",
 			Prompt: "cron test prompt",
 		}},
 	}
-	sched, err := WireCron(rt.Store.DB(), defs, rt.Queue)
+	sched, err := WireCron(rt.Store.DB(), &defs, rt.Queue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,14 +58,14 @@ func TestWireCronRecordFireLastFiredAssert(t *testing.T) {
 	}
 	defer rt.Store.Close()
 
-	defs := config.DefinitionCronConfig{
-		Schedules: []config.CronScheduleDef{{
+	defs := config.CronConfig{
+		Schedules: []config.CronSchedule{{
 			Name:   "lf-cron",
 			Expr:   "* * * * *",
 			Prompt: "prompt",
 		}},
 	}
-	sched, err := WireCron(rt.Store.DB(), defs, rt.Queue)
+	sched, err := WireCron(rt.Store.DB(), &defs, rt.Queue)
 	if err != nil {
 		t.Fatal(err)
 	}

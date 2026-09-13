@@ -21,53 +21,65 @@ func TestAssembleMinimal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Store.Close()
-	if rt.Def.Name != "navi" {
-		t.Fatalf("def = %+v", rt.Def)
-	}
 	if rt.Queue == nil || rt.Pool == nil {
 		t.Fatal("queue/pool not assembled")
 	}
+	if rt.Scheduler == nil {
+		t.Fatal("scheduler not assembled (nil runtime cron must still wire a scheduler)")
+	}
 }
 
-func TestAssembleWithDefinition(t *testing.T) {
-	defPath := filepath.Join(t.TempDir(), "navi.yaml")
+func TestAssembleWithRuntimeConfig(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), "config.yaml")
 	yaml := `
-name: daemon-navi
-version: 1.0.0
-tools:
-  - name: file_read
-    description: Read files
+provider:
+  primary: mock
+  model: test-model
 thought_queue:
   max_concurrent: 2
   priority_slots: 1
+cron:
+  schedules:
+    - name: health-check
+      expr: "*/5 * * * *"
+      prompt: "Check service health."
 `
-	if err := os.WriteFile(defPath, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(rcPath, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rt, err := Assemble(RuntimeParams{
-		DefinitionPath: defPath,
-		SessionDB:      filepath.Join(t.TempDir(), "daemon.db"),
-		Model:          "test-model",
+		RuntimeFile: rcPath,
+		SessionDB:   filepath.Join(t.TempDir(), "daemon.db"),
+		Model:       "test-model",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Store.Close()
-	if rt.Def.Name != "daemon-navi" {
-		t.Fatalf("def name = %q", rt.Def.Name)
+	if rt.Runtime.ThoughtQueue == nil || rt.Runtime.ThoughtQueue.MaxConcurrent != 2 {
+		t.Fatalf("thought queue = %+v", rt.Runtime.ThoughtQueue)
+	}
+	if rt.Runtime.Cron == nil || len(rt.Runtime.Cron.Schedules) != 1 {
+		t.Fatalf("cron = %+v", rt.Runtime.Cron)
 	}
 }
 
-func TestAssembleInvalidDefinitionFails(t *testing.T) {
-	defPath := filepath.Join(t.TempDir(), "navi.yaml")
-	if err := os.WriteFile(defPath, []byte("name: BAD_NAME"), 0o644); err != nil {
+func TestAssembleInvalidRuntimeConfigFails(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+provider:
+  primary: mock
+thought_queue:
+  max_concurrent: -3
+`
+	if err := os.WriteFile(rcPath, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Assemble(RuntimeParams{
-		DefinitionPath: defPath,
-		SessionDB:      filepath.Join(t.TempDir(), "daemon.db"),
-		Model:          "test-model",
+		RuntimeFile: rcPath,
+		SessionDB:   filepath.Join(t.TempDir(), "daemon.db"),
+		Model:       "test-model",
 	}); err == nil {
-		t.Fatal("invalid definition should fail assembly")
+		t.Fatal("invalid runtime config should fail assembly")
 	}
 }

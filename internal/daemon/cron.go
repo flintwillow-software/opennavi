@@ -10,14 +10,14 @@ import (
 )
 
 // WireCron applies the #242 documented seam: MigrateState (tick-state
-// table), Scheduler with definition-derived schedule defs (navi.yaml
-// source of truth), MissedTick coalescing for schedules whose
+// table), Scheduler with runtime-config-derived schedule defs
+// (.config/navi/), MissedTick coalescing for schedules whose
 // next_due passed while down, and RecordFire wiring so every started
 // thought advances the schedule's last_fired/fire_count.
 //
 // Returns the (unstarted) scheduler — the caller starts it and calls
 // Stop on shutdown.
-func WireCron(db *sql.DB, defs config.DefinitionCronConfig, q *thought.ThoughtQueue) (*cron.Scheduler, error) {
+func WireCron(db *sql.DB, cc *config.CronConfig, q *thought.ThoughtQueue) (*cron.Scheduler, error) {
 	if err := cron.MigrateState(db); err != nil {
 		return nil, err
 	}
@@ -44,7 +44,10 @@ func WireCron(db *sql.DB, defs config.DefinitionCronConfig, q *thought.ThoughtQu
 		_ = state.RecordFire(schedule, time.Now().UTC())
 	})
 
-	for _, sd := range defs.ToSchedulerDefs() {
+	if cc == nil {
+		cc = &config.CronConfig{}
+	}
+	for _, sd := range cc.ToSchedulerDefs() {
 		if err := sched.Add(sd); err != nil {
 			return nil, err
 		}
