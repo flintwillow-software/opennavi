@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-07-31'
-updated: '2026-07-31'
+updated: '2026-09-13'
 tags:
   - spec
   - navi-core
@@ -18,7 +18,7 @@ spec-refs: [000200, 000201, 000202, 000203, 000204, 000205, 000206]
 
 ## 00 Overview
 
-A navi is defined by seven components: **name**, **tools**, **skills**, **personality**, **interfaces**, **extensions**, and **permissions**. Developers write these in Go OR YAML using the opennavi SDK, then run the builder to produce a single compiled binary. The definition is what gets compiled into the binary — there's no runtime loading of tools or skills (except optional extensions).
+A navi is defined by seven components: **name**, **tools**, **skills**, **personality**, **interfaces**, **extensions**, and **permissions**. Developers write these in Go using the opennavi SDK, then run the builder to produce a single compiled binary. The definition is what gets compiled into the binary — there's no runtime loading of tools or skills (except optional extensions).
 
 ### Requirement: Definition Components
 The system SHALL define a navi by seven components: name, tools, skills, personality, interfaces, extensions, and permissions.
@@ -29,13 +29,14 @@ The system SHALL define a navi by seven components: name, tools, skills, persona
 - **THEN** the system SHALL accept the definition
 - **AND** the builder SHALL compile it into a single binary
 
-### Requirement: Dual Format Support
-The system SHALL support navi definitions written in either Go code or YAML, producing the same compiled binary from both.
+### Requirement: Go-Only Definition
+The system SHALL support navi definitions written only in Go code. YAML navi definitions (e.g. `naviconfig.yaml`) SHALL NOT be accepted: a single Go definition avoids a second, untyped source of truth for tool metadata (S130400's registration-IS-the-declaration contract) and requires no builder handler-reference resolution.
 
-#### Scenario: Building from Go and YAML definitions
+#### Scenario: Definition format is Go code
 - **GIVEN** a navi definition written in Go code
 - **WHEN** the builder compiles it
-- **THEN** the system SHALL produce a compiled binary equivalent to the YAML definition of the same navi
+- **THEN** the system SHALL produce the compiled binary
+- **AND** the builder SHALL reject a YAML navi-definition file with a clear error pointing to the Go definition form
 
 ### Requirement: No Runtime Component Loading
 The system SHALL compile tools and skills into the binary, with no runtime loading of tools or skills except optional extensions.
@@ -84,55 +85,6 @@ func main() {
     })
 }
 ```
-
-### YAML Format
-
-```yaml
-# naviconfig.yaml
-name: oncall-bot
-version: 1.0.0
-personality: |
-  You are OnCall Bot. Communicate concisely and technically.
-
-tools:
-  - name: query_grafana
-    description: Query Grafana for metrics
-    handler: tools/monitoring/grafana.go
-
-skills:
-  - name: incident-response
-    instructions_file: skills/incident-response.md
-    keywords: [alert, incident]
-
-interfaces:
-  gateway:
-    enabled: true
-    port: 443
-  cron:
-    enabled: true
-
-# Optional: thought queue config (only for daemon navis)
-thought_queue:
-  max_concurrent: 3
-  priority_slots: 1
-  slot_exhaustion: "queue"
-
-extensions:
-  allow_standalone_plugins: true
-
-permissions:
-  allow:
-    - tool: query_grafana
-      action: "*"
-    - path: /src/**
-      action: [read]
-  deny:
-    - tool: shell
-    - path: ~/.ssh/*
-      action: "*"
-```
-
-Both formats produce the same compiled binary. The builder detects which format is present and processes accordingly.
 
 ### Requirement: SDK Build Entry Point
 The system SHALL compile a navi when the developer's entry point calls `sdk.Build()` with the navi definition.
@@ -575,3 +527,4 @@ The system SHALL produce build errors with clear messages for invalid definition
 |------|--------|---------|--------|
 | 2026-08-13 | S000200 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-12 | S000200 | 0.2.1 | Renamed `bash` → `shell_exec` in deny-precedence scenario (namespaced tool names per S130400 §04) |
+| 2026-09-13 | S000207 | 0.3.0 | Go-only definitions: removed the YAML definition alternative (`naviconfig.yaml`); runtime `policy.yaml` overrides unaffected |

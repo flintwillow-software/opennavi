@@ -64,7 +64,7 @@ Each change is named for its primary spec code: `docs/changes/<version>/<NN>-<ke
 
 | ID | Component | Status | Features | Spec Refs | Last Updated |
 |----|-----------|--------|----------|-----------|--------------|
-| 00 | [Navi Core](00-navi-core/README.md) | draft | 8 | [000000—000700] | 2026-08-15 |
+| 00 | [Navi Core](00-navi-core/README.md) | draft | 8 | [000000—000700] | 2026-09-13 |
 | 01 | [Agent Runtime](01-agent-runtime/README.md) | draft | 5 | [010000—010400] | 2025-08-13 |
 | 02 | [Agent Config](02-agent-config/README.md) | draft | 2 | [020000—020100] | 2025-08-13 |
 | 03 | [Session Context](03-session-context/README.md) | draft | 3 | [030000—030200] | 2025-08-13 |

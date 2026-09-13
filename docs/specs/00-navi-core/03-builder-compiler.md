@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-07-29'
-updated: '2026-07-29'
+updated: '2026-09-13'
 tags:
   - spec
   - navi-core
@@ -18,13 +18,13 @@ spec-refs: [000300, 000301, 000302, 000303, 000304, 000305, 000306, 000307, 0003
 
 ## 00 Overview
 
-The opennavi builder takes a navi definition (written in Go OR YAML) and compiles it into a single executable binary. It leverages Go's existing toolchain for compilation, linking, and optimization — no custom build system needed. The only new piece is **interface selection**, which determines which delivery modes get compiled into the binary.
+The opennavi builder takes a navi definition (written in Go) and compiles it into a single executable binary. It leverages Go's existing toolchain for compilation, linking, and optimization — no custom build system needed. The only new piece is **interface selection**, which determines which delivery modes get compiled into the binary.
 
 ### Requirement: Single Binary Output
-The system SHALL compile a navi definition, written in Go or YAML, into a single executable binary using the Go toolchain.
+The system SHALL compile a navi definition, written in Go, into a single executable binary using the Go toolchain.
 
 #### Scenario: Building a navi
-- **GIVEN** a navi definition written in Go or YAML
+- **GIVEN** a navi definition written in Go
 - **WHEN** the developer runs the builder
 - **THEN** the builder SHALL produce a single executable binary
 - **AND** the builder SHALL use Go's existing toolchain for compilation, linking, and optimization
@@ -42,25 +42,16 @@ The system SHALL determine which delivery modes are compiled into the binary bas
 ## 01 The Build Process
 
 ```go
-// Option 1: Go code definition
+// The navi definition: Go code in the entry point
 cmd/oncall-bot/main.go:
 sdk.Build(navi{...})
-
-// Option 2: YAML definition
-cmd/oncall-bot/naviconfig.yaml:
-name: oncall-bot
-version: 1.0.0
-personality: "You are OnCall Bot..."
-tools: [...]
-skills: [...]
-interfaces: [...]
 ```
 
-Both formats produce the same compiled binary. The builder detects which format is present and processes accordingly.
+The definition is Go code only — there is no YAML definition format (S000207).
 
 The builder wraps Go's standard build process:
 ```bash
-# Build with either Go code or YAML definition
+# Build the Go-defined navi
 cd my-navi/
 opennavi-build -output ./dist/oncall-bot .
 ```
@@ -76,26 +67,19 @@ opennavi-build -output ./dist/oncall-bot ./oncall-navi/
 opennavi-build -ldflags="-X main.version=1.0.0" ./my-navi/
 ```
 
-### Requirement: Build Format Detection
-The system SHALL detect whether the navi project uses a Go code definition or a YAML definition and process it accordingly.
+### Requirement: Go-Only Definition Input
+The system SHALL build navi projects from the Go code definition only; YAML definition files SHALL NOT be processed (S000207).
 
 #### Scenario: Building from Go code
 - **GIVEN** a navi project with a Go code definition
 - **WHEN** the developer runs `opennavi-build`
-- **THEN** the builder SHALL detect the Go format and compile the binary
+- **THEN** the builder SHALL compile the binary from the Go definition
 
-#### Scenario: Building from YAML
-- **GIVEN** a navi project with a `naviconfig.yaml`
+#### Scenario: Project contains a stray YAML definition file
+- **GIVEN** a navi project contains a `naviconfig.yaml` file
 - **WHEN** the developer runs `opennavi-build`
-- **THEN** the builder SHALL detect the YAML format and compile the binary
-
-### Requirement: Equivalent Output from Both Formats
-The system SHALL produce the same compiled binary from a Go code definition and an equivalent YAML definition.
-
-#### Scenario: Comparing build outputs
-- **GIVEN** two navi projects with equivalent definitions, one in Go code and one in YAML
-- **WHEN** both are built
-- **THEN** the resulting binaries SHALL be functionally equivalent
+- **THEN** the builder SHALL build from the Go entry point only
+- **AND** SHALL NOT interpret the YAML file as a navi definition
 
 ---
 
@@ -220,9 +204,9 @@ The system SHALL produce a compiled navi executable, optionally embedding build 
 
 ## 04 Tool Compilation
 
-Tools defined in either Go code or YAML are compiled into the binary:
+Tools are compiled into the binary:
 - **Go tools** (`internal/agent/tools.go`, `tools/monitoring/*.go`) — compiled directly as Go functions
-- **YAML tool definitions** — processed by builder, handler references resolved to Go files, then compiled
+- **Catalog/SDK tools** — registered through the tool registry (S130400) with their `ToolDefinition` metadata
 
 The builder doesn't do anything special here — it's just standard Go compilation.
 
@@ -240,19 +224,13 @@ func githubIssuesHandler(args map[string]any) (string, error) {
 
 **Key point:** The entire tool implementation — including any third-party libraries it uses — is linked into the final binary. The binary is self-contained.
 
-### Requirement: Tool Compilation from Go and YAML
-The system SHALL compile tools defined in Go code or YAML into the binary, resolving YAML handler references to Go files.
+### Requirement: Tool Compilation from Go
+The system SHALL compile tools defined in Go code into the binary; tool metadata comes from the S130400 `ToolDefinition` registration, not a definition file.
 
 #### Scenario: Compiling Go-defined tools
 - **GIVEN** a navi project defines tools in Go source files
 - **WHEN** the builder compiles the project
 - **THEN** the tool functions SHALL be compiled directly into the binary
-
-#### Scenario: Compiling YAML-defined tools
-- **GIVEN** a navi project defines tools in YAML with handler file references
-- **WHEN** the builder processes the definition
-- **THEN** the builder SHALL resolve the handler references to Go files
-- **AND** the builder SHALL compile them into the binary
 
 ### Requirement: Self-Contained Binary
 The system SHALL link the entire tool implementation, including third-party libraries, into the final binary.
@@ -471,7 +449,46 @@ The system SHALL NOT compile extensions as part of the navi build; extensions SH
 
 ---
 
-## 11 Next Steps
+## 11 Starter Template Scaffolding
+
+The SDK ships a starter template so new navi projects begin from a working, compiling example. The template lives **in the opennavi repository** at `templates/navi-starter/` as a **nested Go module** (its own `go.mod` requiring the published SDK version), so SDK changes and template fixes land atomically in one PR and CI can build the template against every SDK release.
+
+Template contents:
+- `cmd/<navi>/main.go` — entry point calling `sdk.Build()` with a working definition
+- One author tool registered through the tool registry (`tools/registry`, S130400) plus one active builtin
+- Project layout per S000100 (§01)
+
+The shipped template `go.mod` never carries a `replace` directive pointing at the parent repo — local development uses `go.work` (not shipped).
+
+`navi init` scaffolds a new project by embedding this template (`go:embed`) into the builder binary and generating a project from it — no network fetch. The nested module may additionally be tagged for `gonew`-style fetching; `navi init` remains the primary path.
+
+### Requirement: In-Repo Starter Template
+The system SHALL provide `templates/navi-starter/` as a nested Go module in the opennavi repo, requiring a published SDK version, containing a compiling example navi.
+
+#### Scenario: Template always compiles against the SDK
+- **GIVEN** CI builds `templates/navi-starter/` on every SDK change and release tag
+- **WHEN** the SDK's public surface changes
+- **THEN** a breaking change SHALL fail the template build
+- **AND** the template SHALL be fixed in the same release cycle
+
+#### Scenario: Template uses published SDK versions
+- **GIVEN** a user copies or generates a project from the template
+- **WHEN** they run `go build`
+- **THEN** the build SHALL resolve the SDK version pinned in the template's `go.mod`
+- **AND** the template SHALL NOT ship a `replace` directive to the parent repository
+
+### Requirement: navi init Scaffolding
+The system SHALL provide a `navi init` command that generates a new navi project from the embedded starter template.
+
+#### Scenario: Initializing a new navi project
+- **GIVEN** a developer runs `navi init my-navi`
+- **WHEN** the command completes
+- **THEN** the generated project SHALL compile with `go build` against the pinned SDK version
+- **AND** the project SHALL contain a working example tool registered through the tool registry
+
+---
+
+## 12 Next Steps
 
 - **[01-navi-definition.md](./01-navi-definition.md)** — What the developer writes (the input to this builder)
 - **[03-interface-set.md](./03-interface-set.md)** — Detailed interface configuration for each delivery mode
@@ -483,3 +500,4 @@ The system SHALL NOT compile extensions as part of the navi build; extensions SH
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S000300 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-13 | S000312 | 0.2.0 | Go-only builder input: removed YAML definition processing and YAML tool compilation (S000207) |
