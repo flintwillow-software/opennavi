@@ -172,13 +172,13 @@ The system SHALL allow a navi to be built from a single `main.go` entry point, y
 
 ## 05 SDK Surface Guardrail
 
-The starter template (`templates/navi-starter/`, S000300 §11) is the executable check on this spec: CI builds it against SDK main and every release tag, so a change that breaks the public authoring surface fails the template build in the same change cycle.
+The starter templates (`templates/navi-code/` and `templates/navi-daemon/`, S000300 §11) are the executable check on this spec: CI builds both against SDK main and every release tag, so a change that breaks the public authoring surface fails the template builds in the same change cycle.
 
 ### Requirement: Template Build Guardrail
 The system SHALL build the starter template against the SDK in CI, on the default branch and on every release tag.
 
 #### Scenario: Breaking the public authoring surface
-- **GIVEN** a change to the SDK that breaks the template's compilation or registration flow
+- **GIVEN** a change to the SDK that breaks a template's compilation or registration flow
 - **WHEN** CI runs on the pull request
 - **THEN** the template build SHALL fail
 - **AND** the change SHALL NOT merge until the template is updated
@@ -189,3 +189,4 @@ The system SHALL build the starter template against the SDK in CI, on the defaul
 |------|--------|---------|--------|
 | 2026-09-08 | S000800 | 0.2.0 | Initial SDK surface spec |
 | 2026-09-13 | S000805 | 0.3.0 | Go-only authoring (removed YAML equivalence); added template-build guardrail for the public surface (S000312) |
+| 2026-09-13 | S000805 | 0.3.1 | Guardrail covers the two-template set (navi-code, navi-daemon) per S000313 |

@@ -33,43 +33,44 @@ type ChatPermission struct {
 
 ### 6.2 Configuration
 
-```yaml
-# navis/spec-agent/navi.yaml
-navi:
-  name: "spec-agent"
-  # ...
-  chat:
-    enabled: true
-    listen_port: 0  # 0 = OS-assigned (for socket-based chat)
+Chat IAM permissions are definition-level behavioral config: the navi developer compiles them into the binary as part of the Go navi definition (see S000200 §04).
 
-    # Who can talk to me
-    permissions:
-      # detail-agent can start sessions with me
-      - source: "detail-agent"
-        target: "spec-agent"
-        actions: ["start", "send"]
-        max_sessions: 5
+```go
+// cmd/spec-agent/main.go
+func main() {
+    sdk.Build(navi{
+        name:    "spec-agent",
+        version: "1.0.0",
 
-      # issue-agent can send messages in existing sessions
-      - source: "issue-agent"
-        target: "spec-agent"
-        actions: ["send"]  # can't start, only respond
-        max_sessions: 5
+        // Chat interface compiled in; listen port 0 = OS-assigned (socket-based chat)
+        interfaces: InterfaceSet{
+            Chat: ChatConfig{Enabled: true, ListenPort: 0},
+        },
 
-      # All coder agents can send messages
-      - source: "coder-agent-*"
-        target: "spec-agent"
-        actions: ["send"]
-        max_sessions: 10
+        // Chat IAM permissions
+        permissions: PermissionPolicy{
+            Chat: ChatPermissionPolicy{
+                // Who can talk to me
+                Inbound: []ChatPermission{
+                    // detail-agent can start sessions with me
+                    {Source: "detail-agent", Target: "spec-agent", Actions: []string{"start", "send"}, MaxSessions: 5},
 
-    # Who I can talk to
-    outbound_permissions:
-      - source: "spec-agent"
-        target: "detail-agent"
-        actions: ["start", "send"]
-      - source: "spec-agent"
-        target: "issue-agent"
-        actions: ["send"]
+                    // issue-agent can send messages in existing sessions (can't start, only respond)
+                    {Source: "issue-agent", Target: "spec-agent", Actions: []string{"send"}, MaxSessions: 5},
+
+                    // All coder agents can send messages
+                    {Source: "coder-agent-*", Target: "spec-agent", Actions: []string{"send"}, MaxSessions: 10},
+                },
+
+                // Who I can talk to
+                Outbound: []ChatPermission{
+                    {Source: "spec-agent", Target: "detail-agent", Actions: []string{"start", "send"}},
+                    {Source: "spec-agent", Target: "issue-agent", Actions: []string{"send"}},
+                },
+            },
+        },
+    })
+}
 ```
 
 ### 6.3 Permission Evaluation
@@ -324,21 +325,24 @@ team:
 
 A **Team Manager** is a higher-level navi (or a human operator) that manages multiple teams:
 
-```yaml
-# navis/team-manager/navi.yaml
-navi:
-  name: "datacenter-team-manager"
-  chat:
-    permissions:
-      # Team manager can talk to any team lead
-      - source: "team-manager"
-        target: "team:corporate-it"
-        actions: ["start", "send"]
-        role: "team-lead"
-      - source: "team-manager"
-        target: "team:product-lifecycle"
-        actions: ["start", "send"]
-        role: "team-lead"
+```go
+// cmd/datacenter-team-manager/main.go
+func main() {
+    sdk.Build(navi{
+        name:    "datacenter-team-manager",
+        version: "1.0.0",
+
+        // Chat IAM permissions (compiled in) — team manager can talk to any team lead
+        permissions: PermissionPolicy{
+            Chat: ChatPermissionPolicy{
+                Outbound: []ChatPermission{
+                    {Source: "team-manager", Target: "team:corporate-it", Actions: []string{"start", "send"}, Role: "team-lead"},
+                    {Source: "team-manager", Target: "team:product-lifecycle", Actions: []string{"start", "send"}, Role: "team-lead"},
+                },
+            },
+        },
+    })
+}
 ```
 
 ### 6.6.5 Permission Evaluation with Team Principals
@@ -412,35 +416,34 @@ In the SDLC pipeline, agents shouldn't sit idle. When a navi has no active thoug
 
 ### 7.2 Idle Schedule Configuration
 
+The idle schedule and its work-discovery sources are deployment-time values set by the operator, so they live in runtime config under `.config/navi/<name>/` (see S000200 §04) — not in the compiled navi definition.
+
 ```yaml
-# navis/coder-agent/navi.yaml
-navi:
-  name: "coder-agent"
-  # ...
-  idle:
-    enabled: true
-    check_interval: "60s"          # check for work every 60s when idle
-    max_checks_before_backoff: 5   # after 5 checks with no work, back off
-    backoff_multiplier: 2          # double the interval each backoff
-    max_backoff: "30m"             # never back off more than 30 min
+# .config/navi/coder-agent/config.yaml
+idle:
+  enabled: true
+  check_interval: "60s"          # check for work every 60s when idle
+  max_checks_before_backoff: 5   # after 5 checks with no work, back off
+  backoff_multiplier: 2          # double the interval each backoff
+  max_backoff: "30m"             # never back off more than 30 min
 
-    # Work discovery rules
-    work_sources:
-      - type: "board"              # pull-based discovery from the PM board (sruth)
-        endpoint: "http://localhost:8090/api/v1/projects/:id/board/discover"
-        role: "backend-engineer"   # board filters items by role label
-        max_pick: 1                # pick at most 1 item per check
-        claim_strategy: "assign"   # board assigns on pull (transition_issue)
+  # Work discovery rules
+  work_sources:
+    - type: "board"              # pull-based discovery from the PM board (sruth)
+      endpoint: "http://localhost:8090/api/v1/projects/:id/board/discover"
+      role: "backend-engineer"   # board filters items by role label
+      max_pick: 1                # pick at most 1 item per check
+      claim_strategy: "assign"   # board assigns on pull (transition_issue)
 
-      - type: "github-issue"
-        repo: "flintwillow-software/auth-service"
-        query: "label:ready is:open no:assignee"
-        max_pick: 1                # pick at most 1 issue per check
-        claim_strategy: "comment"  # claim by commenting on the issue
+    - type: "github-issue"
+      repo: "flintwillow-software/auth-service"
+      query: "label:ready is:open no:assignee"
+      max_pick: 1                # pick at most 1 issue per check
+      claim_strategy: "comment"  # claim by commenting on the issue
 
-      - type: "chat-broadcast"
-        target_role: "planner"     # ask the PM for work
-        message: "I'm available. Any tasks that need coding?"
+    - type: "chat-broadcast"
+      target_role: "planner"     # ask the PM for work
+      message: "I'm available. Any tasks that need coding?"
 ```
 
 ### 7.3 Idle Check Flow
@@ -467,24 +470,23 @@ Back to idle. If a thought arrives (from chat or webhook), process it immediatel
 
 The PM agent (`issue-agent` in the SDLC case) has its own idle schedule that checks for agent requests:
 
-```yaml
-# navis/issue-agent/navi.yaml
-navi:
-  name: "issue-agent"
-  # ...
-  idle:
-    enabled: true
-    check_interval: "30s"           # PM checks more frequently
-    work_sources:
-      - type: "github-issue"
-        repo: "flintwillow-software/auth-service"
-        query: "label:needs-assignment is:open"
-        claim_strategy: "assign"    # PM can assign directly
+The PM's idle schedule is likewise runtime config:
 
-      - type: "github-comment"
-        repo: "flintwillow-software/auth-service"
-        query: "mentions:pm-agent"  # check for @pm-agent mentions
-        action: "respond-and-assign"
+```yaml
+# .config/navi/issue-agent/config.yaml
+idle:
+  enabled: true
+  check_interval: "30s"           # PM checks more frequently
+  work_sources:
+    - type: "github-issue"
+      repo: "flintwillow-software/auth-service"
+      query: "label:needs-assignment is:open"
+      claim_strategy: "assign"    # PM can assign directly
+
+    - type: "github-comment"
+      repo: "flintwillow-software/auth-service"
+      query: "mentions:pm-agent"  # check for @pm-agent mentions
+      action: "respond-and-assign"
 ```
 
 **PM idle flow:**
@@ -676,7 +678,7 @@ The system SHALL implement backoff for idle checks, doubling the interval after 
 
 ```
 1. Each agent starts:
-   a. Loads its config (navi.yaml)
+   a. Loads its runtime config (.config/navi/<name>/)
    b. Loads its keypair (identity.private_key_path)
    c. Loads its trusted key store (identity.trusted_keys)
    d. Initializes presence detection

@@ -4,11 +4,13 @@
 
 ## Summary
 
-Implement agent configuration: YAML-based agent config file format, environment variable overrides, config merge strategy (defaults → file → env → CLI flags), and config validation against the navi definition schema.
+Implement agent configuration: runtime config file format (`.config/navi/<name>/config.yaml`), environment variable overrides, config merge strategy (defaults → file → env → CLI flags), and config validation against the Go navi definition.
+
+> Update (2026-09-13, go-first authoring per #263 / S000207): navi definitions are Go-only (`sdk.Build()`). Runtime config remains YAML under `.config/navi/` — it validates against the Go definition types, not a YAML definition schema.
 
 ## Changes
 
-- **`pkg/config/`** — Config parser: Load and merge config from multiple sources (file, env, CLI flags). Validate against navi.yaml schema.
+- **`pkg/config/`** — Config parser: Load and merge config from multiple sources (file, env, CLI flags). Validate against the Go navi definition (S000200).
 - **`pkg/config/provider/`** — Provider config: LLM provider configuration (endpoint, API key, model name, local/cloud mode).
 - **`pkg/config/tools/`** — Tool config: Per-tool access control overrides, timeout configuration, allowed/blocked tool lists.
 - **`internal/config/defaults/`** — Default configuration values baked into the binary at build time.
@@ -19,15 +21,15 @@ Implement agent configuration: YAML-based agent config file format, environment 
 
 ## Code Context
 
-- **Project structure**: Go SDK, depends on navi-core navi.yaml schema
+- **Project structure**: Go SDK, depends on navi-core Go definition types (S000200)
 - **Dependencies**: spf13/viper (config), in-cli flags
 - **Existing patterns**: Standard layered config pattern (defaults → file → env → flags)
 
 ## Notes
 
 - Issue: "Agent Configuration System"
-- Depends on: navi-core (navi.yaml parsing for config schema)
-- Relatively isolated — can be implemented independently once the navi.yaml schema is stable
+- Depends on: navi-core (Go navi definition types for config schema)
+- Relatively isolated — can be implemented independently once the Go definition surface is stable
 
 ## Tracked
 

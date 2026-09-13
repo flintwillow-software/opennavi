@@ -115,15 +115,30 @@ team:
         actions: ["start", "send"]
         role: "team-lead"
 
-# teams/corporate-it/agents/it-leader/navi.yaml
-navi:
-  name: "it-leader"
-  role: "team-lead"
-  team: "corporate-it"
-  identity:
-    private_key_path: "/etc/opennavi/keys/it-leader"
-    public_key_path: "/etc/opennavi/keys/it-leader.pub"
-    trust_policy: "require-trusted"
+```
+
+The it-leader navi definition is Go-only and compiled in; the deployment-provisioned identity is runtime config (see S000200 §04):
+
+```go
+// cmd/it-leader/main.go
+func main() {
+    sdk.Build(navi{
+        name:    "it-leader",
+        version: "1.0.0",
+
+        // Definition-level behavioral config (compiled in)
+        role: "team-lead",
+        team: "corporate-it",
+    })
+}
+```
+
+```yaml
+# .config/navi/it-leader/config.yaml
+identity:
+  private_key_path: "/etc/opennavi/keys/it-leader"
+  public_key_path: "/etc/opennavi/keys/it-leader.pub"
+  trust_policy: "require-trusted"
 ```
 
 ### Requirement: Team Principal as IAM Identity
@@ -217,22 +232,36 @@ func (r *TeamRegistry) LookupByCapability(cap string) []TeamRegistration {
 
 ### 2.3 Configuration
 
-```yaml
-# team-of-teams/orchestrator/navi.yaml
-navi:
-  name: "team-orchestrator"
-  role: "team-manager"
-  team_registry:
-    enabled: true
-    sync_interval: "60s"
-    health_check_interval: "120s"
-    stale_timeout: "300s"
+The orchestrator's navi definition compiles in the team-registry interface; the sync intervals and managed teams are runtime config (see S000200 §04):
 
-    # What teams this orchestrator is responsible for
-    managed_teams:
-      - "corporate-it"
-      - "product-lifecycle"
-      - "e-commerce"
+```go
+// cmd/team-orchestrator/main.go
+func main() {
+    sdk.Build(navi{
+        name:    "team-orchestrator",
+        version: "1.0.0",
+        role:    "team-manager",
+
+        // Team registry feature compiled in
+        interfaces: InterfaceSet{
+            TeamRegistry: InterfaceConfig{Enabled: true},
+        },
+    })
+}
+```
+
+```yaml
+# .config/navi/team-orchestrator/config.yaml
+team_registry:
+  sync_interval: "60s"
+  health_check_interval: "120s"
+  stale_timeout: "300s"
+
+  # What teams this orchestrator is responsible for
+  managed_teams:
+    - "corporate-it"
+    - "product-lifecycle"
+    - "e-commerce"
 ```
 
 ### Requirement: Team Registration via P2P Presence
@@ -323,23 +352,29 @@ type TeamOfTeamsHealth struct {
 
 ### 3.3 Configuration
 
+Extended for observability — the health-publishing interface is compiled into the Go definition (added fields only); topic, interval, and metric selection are runtime config (see S000200 §04):
+
+```go
+// cmd/it-leader/main.go — added fields
+interfaces: InterfaceSet{
+    // ... base interfaces above ...
+    Observability: InterfaceConfig{Enabled: true},
+},
+```
+
 ```yaml
-# teams/corporate-it/agents/it-leader/navi.yaml (extended)
-navi:
-  name: "it-leader"
-  team: "corporate-it"
-  observability:
-    enabled: true
-    health_topic: "team-health/corporate-it"
-    publish_interval: "30s"
-    metrics:
-      - agent_count
-      - incident_count
-      - uptime
-      - task_throughput
-      - avg_latency_ms
-      - memory_used_mb
-      - cpu_percent
+# .config/navi/it-leader/config.yaml — observability additions
+observability:
+  health_topic: "team-health/corporate-it"
+  publish_interval: "30s"
+  metrics:
+    - agent_count
+    - incident_count
+    - uptime
+    - task_throughput
+    - avg_latency_ms
+    - memory_used_mb
+    - cpu_percent
 ```
 
 ### Requirement: Team Health Metrics Broadcast
@@ -424,32 +459,57 @@ func (a *CostAggregator) IngestReport(report TeamUsageReport) error {
 ### 4.3 Configuration
 
 ```yaml
-# team-of-teams/cost-aggregator/navi.yaml
-navi:
-  name: "cost-aggregator"
-  cost_attribution:
-    enabled: true
-    report_interval: "1h"
-    currencies: ["USD"]
-    team_budgets:
-      corporate-it: 500.00
-      product-lifecycle: 750.00
-      e-commerce: 1200.00
-    alert_on_over: true
-    alert_channel: "slack:#finops"
+```
 
-# teams/corporate-it/agents/it-leader/navi.yaml (extended)
-navi:
-  name: "it-leader"
-  team: "corporate-it"
-  cost_attribution:
-    enabled: true
-    report_endpoint: "p2p://cost-aggregator/reports"
-    report_interval: "1h"
-    track:
-      - api_calls
-      - llm_tokens
-      - compute_time
+The cost aggregator's navi definition compiles in the cost-attribution interface; report intervals, budgets, and alerting are runtime config (see S000200 §04):
+
+```go
+// cmd/cost-aggregator/main.go
+func main() {
+    sdk.Build(navi{
+        name:    "cost-aggregator",
+        version: "1.0.0",
+
+        // Cost attribution feature compiled in
+        interfaces: InterfaceSet{
+            CostAttribution: InterfaceConfig{Enabled: true},
+        },
+    })
+}
+```
+
+```yaml
+# .config/navi/cost-aggregator/config.yaml
+cost_attribution:
+  report_interval: "1h"
+  currencies: ["USD"]
+  team_budgets:
+    corporate-it: 500.00
+    product-lifecycle: 750.00
+    e-commerce: 1200.00
+  alert_on_over: true
+  alert_channel: "slack:#finops"
+```
+
+Extended for cost attribution — the interface is compiled into the it-leader Go definition (added fields only); the reporting endpoint and tracked metrics are runtime config:
+
+```go
+// cmd/it-leader/main.go — added fields
+interfaces: InterfaceSet{
+    // ... base interfaces above ...
+    CostAttribution: InterfaceConfig{Enabled: true},
+},
+```
+
+```yaml
+# .config/navi/it-leader/config.yaml — cost attribution additions
+cost_attribution:
+  report_endpoint: "p2p://cost-aggregator/reports"
+  report_interval: "1h"
+  track:
+    - api_calls
+    - llm_tokens
+    - compute_time
 ```
 
 ### Requirement: Per-Team Usage Tracking

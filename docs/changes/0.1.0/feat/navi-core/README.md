@@ -4,17 +4,19 @@
 
 ## Summary
 
-Implement the core OpenNavi platform: navi definition format (navi.yaml), project layout conventions, builder/compiler pipeline, interface set (CLI/TUI/Gateway), trust & signing model, binary distribution, and extension contract. This is the foundation that all other components build on.
+Implement the core OpenNavi platform: navi definition format, project layout conventions, builder/compiler pipeline, interface set (CLI/TUI/Gateway), trust & signing model, binary distribution, and extension contract. This is the foundation that all other components build on.
+
+> Update (2026-09-13, go-first authoring per #263 / S000207): navi definitions are **Go-only** — authors call `sdk.Build(naviDef{...})` (S000200 §01); there is no `navi.yaml` and no YAML definition parsing anywhere. The public surface is the SDK layout of S000800 §01 (`sdk/`, `agent/`, `tools/`, `store/`, `llm/` public; `internal/` private) rather than a `pkg/` tree. Starter templates: `templates/navi-code/` and `templates/navi-daemon/` (S000313).
 
 ## Changes
 
-- **`pkg/navi/`** — Core navi definition data model: Parse and validate `navi.yaml` (name, version, tools, providers, identity, trust config).
-- **`cmd/navi-build/`** — Builder/compiler: Takes a navi project + navi.yaml → produces a compiled binary with all dependencies compiled in.
+- **`sdk/`** — Public SDK entry point: `sdk.Build(naviDef{...})` and the definition types (name, version, tools, skills, personality, interfaces, extensions, permissions).
+- **builder/compiler** — Takes a Go navi definition (via `sdk.Build`) → produces a compiled binary with all dependencies compiled in.
 - **`pkg/interfaces/`** — Interface set abstraction: CLI (cobra/spf13), TUI (Bubble Tea), Gateway (HTTP/gRPC). Selected at build time, compiled into binary.
 - **`pkg/trust/`** — Trust & signing model: Code signing key generation, binary signing, signature verification on first run.
-- **`pkg/project/`** — Project layout conventions: Standard directory structure for navi projects (agents/, tools/, providers/, navi.yaml).
+- **`pkg/project/`** — Project layout conventions: Standard directory structure for navi projects per S000100 (`cmd/<navi>/main.go` entry point; runtime config under `.config/navi/`).
 - **`pkg/extensions/`** — Extension contract: Plugin interface for loading third-party tools/providers at build time.
-- **`cmd/navi-init/`** — Scaffolding: `navi init` command that creates a new navi project from template.
+- **`cmd/navi-init/`** — Scaffolding: `navi init` command that creates a new navi project from an embedded starter template (`--template code|daemon`, default `code`).
 - **`Makefile`** — Build pipeline: Builder invocation, signing step, cross-platform compilation targets, Homebrew tap publishing.
 
 ## Spec Refs
@@ -30,10 +32,12 @@ Implement the core OpenNavi platform: navi definition format (navi.yaml), projec
 ## Notes
 
 - Forms the epic "OpenNavi Platform Foundation"
-- All other components depend on navi-core being implemented first (navi.yaml parsing, project layout, builder)
+- All other components depend on navi-core being implemented first (Go definition types, project layout, builder)
 - Sub-issues can parallelize: interface implementations (CLI vs TUI vs Gateway) are independent once the interface abstraction is defined
 
 ## Tracked
+
+> Historical: issues below were filed against the original navi.yaml-based plan and are superseded by the go-first restructure above; Huly (NAVI-48) is the canonical tracker.
 
 - Epic: OpenNavi Platform Foundation (#138) — https://github.com/flintwillow-software/opennavi/issues/138 [priority: P0]
   - Issue: Implement core navi definition data model (navi.yaml) (#139) — https://github.com/flintwillow-software/opennavi/issues/139 [priority: P0]

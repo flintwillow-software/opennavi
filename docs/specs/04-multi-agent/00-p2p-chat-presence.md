@@ -149,7 +149,7 @@ The actual transport depends on the deployment environment:
 **For the SDLC use case (same machine or same Docker Compose):**
 
 ```yaml
-# navi.yaml
+# .config/navi/spec-agent/config.yaml
 presence:
   enabled: true
   mechanism: "unix-socket"     # or "mdns" or "k8s"
@@ -293,28 +293,38 @@ func (ps *PresenceStore) GetAvailable(capability string) []PresenceMessage {
 }
 ```
 
-### 2.5 Presence in the Agent Config
+### 2.5 Presence in the Navi Definition and Runtime Config
+
+Presence settings split across the two sources per [S000200 §04](../00-navi-core/02-navi-definition.md): what the navi advertises is part of the static Go definition compiled into the binary, while transport and timing values are deployment-time runtime config.
+
+```go
+// cmd/spec-agent/main.go
+sdk.Build(navi{
+    name: "spec-agent",
+    // ...
+    presence: PresenceConfig{
+        Enabled: true,
+
+        // What this navi advertises (definition-level, compiled in)
+        Capabilities: []string{
+            "spec-writing",
+            "user-story-creation",
+            "clarifying-questions",
+        },
+        Role:        "spec-writer",
+        AcceptsWork: true, // can receive handoffs
+    },
+})
+```
 
 ```yaml
-# navis/spec-agent/navi.yaml
-navi:
-  name: "spec-agent"
-  # ...
-  presence:
-    enabled: true
-    mechanism: "unix-socket"     # same-machine
-    socket_path: "/tmp/opennavi-presence.sock"
-    heartbeat_interval: "30s"
-    stale_timeout: "120s"        # consider offline after 2 min of no heartbeat
-    listen: true
-
-    # What this navi advertises
-    capabilities:
-      - "spec-writing"
-      - "user-story-creation"
-      - "clarifying-questions"
-    role: "spec-writer"
-    accepts_work: true           # can receive handoffs
+# .config/navi/spec-agent/config.yaml
+presence:
+  mechanism: "unix-socket"     # same-machine
+  socket_path: "/tmp/opennavi-presence.sock"
+  heartbeat_interval: "30s"
+  stale_timeout: "120s"        # consider offline after 2 min of no heartbeat
+  listen: true
 ```
 
 ### Requirement: Signed Presence Broadcast

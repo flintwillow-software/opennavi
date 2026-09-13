@@ -36,7 +36,7 @@ spec-refs: [140000, 140100, 140200, 140300, 140400, 140500, 140600, 140700, 1408
 - Each role is a compiled navi binary with its own identity key, presence, chat permissions, and idle schedule
 - Roles pull work from the shared board by label (backend, frontend, devops, sre, support) or column (Verify, In Review)
 - Role behavior is composed from skills ([S020000](../02-agent-config/00-skills-system.md)) and tools ([S130000](../13-tool-catalog/00-tool-catalog-overview.md))
-- Role definitions are config, not code — a navi role is a navi.yaml plus skills, no new runtime machinery
+- Role definitions are code, not config — a navi role is a Go navi definition (compiled via `sdk.Build`, per S000200) plus skills, no new runtime machinery
 - Board mechanics (columns, WIP, classes of service, SLA) live in the board system, not in the role specs
 
 ## Related

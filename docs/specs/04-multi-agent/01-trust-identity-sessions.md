@@ -51,14 +51,12 @@ Sender:                                Receiver:
 The navi uses **SSH keypairs** — the same format as developer SSH keys. This is deliberate: it means the navi's key can also be used to authenticate to git remotes (GitHub, GitLab) and to sign git commits.
 
 ```yaml
-# navis/coder-agent/navi.yaml
-navi:
-  name: "coder-agent-1"
-  identity:
-    key_type: "ssh-ed25519"
-    private_key_path: "/etc/opennavi/keys/coder-agent-1"      # private key (0600 perms)
-    public_key_path: "/etc/opennavi/keys/coder-agent-1.pub"   # public key
-    git_identity: "coder-agent-1 <coder-agent-1@opennavi.local>"  # git author/committer
+# .config/navi/coder-agent-1/config.yaml
+identity:
+  key_type: "ssh-ed25519"
+  private_key_path: "/etc/opennavi/keys/coder-agent-1"      # private key (0600 perms)
+  public_key_path: "/etc/opennavi/keys/coder-agent-1.pub"   # public key
+  git_identity: "coder-agent-1 <coder-agent-1@opennavi.local>"  # git author/committer
 ```
 
 **Why SSH keys:**
@@ -148,25 +146,23 @@ func (ks *TrustedKeyStore) VerifyChatMessage(msg ChatMessageWire) (bool, error) 
 The first time a navi meets another, it needs to learn its public key. This happens **out-of-band** — the operator provisions the trusted keys when deploying the navis:
 
 ```yaml
-# navis/spec-agent/navi.yaml
-navi:
-  name: "spec-agent"
-  identity:
-    private_key_path: "/etc/opennavi/keys/spec-agent"
-    public_key_path: "/etc/opennavi/keys/spec-agent.pub"
+# .config/navi/spec-agent/config.yaml
+identity:
+  private_key_path: "/etc/opennavi/keys/spec-agent"
+  public_key_path: "/etc/opennavi/keys/spec-agent.pub"
 
-  # Trusted keys of the other navis in this deployment
-  trusted_keys:
-    detail-agent:
-      public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFo1... operator@host"
-      git_identity: "detail-agent <detail-agent@opennavi.local>"
-    issue-agent:
-      public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHb8... operator@host"
-      git_identity: "issue-agent <issue-agent@opennavi.local>"
-    "coder-agent-*":                        # wildcard for pools
-      public_key_file: "/etc/opennavi/keys/coders/"  # directory of coder keys
-    reviewer-agent:
-      public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPc9... operator@host"
+# Trusted keys of the other navis in this deployment
+trusted_keys:
+  detail-agent:
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFo1... operator@host"
+    git_identity: "detail-agent <detail-agent@opennavi.local>"
+  issue-agent:
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHb8... operator@host"
+    git_identity: "issue-agent <issue-agent@opennavi.local>"
+  "coder-agent-*":                        # wildcard for pools
+    public_key_file: "/etc/opennavi/keys/coders/"  # directory of coder keys
+  reviewer-agent:
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPc9... operator@host"
 ```
 
 **Bootstrap alternatives:**

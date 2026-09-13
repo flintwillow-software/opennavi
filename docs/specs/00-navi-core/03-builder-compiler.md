@@ -6,7 +6,7 @@ tags:
   - spec
   - navi-core
 priority: medium
-spec-refs: [000300, 000301, 000302, 000303, 000304, 000305, 000306, 000307, 000308, 000309, 000310, 000311]
+spec-refs: [000300, 000301, 000302, 000303, 000304, 000305, 000306, 000307, 000308, 000309, 000310, 000311, 000312, 000313]
 ---
 
 # Builder / Compiler
@@ -451,34 +451,40 @@ The system SHALL NOT compile extensions as part of the navi build; extensions SH
 
 ## 11 Starter Template Scaffolding
 
-The SDK ships a starter template so new navi projects begin from a working, compiling example. The template lives **in the opennavi repository** at `templates/navi-starter/` as a **nested Go module** (its own `go.mod` requiring the published SDK version), so SDK changes and template fixes land atomically in one PR and CI can build the template against every SDK release.
+The SDK ships starter templates so new navi projects begin from a working, compiling example. Two templates ship, living **in the opennavi repository** under `templates/` as **nested Go modules** (each with its own `go.mod` requiring the published SDK version), so SDK changes and template fixes land atomically in one PR and CI can build the templates against every SDK release:
 
-Template contents:
+- `templates/navi-code/` — a CLI agent coding tool (the pi/Claude-Code style navi): interactive chat REPL compiled in, file and shell tools registered through the tool registry. Also the scaffolding base for new projects.
+- `templates/navi-daemon/` — a daemon-style navi (the OpenClaw/Hermes pattern): always-on background process with thought-queue consumption, cron scheduling, and the gateway as its delivery mode, configured via runtime config under `.config/navi/` (S000200 §04 runtime side).
+
+Together the pair exercises both authoring styles — static Go definition (`navi-code`) and Go definition plus runtime config (`navi-daemon`) — so the template-build guardrail (S000805) covers each.
+
+Template contents (both templates):
 - `cmd/<navi>/main.go` — entry point calling `sdk.Build()` with a working definition
 - One author tool registered through the tool registry (`tools/registry`, S130400) plus one active builtin
 - Project layout per S000100 (§01)
+- `navi-daemon/` additionally ships an example runtime config under `.config/navi/navi-daemon/`
 
 The shipped template `go.mod` never carries a `replace` directive pointing at the parent repo — local development uses `go.work` (not shipped).
 
-`navi init` scaffolds a new project by embedding this template (`go:embed`) into the builder binary and generating a project from it — no network fetch. The nested module may additionally be tagged for `gonew`-style fetching; `navi init` remains the primary path.
+`navi init` scaffolds a new project by embedding the templates (`go:embed`) into the builder binary and generating a project from a chosen template — no network fetch. The choice is `--template code|daemon` (default `code`). The nested modules may additionally be tagged for `gonew`-style fetching; `navi init` remains the primary path.
 
-### Requirement: In-Repo Starter Template
-The system SHALL provide `templates/navi-starter/` as a nested Go module in the opennavi repo, requiring a published SDK version, containing a compiling example navi.
+### Requirement: In-Repo Starter Templates
+The system SHALL provide `templates/navi-code/` and `templates/navi-daemon/` as nested Go modules in the opennavi repo, each requiring a published SDK version and containing a compiling example navi.
 
-#### Scenario: Template always compiles against the SDK
-- **GIVEN** CI builds `templates/navi-starter/` on every SDK change and release tag
+#### Scenario: Templates always compile against the SDK
+- **GIVEN** CI builds both templates on every SDK change and release tag
 - **WHEN** the SDK's public surface changes
-- **THEN** a breaking change SHALL fail the template build
-- **AND** the template SHALL be fixed in the same release cycle
+- **THEN** a breaking change SHALL fail the template builds
+- **AND** the templates SHALL be fixed in the same release cycle
 
-#### Scenario: Template uses published SDK versions
-- **GIVEN** a user copies or generates a project from the template
+#### Scenario: Templates use published SDK versions
+- **GIVEN** a user copies or generates a project from a template
 - **WHEN** they run `go build`
 - **THEN** the build SHALL resolve the SDK version pinned in the template's `go.mod`
 - **AND** the template SHALL NOT ship a `replace` directive to the parent repository
 
 ### Requirement: navi init Scaffolding
-The system SHALL provide a `navi init` command that generates a new navi project from the embedded starter template.
+The system SHALL provide a `navi init` command that generates a new navi project from an embedded starter template, selectable via `--template code|daemon` (default `code`).
 
 #### Scenario: Initializing a new navi project
 - **GIVEN** a developer runs `navi init my-navi`
@@ -501,3 +507,4 @@ The system SHALL provide a `navi init` command that generates a new navi project
 |------|--------|---------|--------|
 | 2026-08-13 | S000300 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-13 | S000312 | 0.2.0 | Go-only builder input: removed YAML definition processing and YAML tool compilation (S000207) |
+| 2026-09-13 | S000313 | 0.3.0 | Two-template starter set: `navi-code` (CLI coding agent) and `navi-daemon` (daemon-style); `navi init --template code\|daemon` |
