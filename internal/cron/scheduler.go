@@ -10,8 +10,9 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
 
-// ScheduleDef is one named schedule (developer-authored, navi.yaml
-// source of truth — see #239 plan amendment).
+// ScheduleDef is one named schedule. Schedule definitions are
+// deployment-time runtime config (S000200 §04); the compiled navi
+// definition declares only whether the cron interface exists.
 type ScheduleDef struct {
 	Name     string // unique schedule name
 	Expr     string // 5-field cron expression

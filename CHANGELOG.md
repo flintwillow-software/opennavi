@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI: starter-template build job against the SDK on main and release tags (S000805 guardrail) (NAVI-273)
 
 ### Changed
+- `internal/config`: removed YAML navi-definition parsing (dead per S000207/go-first); thought-queue tuning and cron schedules moved to runtime config under `.config/navi/<name>/`; `navi daemon` drops the `-definition` flag; `RuntimeConfig.Validate()` checks self-contained invariants instead of cross-checking a definition (NAVI-275)
 - Replaced bare `.gitignore` patterns (`navi`, `navi.db`) with anchored artifact-dir entries (`/bin/`, `/data/`) — bare patterns match at any directory level and silently ignore new files under `cmd/navi/` (#246)
 - Specs are Go-only for navi definitions: removed the `naviconfig.yaml` alternative (S000207/S000100/S000300), added the in-repo starter template + `navi init` scaffolding spec (S000312) and the SDK-surface template guardrail (S000805)
 - Documented the actual `internal/agent/` file layout vs the spec §09 sketch (`internal/agent/README.md` + spec implementation note) — docs-only, no code renames (NAVI-259)
