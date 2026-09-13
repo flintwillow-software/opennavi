@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-08'
-updated: '2026-09-08'
+updated: '2026-09-13'
 tags:
   - spec
   - navi-core
@@ -157,11 +157,11 @@ The system SHALL distinguish SDK-owned agent tools (the catalog: `file_*`, `shel
 4. opennavi-build → single self-contained binary (CGO_ENABLED=0)
 ```
 
-YAML equivalence: a `naviconfig.yaml` in the project produces the same binary (S000100 §02).
+Definitions are Go-only: there is no YAML definition format (S000207).
 
 ### Requirement: Minimal Authoring Path
 
-The system SHALL allow a navi to be built from a single `main.go` entry point plus an optional YAML definition, yielding a working binary with the default tool set and selected interfaces.
+The system SHALL allow a navi to be built from a single `main.go` entry point, yielding a working binary with the default tool set and selected interfaces.
 
 #### Scenario: Building the minimal navi
 
@@ -170,8 +170,22 @@ The system SHALL allow a navi to be built from a single `main.go` entry point pl
 - **THEN** the system SHALL produce a single self-contained binary (S000300)
 - **AND** the binary SHALL include the default catalog tools and the selected interfaces
 
+## 05 SDK Surface Guardrail
+
+The starter template (`templates/navi-starter/`, S000300 §11) is the executable check on this spec: CI builds it against SDK main and every release tag, so a change that breaks the public authoring surface fails the template build in the same change cycle.
+
+### Requirement: Template Build Guardrail
+The system SHALL build the starter template against the SDK in CI, on the default branch and on every release tag.
+
+#### Scenario: Breaking the public authoring surface
+- **GIVEN** a change to the SDK that breaks the template's compilation or registration flow
+- **WHEN** CI runs on the pull request
+- **THEN** the template build SHALL fail
+- **AND** the change SHALL NOT merge until the template is updated
+
 ## Status History
 
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-09-08 | S000800 | 0.2.0 | Initial SDK surface spec |
+| 2026-09-13 | S000805 | 0.3.0 | Go-only authoring (removed YAML equivalence); added template-build guardrail for the public surface (S000312) |

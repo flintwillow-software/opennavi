@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-07-31'
-updated: '2026-07-31'
+updated: '2026-09-13'
 tags:
   - spec
   - navi-core
@@ -58,7 +58,6 @@ my-navi/                          # Developer's Go project root
 │       ├── grafana.go            # Grafana query tool
 │       └── betterstack.go        # BetterStack log tool
 │
-├── naviconfig.yaml                 # Navi definition (alternative to Go code)
 ├── go.mod                        # Go module file
 ├── go.sum                        # Go checksums
 └── README.md                     # Project documentation
@@ -147,39 +146,9 @@ func queryGrafana(args map[string]any) (string, error) {
 }
 ```
 
-### `naviconfig.yaml` — Navi Definition (Alternative to Go Code)
+### Go-Only Definitions
 
-Instead of writing the navi definition in Go, developers can use a YAML file. The builder processes this into the compiled binary just like Go code. This is useful for simpler navis or when you want configuration separate from logic.
-
-```yaml
-# naviconfig.yaml
-name: oncall-bot
-version: 1.0.0
-personality: |
-  You are OnCall Bot. Communicate concisely and technically.
-
-tools:
-  - name: query_grafana
-    description: Query Grafana for metrics
-    handler: tools/monitoring/grafana.go
-
-skills:
-  - name: incident-response
-    instructions_file: skills/incident-response.md
-    keywords: [alert, incident]
-
-interfaces:
-  gateway:
-    enabled: true
-    port: 443
-  cron:
-    enabled: true
-
-extensions:
-  allow_standalone_plugins: true
-```
-
-**Both Go code and YAML are supported.** Developers can use either or both — the builder processes them together into a single binary.
+The navi definition is written only in Go code via the entry point below. YAML definition files (e.g. `naviconfig.yaml`) are not supported — a single Go definition keeps `ToolDefinition` metadata (S130400) in one typed source of truth and requires no builder handler-reference resolution.
 
 ### Requirement: Entry Point Requirement
 The system SHALL require each navi to have exactly one entry point in `cmd/<navi-name>/main.go` that calls `sdk.Build()` with the navi definition.
@@ -194,14 +163,14 @@ The system SHALL require each navi to have exactly one entry point in `cmd/<navi
 - **WHEN** the builder processes the project
 - **THEN** the builder SHALL reject the build with an error
 
-### Requirement: YAML Definition Support
-The system SHALL support navi definitions written in YAML via `naviconfig.yaml`, processed by the builder identically to Go code definitions.
+### Requirement: Go-Only Definition Support
+The system SHALL NOT accept YAML navi-definition files; definitions are Go code only. (Runtime user configuration under `.config/navi/` is unaffected — see §03.)
 
-#### Scenario: Building with a YAML definition
+#### Scenario: Builder encounters a YAML definition file
 - **GIVEN** a navi project contains a `naviconfig.yaml` file
 - **WHEN** the builder processes the project
-- **THEN** the builder SHALL compile the YAML definition into the binary
-- **AND** the resulting binary SHALL be equivalent to a Go code definition build
+- **THEN** the builder SHALL ignore definition-file semantics for it
+- **AND** the build SHALL use the Go entry point definition only
 
 ---
 
@@ -274,36 +243,26 @@ The system SHALL require every navi project to be a valid Go module with a `go.m
 ## 05 Building a Navi
 
 ```bash
-# Build with Go code definition
+# Build the Go-defined navi
 cd my-navi/
 opennavi-build -output ./dist/oncall-bot .
-
-# Build with YAML definition (if naviconfig.yaml exists)
-opennavi-build -output ./dist/oncall-bot .
-
-# Both work — builder detects format automatically
 ```
 
-The builder processes `cmd/<navi-name>/main.go` for Go definitions, or `naviconfig.yaml` for YAML definitions. Either produces the same compiled binary output.
+The builder processes the Go definition in `cmd/<navi-name>/main.go`. There is no YAML definition format (S000207).
 
-### Requirement: Format Auto-Detection
-The system SHALL automatically detect whether a navi project uses a Go code definition or a YAML definition.
+### Requirement: Go Definition Build
+The system SHALL build the navi from the Go code definition in the entry point.
 
 #### Scenario: Building a Go-defined navi
 - **GIVEN** a navi project with `cmd/<navi-name>/main.go`
 - **WHEN** the developer runs `opennavi-build`
 - **THEN** the builder SHALL process the Go definition and produce a binary
 
-#### Scenario: Building a YAML-defined navi
-- **GIVEN** a navi project with `naviconfig.yaml`
-- **WHEN** the developer runs `opennavi-build`
-- **THEN** the builder SHALL process the YAML definition and produce a binary
-
 ---
 
 ## 06 Next Steps
 
-- **[02-navi-definition.md](./02-navi-definition.md)** — Detailed definition format (Go structs and YAML schema)
+- **[02-navi-definition.md](./02-navi-definition.md)** — Detailed definition format (Go structs)
 - **[03-interface-set.md](./03-interface-set.md)** — Delivery modes and interface selection
 - **[02-agent-config/00-skills-system.md](../02-agent-config/00-skills-system.md)** — Two-tier skill loading (compiled-in vs runtime)
 
@@ -313,3 +272,4 @@ The system SHALL automatically detect whether a navi project uses a Go code defi
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S000100 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-13 | S000100 | 0.2.0 | Removed `naviconfig.yaml` from project layout — Go-only definitions (S000207) |
