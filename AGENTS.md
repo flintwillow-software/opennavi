@@ -53,6 +53,34 @@ refactor: restructure module
 test: add unit tests
 ```
 
+## Build & Development Tasks — use `just`
+
+**Always use the `justfile` for building, testing, and running the CLI.** Don't hand-roll `go build` / `go test` invocations — the recipes match the CI gates and keep artifacts out of the source tree.
+
+```bash
+just build      # compile the CLI → bin/navi
+just ci         # build + vet + fmt-check + test-race (all CI merge gates)
+just test       # unit tests
+just test-race  # race detector (CI-only gate locally; see justfile)
+just vet        # go vet
+just fmt        # gofmt in place (fmt-check is the CI gate)
+```
+
+Run the CLI against the local runtime state directory:
+
+```bash
+just daemon     # start daemon with -db data/navi.db
+just health     # health probe against data/navi.db
+just enqueue    # enqueue a thought against data/navi.db
+just clean      # remove bin/ and data/
+```
+
+Conventions agents must respect:
+
+- **`bin/` and `data/` are the only artifact/runtime directories.** Never write binaries, databases, logs, or scratch files into the source tree — bare gitignore patterns at the repo root previously caused tracked files under `cmd/navi/` to be silently ignored (NAVI-54). Gitignore entries are anchored to these directories only.
+- **Pass explicit `-db` paths** (`data/navi.db`) when invoking `./bin/navi` directly; the compiled-in default is `./navi.db`, which would drop a database in the repo root.
+- Run `just ci` before pushing — `-race` cannot run on the local Pi, so CI is the only place it executes; don't treat a local green `just test` as the full gate.
+
 ## AI Agent Guidelines
 
 - Always check `docs/` before answering workflow or convention questions
