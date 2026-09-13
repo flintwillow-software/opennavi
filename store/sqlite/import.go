@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/session"
+	"github.com/flintwillow-software/opennavi/store"
 )
 
 const timeFormat = time.RFC3339Nano
@@ -18,7 +18,7 @@ const timeFormat = time.RFC3339Nano
 // single transaction (spec §01.2 — atomic import). If the header
 // carries a session ID that already exists, the import fails rather
 // than overwriting; use a fresh export or delete the target first.
-func (s *Store) ImportJSONL(path string) (*session.Session, error) {
+func (s *Store) ImportJSONL(path string) (*store.Session, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: import open %s: %w", path, err)
@@ -26,7 +26,7 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 	defer f.Close()
 
 	var header exportHeaderLine
-	var entries []session.SessionEntry
+	var entries []store.SessionEntry
 	scanner := bufio.NewScanner(f)
 	// Messages can exceed the 64KB default token size (shell_exec caps
 	// at 100KB, file_read at 512KB), so raise the scan ceiling.
@@ -51,7 +51,7 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return nil, fmt.Errorf("sqlite: import %s: line %d: %w", path, line, err)
 		}
-		e := session.NewEntry(session.Role(m.Role), m.Content)
+		e := store.NewEntry(store.Role(m.Role), m.Content)
 		e.ToolName = m.ToolName
 		e.ToolCallID = m.ToolCallID
 		if m.ToolInput != "" {
@@ -75,7 +75,7 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 			created = ts
 		}
 	}
-	sess := &session.Session{
+	sess := &store.Session{
 		ID:        header.SessionID,
 		Name:      header.Name,
 		AgentID:   header.AgentID,
@@ -83,7 +83,7 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 		WorkDir:   header.WorkDir,
 		ParentID:  header.ParentID,
 		BranchID:  header.BranchID,
-		Status:    session.StatusActive,
+		Status:    store.StatusActive,
 		Entries:   entries,
 		Current:   len(entries) - 1,
 		CreatedAt: created,
@@ -94,7 +94,7 @@ func (s *Store) ImportJSONL(path string) (*session.Session, error) {
 	// existing session — imports restore or migrate, they don't merge.
 	if _, err := s.LoadSession(header.SessionID); err == nil {
 		return nil, fmt.Errorf("sqlite: import %s: session %s already exists", path, header.SessionID)
-	} else if !errors.Is(err, session.ErrSessionNotFound) {
+	} else if !errors.Is(err, store.ErrSessionNotFound) {
 		return nil, fmt.Errorf("sqlite: import %s: check existing session: %w", path, err)
 	}
 	if err := s.SaveSession(sess); err != nil {

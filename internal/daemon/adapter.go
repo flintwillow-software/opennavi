@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/internal/agent"
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // agentProviderAdapter adapts the daemon's llm.Provider (possibly a

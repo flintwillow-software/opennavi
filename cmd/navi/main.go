@@ -9,7 +9,7 @@ import (
 	"os"
 
 	clifw "github.com/flintwillow-software/opennavi/internal/interfaces/cli"
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 func main() {

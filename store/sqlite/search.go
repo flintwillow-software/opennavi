@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/internal/session"
+	"github.com/flintwillow-software/opennavi/store"
 )
 
 // Search performs full-text search across all sessions via FTS5 (spec
@@ -15,13 +15,13 @@ import (
 // searchable: encrypted sessions surface in results only via their
 // plaintext metadata or non-encrypted entries. Decrypt-then-filter
 // search for encrypted deployments is a documented future option.
-func (s *Store) Search(query string, limit int) ([]session.SessionInfo, error) {
+func (s *Store) Search(query string, limit int) ([]store.SessionInfo, error) {
 	match, err := ftsQuery(query)
 	if err != nil {
 		return nil, err
 	}
 	if match == "" {
-		return []session.SessionInfo{}, nil
+		return []store.SessionInfo{}, nil
 	}
 	if limit <= 0 {
 		limit = 10
@@ -61,13 +61,13 @@ func (s *Store) Search(query string, limit int) ([]session.SessionInfo, error) {
 		return nil, fmt.Errorf("sqlite: iterate search hits: %w", err)
 	}
 	if len(order) == 0 {
-		return []session.SessionInfo{}, nil
+		return []store.SessionInfo{}, nil
 	}
 	if len(order) > limit {
 		order = order[:limit]
 	}
 
-	out := make([]session.SessionInfo, 0, len(order))
+	out := make([]store.SessionInfo, 0, len(order))
 	for _, sid := range order {
 		rows, err := s.db.Query(`
 			SELECT s.id, s.name, s.agent_id, s.created_at, s.updated_at, s.status,
