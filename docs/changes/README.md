@@ -19,7 +19,8 @@
 | 0.1.0 | feat | integrations | [100000—100500] | planned |
 | 0.1.0 | feat | creative-pipeline | [110000—110400] | planned |
 | 0.1.0 | feat | avatar | [120000—120200] | planned |
-| 0.1.0 | feat | tool-catalog | [130000—130300] | draft |
+| 0.1.0 | feat | tool-catalog | [130000—130500] | draft |
+| 0.1.0 | feat | agent-utility-tools | [130000, 130400, 130500—130507] | draft |
 | 0.1.0 | feat | agent-roles | [140000—140900] | draft |
 
 ## Version Log

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESULTS.md with measurable outcomes and lessons learned
 - S130400 tool registry & discovery spec and S000800 SDK surface spec; 0.1.0 change-log entry derived for the tool catalog
 - S130500 agent utility tools spec: `todo_read`/`todo_write`/`todo_update`, `time_read`, `note_read`/`note_write`, and `http_request` (CRUD with SSRF guards and credential-reference auth), plus the stateful tool storage seam; case study captured in `docs/case-study/agent-utility-tools/`
+- Agent utility tools change-log entry (`docs/changes/0.1.0/feat/agent-utility-tools/`) tracked as Huly epic NAVI-266 with six sub-issues and dependency relations
 
 - GitHub Action workflow enforcing changelog entries in PRs (#255)
 ## [1.0.0] - YYYY-MM-DD
