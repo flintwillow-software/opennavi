@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent utility tools change-log entry (`docs/changes/0.1.0/feat/agent-utility-tools/`) tracked as Huly epic NAVI-266 with six sub-issues and dependency relations
 
 - GitHub Action workflow enforcing changelog entries in PRs (#255)
+### Added
+- Public SDK surface per S000800 §01: `llm/`, `store/` (+ `store/sqlite`), and `agent/` promoted from `internal/`; the session data model (Session, SessionEntry, Store interface, MemoryStore) moved to public `store/` while manager/compaction/snapshot behavior stays internal behind type aliases (NAVI-276, NAVI-277)
+- `tools/sdk-consumer/` — an external-consumer module (its own go.mod/replace) plus a CI job that imports every public package and exercises the runtime end to end, gating any leak of internal types into a public signature (NAVI-277)
+
 ## [1.0.0] - YYYY-MM-DD
 
 ### Added
