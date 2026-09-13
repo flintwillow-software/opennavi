@@ -793,6 +793,11 @@ internal/agent/
 └── types.go       # AgentMessage, AgentEvent, AgentTool, AgentConfig
 ```
 
+> **Implementation note:** the layout above is the original sketch. The
+> actual package deviates cosmetically (no `state.go`; executor split out
+> of `tools.go`; `compaction.go` and `provider.go` added). The authoritative
+> mapping and rationale live in `internal/agent/README.md` (#217, NAVI-259).
+
 ---
 
 ## 10 Implementation Order
