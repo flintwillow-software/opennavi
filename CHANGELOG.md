@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented the actual `internal/agent/` file layout vs the spec §09 sketch (`internal/agent/README.md` + spec implementation note) — docs-only, no code renames (NAVI-259)
 
 ### Added
+- `tools/registry` — public tool registry per S130400: complete `ToolDefinition` metadata descriptor (access, timeout, recovery, mode, provenance, prompt metadata), `Register`/`Get`/`List`/`Find`/`AllNames` discovery, registered-vs-active sets with runtime `SetActive`, JSON-schema argument validation before dispatch, and the `prepareArguments` back-compat hook (NAVI-184)
 - `justfile` with CI-gate parity (`build` → `bin/navi`, `vet`, `fmt-check`, `test-race`, `ci`) and run wrappers (`daemon`, `health`, `enqueue`) that keep runtime state under `data/navi.db`; artifact-dir convention documented in `AGENTS.md` (#246)
 - Migrated `docs/spec/` to the spec-tree standard (`docs/specs/`) — 13 numbered components, spec codes (6-digit `component.feature.subfeature`), `spec-refs` frontmatter, SHALL + GIVEN/WHEN/THEN requirement grammar, and Status History on every feature
 - Added `docs/changes/` versioned change tracker, shipped `docs/templates/` skeletons, and synced the `specs-*` skills into `.pi/skills/`
