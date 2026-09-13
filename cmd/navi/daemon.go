@@ -19,7 +19,6 @@ import (
 // drains in-flight thoughts (park-with-checkpoint) and exits.
 func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	defPath := fs.String("definition", "", "path to navi.yaml (optional; minimal built-in definition used otherwise)")
 	runtimeFile := fs.String("config", "", "path to runtime config YAML (optional)")
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
 	model := fs.String("model", "", "LLM model name (required)")
@@ -52,15 +51,14 @@ func runDaemon(args []string) error {
 	defer stop()
 
 	rt, err := daemon.Assemble(daemon.RuntimeParams{
-		DefinitionPath: *defPath,
-		RuntimeFile:    *runtimeFile,
-		SessionDB:      *dbPath,
-		Model:          *model,
-		OllamaHost:     *ollamaHost,
-		WorkDir:        *workDir,
-		CompactBudget:  *compactBudget,
-		Workers:        *workers,
-		Logger:         logger,
+		RuntimeFile:   *runtimeFile,
+		SessionDB:     *dbPath,
+		Model:         *model,
+		OllamaHost:    *ollamaHost,
+		WorkDir:       *workDir,
+		CompactBudget: *compactBudget,
+		Workers:       *workers,
+		Logger:        logger,
 	})
 	if err != nil {
 		return err

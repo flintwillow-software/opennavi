@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // newTestREPL builds a REPL over a temp store with no live agent —

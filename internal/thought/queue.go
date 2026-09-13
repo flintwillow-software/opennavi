@@ -83,7 +83,7 @@ type ThoughtQueue struct {
 }
 
 // Store persists queue state (spec §3.4). The SQLite implementation
-// (internal/store/sqlite, migration v3) and an in-memory implementation
+// (store/sqlite, migration v3) and an in-memory implementation
 // live alongside; the queue persists through this interface rather than
 // inventing a parallel storage layer.
 type Store interface {

@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/internal/store/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // testStore opens a minimal sqlite store over a temp DB (test helper
