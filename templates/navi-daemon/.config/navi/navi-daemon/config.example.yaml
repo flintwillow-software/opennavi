@@ -1,0 +1,29 @@
+# Runtime config for navi-daemon (S000200 §04).
+# This file is the OPERATOR's deployment settings — it never modifies
+# the compiled navi definition. Copy to .config/navi/navi-daemon/config.yaml.
+
+provider:
+  name: ollama
+  host: http://localhost:11434
+  model: llama3.1
+
+session:
+  db_path: /var/lib/navi-daemon/daemon.db
+
+# Cron schedules (S000400 cron interface).
+cron:
+  schedules:
+    - name: morning-digest
+      spec: "0 8 * * *"
+      prompt: "Summarize overnight queued work and surface anything blocked."
+
+# Work discovery: where the daemon looks for incoming work.
+idle:
+  sources:
+    - type: directory
+      path: /var/spool/navi-daemon/incoming
+
+tools:
+  policy:
+    # Operators can only narrow the compiled-in policy, never widen it.
+    blocked: []

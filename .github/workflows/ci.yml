@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -34,3 +35,35 @@ jobs:
       # so CI is the only place it runs.
       - name: Test (race detector)
         run: go test -race -timeout 10m ./...
+
+  templates:
+    name: starter templates (S000805 guardrail)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # The templates are nested modules pinned to the published SDK
+      # (no replace directive shipped, S000313). The go.work here is
+      # CI-only: it builds the templates against the SDK in this
+      # checkout, so a change that breaks the public authoring surface
+      # fails this job on the PR.
+      - name: Build starter templates against SDK
+        run: |
+          cat > go.work <<'EOF'
+          go 1.26
+
+          use (
+          	.
+          	./templates/navi-code
+          	./templates/navi-daemon
+          )
+
+          replace github.com/flintwillow-software/opennavi v0.1.0 => .
+          EOF
+          (cd templates/navi-code && go build ./... && go vet ./...)
+          (cd templates/navi-daemon && go build ./... && go vet ./...)

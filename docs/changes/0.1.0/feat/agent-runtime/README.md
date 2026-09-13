@@ -21,14 +21,14 @@ Implement the agent runtime: think → act → observation loop, session lifecyc
 
 ## Code Context
 
-- **Project structure**: Go SDK, builds on navi-core (navi.yaml parsing, project layout)
+- **Project structure**: Go SDK, builds on navi-core (Go navi definition, project layout)
 - **Dependencies**: SQLite (go-sqlite3 or modernc.org/sqlite), LLM provider SDK (Anthropic, OpenAI)
 - **Existing patterns**: N/A — greenfield build
 
 ## Notes
 
 - Epic: "Agent Runtime & Session System"
-- Depends on: navi-core (navi.yaml parsing for tool config)
+- Depends on: navi-core (Go definition for tools/permissions; runtime config under `.config/navi/` for tool policy)
 - Session persistence and context compaction can be built in parallel once the session data model is settled
 - Tool error recovery is a critical UX concern — invest in robust testing here
 

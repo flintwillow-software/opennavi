@@ -17,6 +17,8 @@ spec-refs: [040300, 040301, 040302, 040303]
 
 ## 00 Config Changes: What Each Navi Needs
 
+Per the static-definition vs runtime-config split (S000200 §04): identity keypaths, trust stores, and idle schedules are deployment-time runtime config under `.config/navi/<name>/`, while presence declarations and chat IAM permissions are compiled into the Go navi definition. Navi definitions are Go-only — YAML navi-definition files are not used.
+
 ### 9.1 spec-agent Config
 
 ```yaml
@@ -364,11 +366,11 @@ The system SHALL provide key management tools for listing trusted keys, adding k
 - **Adds `chat_send` tool** to the agent runtime tool set (replaces `council_start` / `council_send_message`)
 - **Adds `presence_list`, `presence_discover` tools** to the agent runtime
 - **Adds `key_trust_list`, `key_trust_add`, `key_trust_revoke` tools** for trust management
-- **Adds `identity` config section** (keypair paths, git identity, trust policy) to `navi.yaml`
-- **Adds `trusted_keys` config** (public keys of known navis) to `navi.yaml`
-- **Adds `presence` config section** to `navi.yaml`
-- **Adds `chat` config section** with IAM permissions to `navi.yaml`
-- **Adds `idle` config section** with work discovery sources to `navi.yaml`
+- **Adds `identity` runtime config section** (keypair paths, git identity, trust policy) under `.config/navi/<name>/config.yaml` — deployment-provisioned per S000200 §04
+- **Adds `trusted_keys` runtime config** (public keys of known navis) under `.config/navi/<name>/config.yaml`
+- **Declares presence capabilities, role, and accepts-work in the Go navi definition** (definition-level behavioral config); the presence mechanism and socket path remain runtime config
+- **Adds chat IAM permissions to the Go navi definition** (`permissions.Chat` inbound/outbound rules, compiled into the binary)
+- **Adds `idle` runtime config section** (check intervals, backoff, work discovery sources) under `.config/navi/<name>/config.yaml`
 - **Adds local session store** (SQLite tables for chat sessions and messages, including signatures)
 - **Deprecates `council_start`** as a separate concept — council is now just a multi-participant chat session
 - **Message flow**: incoming chat messages are verified (key + IAM) then **turned into thoughts and added to the queue**

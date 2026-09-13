@@ -1,0 +1,16 @@
+# Runtime config for navi-code (S000200 §04).
+# This file is the END USER's deployment settings — it never modifies
+# the compiled navi definition. Copy to .config/navi/navi-code/config.yaml.
+
+provider:
+  name: ollama
+  host: http://localhost:11434
+  model: llama3.1
+
+session:
+  db_path: ./navi-code.db
+
+tools:
+  policy:
+    # End users can only narrow the compiled-in policy, never widen it.
+    blocked: []
