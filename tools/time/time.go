@@ -7,6 +7,11 @@
 // (default: UTC — the navi's configured zone surfaces when the
 // runtime zone-config lands) as ISO 8601 with UTC offset, plus
 // epoch seconds when requested.
+//
+// The blank tzdata import embeds the IANA database in the binary:
+// without it, time.LoadLocation depends on the host's zoneinfo and
+// silently degrades to UTC-only in scratch/minimal containers
+// (CGO_ENABLED=0 daemons included).
 package time
 
 import (
@@ -15,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
