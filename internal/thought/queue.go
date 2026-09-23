@@ -705,3 +705,14 @@ func (q *ThoughtQueue) emit(evts []QueueEvent) {
 		}
 	}
 }
+
+// Slots returns a snapshot of the queue's slots — diagnostic seam
+// (foreground-reservation visibility for the binary-run entry and the
+// health view).
+func (q *ThoughtQueue) Slots() []Slot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]Slot, len(q.slots))
+	copy(out, q.slots)
+	return out
+}

@@ -34,6 +34,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+
+		case "run":
+			if err := runInteractive(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "navi:", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 

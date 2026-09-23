@@ -48,6 +48,10 @@ type agentRunnerDeps struct {
 	// executor NewAgent built (builtin-only, no registry governance).
 	registry *registry.Registry
 	bind     bridge.Options
+	// tracker lets the steering bridge resolve a running thought's
+	// in-flight agent (S010312 running path): registered on run start,
+	// unregistered when the run returns. May be nil (no routing).
+	tracker *inFlightAgents
 }
 
 // NewAgentRunner builds the agent-backed Runner.
@@ -86,6 +90,17 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	// the registry is governed, it is authoritative.
 	if err := r.bindTools(a); err != nil {
 		return fmt.Errorf("daemon: bind tool registry for thought %s: %w", t.ID, err)
+	}
+
+	// Register the in-flight agent for the steering bridge (S010312
+	// running path): RouteMessage hands messages to the tracker, which
+	// injects them into THIS agent's steering queue at the turn
+	// boundary. Unregistered when the run returns — a message routed
+	// outside the run window rejects with a clear error (the ack
+	// event surfaces it).
+	if r.deps.tracker != nil {
+		unregister := r.deps.tracker.track(t.ID, a)
+		defer unregister()
 	}
 
 	// Crash recovery / resume: restore a checkpoint if present and
