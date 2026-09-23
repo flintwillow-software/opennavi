@@ -63,6 +63,9 @@ func (c *Collector) Render() string {
 	writeCounter(&b, prefix+"_thought_persist_failures_total",
 		"Total number of thought-state persistence failures (in-memory and stored state may have diverged).",
 		series{labels: nil, value: c.persistFailed})
+	writeCounter(&b, prefix+"_thoughts_deleted_total",
+		"Total number of thought records removed via delete (audit-relevant: distinguishes work-disappeared-via-delete from work-cancelled).",
+		series{labels: nil, value: c.deletedTotal})
 
 	// ── by_status: one family, one series per status ─────────
 	statuses := []struct {

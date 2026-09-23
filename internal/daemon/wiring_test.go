@@ -39,10 +39,11 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 		agent.ToolFileRead: true, agent.ToolShellExec: true,
 		"todo_read": true, "todo_write": true, "todo_update": true,
 		"note_read": true, "note_write": true, "time_read": true,
-		"http_request": true,
+		"http_request":  true,
+		"thoughts_read": true, "thoughts_create": true, "thoughts_update": true, "thoughts_delete": true,
 	}
 	if len(active) != len(want) {
-		t.Fatalf("active set = %v, want 9 tools", active)
+		t.Fatalf("active set = %v, want 13 tools", active)
 	}
 	for _, name := range active {
 		if !want[name] {
@@ -127,8 +128,8 @@ tools:
 	defer rt.Store.Close()
 
 	active := rt.Registry.ActiveNames()
-	if len(active) != 8 { // file_read + 3 todo + 2 note + time + http (shell_exec blocked)
-		t.Fatalf("active set = %v, want file_read + todo + note + time + http tools", active)
+	if len(active) != 12 { // file_read + 3 todo + 2 note + time + http + 4 thoughts (shell_exec blocked)
+		t.Fatalf("active set = %v, want file_read + todo + note + time + http + thoughts tools", active)
 	}
 	for _, name := range active {
 		if name == agent.ToolShellExec {

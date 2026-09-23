@@ -63,6 +63,7 @@ type Collector struct {
 	resumedTotal   float64
 	preemptedTotal float64
 	persistFailed  float64
+	deletedTotal   float64
 	inQueue        float64 // pending + paused (claimable or parked work)
 	status         statusCounts
 	histogram      *histogram
@@ -216,6 +217,25 @@ func (c *Collector) observeEvent(ev thought.QueueEvent) {
 		c.preemptedTotal++
 	case thought.EventPersistFailed:
 		c.persistFailed++
+	case thought.EventDeleted:
+		// Record removal (Queue.Delete, S130600 §04) — the exact-delta
+		// compensator: Detail carries the PRIOR status so the right
+		// by_status gauge decrements (the collector only sees events).
+		// Removal is not cancellation: the audit trail distinguishes
+		// them (deleted_total counter + the deleted event's Detail).
+		// The status gauge simply returns to its pre-enqueue value.
+		switch ev.Detail {
+		case string(thought.ThoughtPaused):
+			c.status.paused--
+			delete(c.pausedSet, ev.ThoughtID)
+		case string(thought.ThoughtPending):
+			c.status.pending--
+		default:
+			// Unexpected prior status — clamp keeps gauges honest.
+		}
+		c.inQueue--
+		c.deletedTotal++
+		c.dropStartLocked(ev.ThoughtID)
 	}
 	c.clampStatusLocked()
 }

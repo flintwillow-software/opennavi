@@ -176,3 +176,7 @@ func (t *Thought) Due(now time.Time) bool {
 	}
 	return !t.DeferUntil.After(now)
 }
+
+// ErrThoughtProtected wraps delete rejections for thoughts whose
+// lifecycle forbids removal (running, terminal). Check errors.Is.
+var ErrThoughtProtected = errors.New("thought protected from deletion")
