@@ -48,6 +48,7 @@ This unifies the currently split execution models (interactive `Prompt()` path v
 | Date | Change |
 |------|--------|
 | 2026-09-23 | Drafted from operator design discussion (thought queue as main loop; TUI as portal; remote daemon attachment) |
+| 2026-09-23 | Message-granularity decision recorded: connector messages are thought-per-message; TUI interaction attaches/steers existing thoughts or schedules new ones |
 
 ## Related
 

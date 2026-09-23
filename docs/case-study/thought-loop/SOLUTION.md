@@ -32,6 +32,15 @@ The TUI is a view over the queue, not a chat transcript with a scrollbar:
 - **Live view (hop into the running thought)**: subscribe to the running thought's agent events — content deltas, tool calls and results, lifecycle transitions (all already emitted on the agent event bus and the queue fanout). The monitor is read-only observation; steering is the write path.
 - **Steering**: "add a message" on a running thought routes into the agent's existing steering queue (turn-boundary injection, the mechanism `runLoop` already honors), acknowledged as a queue-level event so the TUI can show "delivered to thought X". Steering a paused thought resumes it.
 
+### Message granularity (operator decision, 2026-09-23)
+
+**Thought-per-message for connector-sourced messages; attach/steer for TUI interaction.** Concretely:
+
+- **Connectors** (gateway adapters, cron firings, CLI `navi enqueue`) → **one thought per message** — consistent with existing cron enqueue/coalescing behavior; each inbound request is discrete, schedulable work.
+- **TUI** → the user either (a) creates/schedules a new thought (foreground or queued) or (b) attaches to an existing one: a message on a **queued** thought appends to its `Context` for when it runs; a message on a **running** thought injects via steering; a message on a **paused** thought resumes it with the message attached.
+
+This keeps discrete request semantics for machines, and conversational continuity for the human who is watching.
+
 ## 3. Remote attachment (daemon mode)
 
 In daemon mode the same TUI connects to the running daemon and manages it remotely — the mental model is identical, only the transport changes:
@@ -60,8 +69,8 @@ Interactive TUI sessions and daemon runs converge on: **queue → pool → Agent
 
 ## Open Design Points (for d3-specs)
 
-1. **Foreground thought semantics**: is a user message a new thought per message, or a persistent "conversation thought" that accumulates turns (and how does that map to sessions)?
-2. **Steering delivery guarantees**: at-turn-boundary injection only, or also queue-boundary (before claim)? Event ack shape?
+1. ~~Foreground thought semantics~~ — **decided (2026-09-23)**: connector messages are thought-per-message; TUI interaction attaches/steers existing thoughts or schedules new ones (see §2).
+2. **Steering delivery guarantees**: at-turn-boundary injection confirmed for running thoughts; open question is whether a queued-thought message lands verbatim in `Context` or as a structured annotation, and the event-ack shape for "delivered".
 3. **TUI event protocol**: reuse `QueueEvent` + agent events as-is over the gateway, or define a portal-specific envelope (05-messaging decision)?
 4. **TUI implementation dependency** (e.g. Bubble Tea vs. hand-rolled) vs. the repo's no-new-deps convention for the core runtime.
 5. **Authorization for remote control**: which queue actions require what trust level (S040200 alignment).
