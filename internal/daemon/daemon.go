@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
@@ -18,6 +19,9 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/tools/bridge"
+	"github.com/flintwillow-software/opennavi/tools/builtin"
+	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
 // Runtime is the assembled daemon: everything long-running needs.
@@ -27,6 +31,8 @@ type Runtime struct {
 	Queue     *thought.ThoughtQueue
 	Pool      *thought.Pool
 	Store     *sqlite.Store
+	Stateful  *sqlite.StatefulStore
+	Registry  *registry.Registry
 	SessionM  *session.SessionManager
 	Provider  llm.Provider
 	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
@@ -49,6 +55,10 @@ type RuntimeParams struct {
 	Workers          int             // pool worker count (0 = 2)
 	Logger           *logging.Logger // structured logger (nil = default stderr/info)
 	OverrideProvider llm.Provider    // test seam: replaces the config-built chain
+	// NaviID is the per-navi scoping key for stateful tool storage
+	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
+	// navis on one host sharing a DB never see each other's state.
+	NaviID string
 }
 
 // Assemble runs the startup chain: runtime merge → store → provider
@@ -88,6 +98,32 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 	store, err := sqlite.Open(rc.SessionDB, sqlite.Options{Cipher: cipher})
 	if err != nil {
+		return nil, err
+	}
+
+	// Stateful tool storage (S130500 §07): todos + notes tables over
+	// the shared DB, scoped per navi. Opened here so stateful tools
+	// (todo_*/note_*) can register against it and the health view can
+	// read todo state.
+	stateful, err := sqlite.NewStatefulStore(store.DB())
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+
+	// Tool registry (S130400): builtins register with full metadata;
+	// catalog/author/stateful tools join here as they land. The active
+	// set is composed from the runtime ToolPolicy — the LLM-facing
+	// surface is registry-first, and tools/bridge binds it into the
+	// agent executor per thought run.
+	reg := registry.New()
+	if err := builtin.Register(reg, params.WorkDir); err != nil {
+		store.Close()
+		return nil, err
+	}
+	bindOpts := bindOptions(rc.Tools)
+	if err := reg.SetActive(activeNames(reg.AllNames(), rc.Tools)); err != nil {
+		store.Close()
 		return nil, err
 	}
 
@@ -160,6 +196,8 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		systemPrompt:  params.SystemPrompt,
 		workDir:       params.WorkDir,
 		compactBudget: params.CompactBudget,
+		registry:      reg,
+		bind:          bindOpts,
 		logger:        logger,
 	})
 	WireLogging(logger, q, sched)
@@ -176,9 +214,55 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		Pool:      pool,
 		Scheduler: sched,
 		Store:     store,
+		Stateful:  stateful,
+		Registry:  reg,
 		SessionM:  sessionM,
 		Provider:  chain,
+		Logger:    logger,
 	}, nil
+}
+
+// bindOptions maps the runtime ToolPolicy onto the bridge's bind-time
+// policy: allowed/blocked name lists (deny wins) and per-tool timeout
+// overrides (internal/config ToolPolicy ↔ tools/bridge Policy).
+func bindOptions(tp config.ToolPolicy) bridge.Options {
+	timeouts := make(map[string]time.Duration, len(tp.Timeout))
+	for name, d := range tp.Timeout {
+		timeouts[name] = d
+	}
+	return bridge.Options{
+		Policy: bridge.Policy{
+			Allowed:  tp.Allowed,
+			Blocked:  tp.Blocked,
+			Timeouts: timeouts,
+		},
+	}
+}
+
+// activeNames composes the default active set from the registered
+// tools and the runtime ToolPolicy: blocked tools are excluded (deny
+// wins), and a non-empty Allowed list restricts the set to those
+// names. Remaining access-level enforcement (S040200) lands with IAM.
+func activeNames(names []string, tp config.ToolPolicy) []string {
+	blocked := make(map[string]bool, len(tp.Blocked))
+	for _, name := range tp.Blocked {
+		blocked[name] = true
+	}
+	allowed := make(map[string]bool, len(tp.Allowed))
+	for _, name := range tp.Allowed {
+		allowed[name] = true
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if blocked[name] {
+			continue
+		}
+		if len(allowed) > 0 && !allowed[name] {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func thoughtQueueMax(rc config.RuntimeConfig) int {

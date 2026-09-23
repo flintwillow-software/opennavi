@@ -10,13 +10,25 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 // healthResult is the JSON summary printed by `navi health`.
 type healthResult struct {
-	Provider string `json:"provider"`
-	Store    string `json:"store"`
+	Provider string      `json:"provider"`
+	Store    string      `json:"store"`
+	NaviID   string      `json:"navi_id,omitempty"`
+	Todos    *todoHealth `json:"todos,omitempty"`
+}
+
+// todoHealth is the navi's current todo state (S130500 §07): counts
+// by status surfaced in the health view.
+type todoHealth struct {
+	Pending    int    `json:"pending"`
+	InProgress int    `json:"in_progress"`
+	Done       int    `json:"done"`
+	Error      string `json:"error,omitempty"`
 }
 
 // runHealth is the `navi health` subcommand: probes provider
@@ -25,6 +37,7 @@ type healthResult struct {
 func runHealth(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ExitOnError)
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
+	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool state")
 	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (default $OLLAMA_HOST)")
 	timeout := fs.Duration("timeout", 5*time.Second, "per-probe timeout")
 	if err := fs.Parse(args); err != nil {
@@ -34,7 +47,7 @@ func runHealth(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	hr := healthResult{Provider: "ok", Store: "ok"}
+	hr := healthResult{Provider: "ok", Store: "ok", NaviID: *naviID}
 	failed := false
 
 	// Provider probe: Ollama /api/tags via llm.OllamaProvider.Ping.
@@ -61,12 +74,44 @@ func runHealth(args []string) error {
 		store.Close()
 	}
 
+	// Todo state (S130500 §07): counts by status for the navi. A
+	// probe failure is reported but does not fail the health command —
+	// todo storage may legitimately be untouched (no tool activity
+	// yet); only store-level failures surface.
+	if store != nil {
+		hr.Todos = todoProbe(store, *naviID)
+	}
+
 	blob, _ := json.MarshalIndent(hr, "", "  ")
 	fmt.Println(string(blob))
 	if failed {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// todoProbe reads the navi's todo counts from the stateful store.
+func todoProbe(st *sqlite.Store, naviID string) *todoHealth {
+	ss, err := sqlite.NewStatefulStore(st.DB())
+	if err != nil {
+		return &todoHealth{Error: fmt.Sprintf("stateful store: %v", err)}
+	}
+	th := &todoHealth{}
+	for _, probe := range []struct {
+		status store.TodoStatus
+		target *int
+	}{
+		{store.TodoPending, &th.Pending},
+		{store.TodoInProgress, &th.InProgress},
+		{store.TodoDone, &th.Done},
+	} {
+		items, err := ss.ListTodos(naviID, probe.status, 0)
+		if err != nil {
+			return &todoHealth{Error: fmt.Sprintf("list todos (%s): %v", probe.status, err)}
+		}
+		*probe.target = len(items)
+	}
+	return th
 }
 
 // storeProbe verifies the SQLite store is writable by saving, loading,

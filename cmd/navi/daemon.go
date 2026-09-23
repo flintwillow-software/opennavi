@@ -24,6 +24,7 @@ func runDaemon(args []string) error {
 	model := fs.String("model", "", "LLM model name (required)")
 	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (default $OLLAMA_HOST)")
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
+	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
 	compactBudget := fs.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
 	workers := fs.Int("workers", 2, "thought worker count")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
@@ -59,6 +60,7 @@ func runDaemon(args []string) error {
 		CompactBudget: *compactBudget,
 		Workers:       *workers,
 		Logger:        logger,
+		NaviID:        *naviID,
 	})
 	if err != nil {
 		return err
