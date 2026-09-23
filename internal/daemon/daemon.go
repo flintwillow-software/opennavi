@@ -6,7 +6,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
+	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
@@ -41,6 +44,7 @@ type Runtime struct {
 	Provider  llm.Provider
 	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
 	Logger    *logging.Logger
+	Metrics   *metrics.Collector // queue metrics; nil when disabled
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -59,6 +63,10 @@ type RuntimeParams struct {
 	Workers          int             // pool worker count (0 = 2)
 	Logger           *logging.Logger // structured logger (nil = default stderr/info)
 	OverrideProvider llm.Provider    // test seam: replaces the config-built chain
+	// MetricsAddr serves the Prometheus exposition on "host:port";
+	// empty (the default) disables the metrics endpoint entirely —
+	// zero cost when unset.
+	MetricsAddr string
 	// NaviID is the per-navi scoping key for stateful tool storage
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
@@ -234,6 +242,16 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		logger:        logger,
 	})
 	WireLogging(logger, q, sched)
+
+	// Metrics (NAVI-258): subscribe the collector to the queue's event
+	// fanout — seeded from a one-time snapshot so recovered thoughts
+	// are visible immediately. Disabled when MetricsAddr is unset.
+	var collector *metrics.Collector
+	if params.MetricsAddr != "" {
+		collector = metrics.New()
+		collector.WireQueue(q)
+	}
+
 	workers := params.Workers
 	if workers <= 0 {
 		workers = 2
@@ -252,6 +270,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		SessionM:  sessionM,
 		Provider:  chain,
 		Logger:    logger,
+		Metrics:   collector,
 	}, nil
 }
 
@@ -409,6 +428,36 @@ func (d *Runtime) Run(ctx context.Context) error {
 	// thoughts (found during live E2E validation: #247).
 	if d.Pool != nil {
 		d.Pool.Start()
+	}
+
+	// Serve the Prometheus exposition when metrics are enabled
+	// (Runtime.Metrics non-nil iff MetricsAddr was set). The server
+	// shuts down with the runtime; scrape failures must never take
+	// the daemon down, so ListenAndServe errors after shutdown are
+	// logged, not propagated.
+	var metricsSrv *http.Server
+	if d.Metrics != nil {
+		addr := d.Config.MetricsAddr
+		metricsSrv = &http.Server{
+			Addr:              addr,
+			Handler:           d.Metrics.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("daemon: metrics listener on %s: %w", addr, err)
+		}
+		d.Logger.Info("metrics endpoint serving", map[string]any{"addr": addr, "path": "/metrics"})
+		go func() {
+			if serr := metricsSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+				d.Logger.Error("metrics server error", map[string]any{"error": serr.Error()})
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = metricsSrv.Shutdown(shutdownCtx)
+		}()
 	}
 
 	// Block until ctx is done (signal.NotifyContext in the command),
