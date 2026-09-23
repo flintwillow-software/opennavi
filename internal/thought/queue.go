@@ -24,6 +24,12 @@ type Slot struct {
 	WorkerID  string
 	ThoughtID string
 	Reserved  bool // reserved for high-priority thoughts
+	// Foreground marks a slot held for the binary run's interactive
+	// thought (S010003): only foreground-tagged thoughts may claim
+	// it, so interactive work never starves behind daemon backlog.
+	// Foreground thoughts may still use open slots, and preemption
+	// applies to them like everything else (same priority rules).
+	Foreground bool
 }
 
 // HighPriorityThreshold: thoughts at or above this priority (i.e. this
@@ -32,9 +38,15 @@ const HighPriorityThreshold = 3
 
 // Config configures a ThoughtQueue (spec §3.2).
 type Config struct {
-	MaxConcurrent  int
-	PrioritySlots  int
-	SlotExhaustion SlotExhaustionPolicy
+	MaxConcurrent int
+	PrioritySlots int
+	// ForegroundSlots reserves capacity for the binary run's
+	// interactive thought (S010003): foreground-tagged thoughts claim
+	// these first (they may also use open slots), and non-foreground
+	// thoughts never occupy them. Same priority/preemption rules as
+	// every other slot. Disjoint from PrioritySlots.
+	ForegroundSlots int
+	SlotExhaustion  SlotExhaustionPolicy
 }
 
 // QueueEventKind enumerates queue event types (for observers/logging).
@@ -61,6 +73,10 @@ type QueueEvent struct {
 	ThoughtID string
 	Detail    string
 	At        time.Time
+	// Delivery is the routing path for EventMessageRouted acks
+	// (S010312: "context-append" | "steering" | "resume-with-message"
+	// | ""). Empty on lifecycle events.
+	Delivery string
 }
 
 // ThoughtQueue is a priority queue with bounded capacity (spec §3.1).
@@ -77,6 +93,11 @@ type ThoughtQueue struct {
 	slots    []Slot
 
 	store Store
+
+	// steeringRouter delivers messages to a running thought's agent
+	// (S010312 running-path); invoked OUTSIDE q.mu — implementations
+	// must not re-enter the queue. Wired by the runtime (NAVI-320).
+	steeringRouter SteeringRouter
 
 	eventsMu sync.Mutex
 	handlers []func(QueueEvent)
@@ -103,6 +124,12 @@ func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
 	if cfg.PrioritySlots < 0 || cfg.PrioritySlots > cfg.MaxConcurrent {
 		return nil, fmt.Errorf("thought: priority_slots must be in [0, max_concurrent]")
 	}
+	if cfg.ForegroundSlots < 0 || cfg.ForegroundSlots > cfg.MaxConcurrent {
+		return nil, fmt.Errorf("thought: foreground_slots must be in [0, max_concurrent]")
+	}
+	if cfg.ForegroundSlots+cfg.PrioritySlots > cfg.MaxConcurrent {
+		return nil, fmt.Errorf("thought: foreground_slots + priority_slots must be <= max_concurrent")
+	}
 	if cfg.SlotExhaustion == "" {
 		cfg.SlotExhaustion = PolicyQueue
 	}
@@ -112,6 +139,9 @@ func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
 		slots[i] = Slot{
 			ID:       fmt.Sprintf("slot-%d", i+1),
 			Reserved: i < cfg.PrioritySlots, // priority thoughts fill reserved slots first
+			// Foreground reservation (S010003): carved from the tail of
+			// the slot pool, disjoint from the priority-reserved head.
+			Foreground: i >= cfg.MaxConcurrent-cfg.ForegroundSlots,
 		}
 	}
 
@@ -457,14 +487,24 @@ func (q *ThoughtQueue) GetThought(id string) (*Thought, error) {
 // slot to a low-priority thought while a normal one might free up.
 func (q *ThoughtQueue) findSlotFor(t *Thought) string {
 	high := t.EffectivePriority() <= HighPriorityThreshold
-	var normalFree string
+	var normalFree, foregroundFree string
 	for _, s := range q.slots {
 		if s.ThoughtID != "" {
 			continue
 		}
+		if s.Foreground {
+			// Foreground reservation (S010003): held for foreground
+			// thoughts only — daemon backlog cannot starve the
+			// interactive session, and a foreground thought prefers its
+			// reserved slot over consuming shared capacity.
+			if t.Foreground && foregroundFree == "" {
+				foregroundFree = s.ID
+			}
+			continue
+		}
 		if s.Reserved {
-			if high {
-				return s.ID // priority thoughts fill reserved slots first
+			if high && normalFree == "" {
+				normalFree = s.ID // priority thoughts fill reserved slots first
 			}
 			continue
 		}
@@ -472,16 +512,27 @@ func (q *ThoughtQueue) findSlotFor(t *Thought) string {
 			normalFree = s.ID
 		}
 	}
-	// High-priority thoughts may also take normal slots.
-	if high && normalFree != "" {
-		return normalFree
+	// Foreground thoughts prefer their reserved slot, then normal
+	// capacity (schedulable like any other, S010003 §06).
+	if t.Foreground && foregroundFree != "" {
+		return foregroundFree
 	}
 	return normalFree
 }
 
-// preemptCandidate finds the lowest-priority running thought that the
-// given thought may preempt (only high-priority thoughts preempt, and
-// only strictly lower-priority victims; spec §3.2).
+// preemptCandidate picks the lowest-priority running thought the given
+// high-priority thought may preempt (only strictly lower-priority
+// victims; spec §3.2).
+//
+// Slot-type rule (S010003 foreground reservation): a victim whose slot
+// the preemptor could not claim must not be picked — preemption frees
+// the victim's slot for the preemptor, and freeing a slot the
+// preemptor can never use (a foreground slot, for a non-foreground
+// preemptor) would park the interactive thought for nothing. The
+// victim's occupied slot is resolved by r.SlotID (running thoughts
+// carry their claim); foreground-slot victims are preemptable only by
+// foreground preemptors, normal-slot victims by anyone meeting the
+// priority rule (same priority/preemption rules as everything else).
 func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 	if t.EffectivePriority() > HighPriorityThreshold {
 		return ""
@@ -491,6 +542,9 @@ func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 	for _, r := range q.running {
 		if r.EffectivePriority() <= t.EffectivePriority() {
 			continue // can only preempt strictly lower priority
+		}
+		if slot := q.slotBy(r.SlotID); slot != nil && slot.Foreground && !t.Foreground {
+			continue // would free a slot the preemptor can never claim
 		}
 		if victimID == "" || r.EffectivePriority() > victimPrio {
 			victimID = r.ID
