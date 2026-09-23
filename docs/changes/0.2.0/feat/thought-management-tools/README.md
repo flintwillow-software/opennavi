@@ -45,6 +45,12 @@ S130600, S130601, S130602, S130603, S130604 (with S010002 queue ops, S130400 reg
 
 ## Notes
 
-- **Step 4 grouping**: own epic ("Navi self-management tools") or a sub-epic under the tool catalog epic — implementation depends on the `defer_until` queue mechanism (issue 1) and the tools package (issue 2); registration wiring can ride with the thought-loop epic's binary-run work since both touch `Assemble`.
-- **Dependency interaction with the thought-loop epic**: the queue-handle registration variant is the new seam; `RouteMessage` (thought-loop issue 1) shares the same "never re-enter under q.mu" discipline.
+- **Step 4 grouping**: own epic — NAVI-321 ("Thought management tools — the navi manages its own queue (S130600)", parent NAVI-59) with two sub-issues: NAVI-322 defer_until queue mechanism + queue-handle registration seam (blocks the tools package), NAVI-323 tools/thoughts package + daemon registration.
+- **Dependency interaction with the thought-loop epic**: the queue-handle registration variant is the new seam; `RouteMessage` (thought-loop issue NAVI-317) shares the same "never re-enter under q.mu" discipline.
 - Tool names follow the namespace_action pattern (S130400 §04): `thoughts_read`, `thoughts_create`, `thoughts_update`, `thoughts_delete`.
+
+## Tracked
+
+- Epic: Thought management tools — the navi manages its own queue — NAVI-321 [priority: high]
+  - Issue: defer_until queue mechanism + queue-handle registration seam — NAVI-322 [priority: high, blocks: NAVI-323]
+  - Issue: tools/thoughts package + daemon registration — NAVI-323 [priority: medium, blocked-by: NAVI-322]
