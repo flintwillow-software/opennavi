@@ -1,12 +1,12 @@
 ---
 status: draft
 created: '2026-07-29'
-updated: '2026-07-29'
+updated: '2026-09-23'
 tags:
   - spec
   - navi-core
 priority: medium
-spec-refs: [000400, 000401, 000402, 000403, 000404, 000405]
+spec-refs: [000400, 000401, 000402, 000403, 000404, 000405, 000406, 000407]
 ---
 
 # Interface Set
@@ -73,7 +73,7 @@ interfaces: InterfaceSet{
 }
 ```
 
-**User experience:** `opennavi` launches the TUI. User types prompts, agent responds with streaming output. Tools execute in background with collapsible output. Session branching via keyboard shortcuts.
+**User experience:** The TUI is a **portal over the thought queue** (S000406), not a chat transcript: the queue view is the home screen; the live view hops into the running thought (streaming content, tool calls); messages attach to, steer, or schedule thoughts. `opennavi` (binary run) launches the TUI attached to the navi's in-process queue; the same TUI attached remotely (S000407) shows the identical view of a navi running elsewhere. Tools execute in background with collapsible output. Session branching via keyboard shortcuts.
 
 ---
 
@@ -492,7 +492,93 @@ The system SHALL support the interface configuration fields defined in the refer
 
 ---
 
-## 05 Next Steps
+## 06 TUI as Thought-Queue Portal (S000406)
+
+The TUI is a **door into the house** (S010000): a portal over the thought queue, not a chat REPL with an agent behind it.
+
+### Requirement: Queue View as Home
+
+The TUI SHALL present the navi's thought queue as its home view: each thought with id, status, priority, age, checkpoint presence, and session-log pointer, updated live from the queue event fanout.
+
+#### Scenario: Live queue updates
+
+GIVEN the TUI is attached to a navi (in-process binary run or via gateway)
+WHEN a thought transitions lifecycle (enqueued, started, paused, completed, …)
+THEN the queue view SHALL reflect the transition within one event delivery.
+
+### Requirement: Per-Thought Actions
+
+The TUI SHALL allow the user to act on any thought in the queue: attach a message, bump priority, pause, resume, cancel, and retry a failed thought.
+
+#### Scenario: Message on a queued thought
+
+GIVEN a thought in pending state
+WHEN the user attaches a message to it
+THEN the system SHALL append the message to the thought's Context for when it runs.
+
+### Requirement: Live Thought View
+
+The TUI SHALL let the user hop into the running thought and observe it live: streamed content deltas, tool calls and results, and lifecycle transitions. Observation is read-only; steering is the write path.
+
+#### Scenario: Hop into the running thought
+
+GIVEN a thought is running
+WHEN the user opens the live view
+THEN the TUI SHALL stream the thought's agent events (content deltas, tool calls, transitions) as they fire.
+
+### Requirement: Steering (Write Path)
+
+The TUI SHALL inject messages into a running thought through the agent's steering queue (turn-boundary injection), with a queue-level delivery acknowledgment. Steering a paused thought SHALL resume it with the message attached.
+
+#### Scenario: Steer the running thought
+
+GIVEN the live view of a running thought
+WHEN the user sends a message
+THEN the system SHALL inject it at the next turn boundary and emit a delivery-ack event the TUI displays as "delivered to thought X".
+
+### Requirement: Message Granularity
+
+Connector-sourced messages (gateway, cron, bot adapters, CLI enqueue) SHALL enqueue one thought per message. TUI messages SHALL attach to existing thoughts (context append when queued; steering when running; resume-with-message when paused) or schedule new thoughts — never spawn implicit per-message thoughts.
+
+#### Scenario: Connector message is discrete work
+
+GIVEN a gateway adapter receives an inbound request
+WHEN the adapter delivers it
+THEN the system SHALL enqueue it as its own thought.
+
+## 07 Remote Portal Attachment (S000407)
+
+The gateway interface SHALL expose a portal-attachment surface so the same TUI manages a navi running elsewhere: an event stream (queue + thought events — the same events a locally-attached TUI consumes in-process) and a control channel (attach message, steer, pause/resume/cancel, enqueue).
+
+### Requirement: Same Portal, Different Transport
+
+The TUI SHALL be transport-agnostic: the identical portal view and actions work in-process (binary run) and over the gateway (remote attachment to a navi running elsewhere).
+
+#### Scenario: Remote TUI mirrors the queue
+
+GIVEN a daemon navi running on another host with the gateway enabled
+WHEN a TUI attaches remotely
+THEN the TUI SHALL receive the same queue/thought event stream and present the same queue and live views as a local run.
+
+#### Scenario: Remote control acts on the queue
+
+GIVEN a remotely attached TUI
+WHEN the user steers, pauses, resumes, cancels, or enqueues
+THEN the system SHALL apply the action to the daemon's queue and emit the corresponding queue event back to the attachment.
+
+### Requirement: Attachment Authorization
+
+Remote portal attachments SHALL be subject to the trust and authorization model: which attachment actions a client may perform SHALL align with the IAM access levels (S040200).
+
+#### Scenario: Unauthorized control attempt is refused
+
+GIVEN a portal client without the required trust level
+WHEN it attempts a control action (e.g. cancel a thought)
+THEN the gateway SHALL refuse the action and the TUI SHALL surface the refusal.
+
+> Wire-protocol details (framing, encoding) are owned by 05-messaging; this subfeature specifies the interface-level capability.
+
+## 08 Next Steps
 
 - **[01-navi-definition.md](./01-navi-definition.md)** — How interfaces fit into the navi definition
 - **[02-builder-compiler.md](./02-builder-compiler.md)** — How interface selection affects binary compilation
@@ -504,3 +590,4 @@ The system SHALL support the interface configuration fields defined in the refer
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S000400 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-23 | S000406, S000407 | 0.2.0 | TUI re-spec'd as thought-queue portal (queue home view, per-thought actions, live view, steering, message granularity); gateway gains remote portal attachment with authorization (thought-loop case study) |

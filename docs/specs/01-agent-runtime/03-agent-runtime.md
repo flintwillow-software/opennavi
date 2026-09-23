@@ -1,12 +1,12 @@
 ---
 status: draft
 created: '2026-07-29'
-updated: '2026-07-29'
+updated: '2026-09-23'
 tags:
   - spec
   - agent-runtime
 priority: high
-spec-refs: [010300, 010301, 010302, 010303, 010304, 010305, 010306, 010307, 010308, 010309, 010310, 010311]
+spec-refs: [010300, 010301, 010302, 010303, 010304, 010305, 010306, 010307, 010308, 010309, 010310, 010311, 010312]
 ---
 
 # Plan: Agent Runtime
@@ -822,9 +822,50 @@ internal/agent/
 5. **Follow-up queue** — Messages queued for after the current turn completes.
 6. **Agent end barrier** — Ensures all subscribers complete before `agent_end` fires.
 
+## 12 Queue-Level Message Routing (S010312)
+
+The agent-level steering queue (§05) carries messages into a running agent. The queue-level half of message routing is how humans and machines talk to *thoughts* — routed by thought ID at the queue layer, observable by portal clients (S000406):
+
+### Requirement: Thought-Routed Messages
+
+The system SHALL route messages to a specific thought by its ID, with delivery semantics per the thought's lifecycle state:
+
+| Thought state | Message delivery |
+|---------------|------------------|
+| pending / queued | append the message to the thought's `Context` |
+| running | inject via the agent steering queue (S010310, turn-boundary) |
+| paused | resume the thought and attach the message |
+| complete / cancelled | rejected — the thought is terminal |
+| failed | rejected unless the intent is retry (S010002 retry path) |
+
+#### Scenario: Message to a queued thought
+
+GIVEN a thought in pending state and a message addressed to it
+WHEN the message is delivered
+THEN the system SHALL append the message to the thought's Context and emit a queue-level delivery event.
+
+#### Scenario: Message to a paused thought
+
+GIVEN a paused thought with a checkpoint
+WHEN a message is addressed to it
+THEN the system SHALL resume the thought (paused → pending) with the message attached to its context.
+
+### Requirement: Delivery Acknowledgment
+
+Every routed message SHALL emit a queue-level acknowledgment event identifying the thought, the delivery path (context-append or steering), and the outcome — so portal clients can display "delivered to thought X" or a rejection.
+
+#### Scenario: Ack surfaces to the portal
+
+GIVEN a message routed to a running thought
+WHEN the steering queue accepts it at a turn boundary
+THEN the system SHALL emit a delivery-ack queue event with the thought id and injection point.
+
+> The in-agent steering mechanics are unchanged (§05); this subfeature specifies the queue-side routing, lifecycle-dependent semantics, and observability.
+
 
 ## Status History
 
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S010300 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-23 | S010312 | 0.2.0 | Queue-level message routing: messages routed by thought id with lifecycle-dependent delivery (context append / steering / resume-with-message) and delivery-ack events (thought-loop case study) |

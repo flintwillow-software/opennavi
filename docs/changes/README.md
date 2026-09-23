@@ -22,6 +22,7 @@
 | 0.1.0 | feat | tool-catalog | [130000—130500] | draft |
 | 0.1.0 | feat | agent-utility-tools | [130000, 130400, 130500—130507] | draft |
 | 0.1.0 | feat | agent-roles | [140000—140900] | draft |
+| 0.2.0 | feat | thought-loop | [010003, 010104, 010312, 000406, 000407] | draft |
 
 ## Version Log
 
