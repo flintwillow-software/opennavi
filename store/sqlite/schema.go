@@ -192,6 +192,34 @@ var migrations = []string{
 		dims INTEGER NOT NULL,
 		created_at DATETIME NOT NULL
 	)`,
+	// 6: stateful tool storage seam (S130500 §07) — durable todo and
+	// note state for stateful catalog tools (todo_*, note_*), scoped
+	// per navi identity (navi_id on every row; all access is
+	// navi-filtered at the store layer). State survives restarts:
+	// the tables live in the same SQLite DB as sessions/thoughts.
+	`CREATE TABLE IF NOT EXISTS todos (
+		id TEXT NOT NULL,
+		navi_id TEXT NOT NULL,
+		text TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		priority INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		PRIMARY KEY (navi_id, id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(navi_id, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_todos_activity ON todos(navi_id, priority, updated_at)`,
+	`CREATE TABLE IF NOT EXISTS notes (
+		id TEXT NOT NULL,
+		navi_id TEXT NOT NULL,
+		title TEXT NOT NULL,
+		body TEXT NOT NULL,
+		tags TEXT,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		PRIMARY KEY (navi_id, id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_notes_activity ON notes(navi_id, updated_at)`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
