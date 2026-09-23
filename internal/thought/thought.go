@@ -51,6 +51,12 @@ type Thought struct {
 	LogPath    string
 	Checkpoint []byte // last checkpoint state (for resume)
 
+	// Foreground marks this thought as the binary run's interactive
+	// work (S010003): it may claim the queue's reserved foreground
+	// slots (Config.ForegroundSlots) and competes by the same
+	// priority/preemption rules as everything else.
+	Foreground bool
+
 	// PreemptRequested is set by the queue when a higher-priority
 	// thought needs this running thought's slot. The runner honours it
 	// via ctx cancellation: snapshot progress into Checkpoint and
