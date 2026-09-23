@@ -520,17 +520,6 @@ func (q *ThoughtQueue) findSlotFor(t *Thought) string {
 	return normalFree
 }
 
-// slotOccupiedBy finds the slot currently held by a running thought
-// (caller holds q.mu). Returns nil when the thought occupies no slot.
-func (q *ThoughtQueue) slotOccupiedBy(thoughtID string) *Slot {
-	for i := range q.slots {
-		if q.slots[i].ThoughtID == thoughtID {
-			return &q.slots[i]
-		}
-	}
-	return nil
-}
-
 // preemptCandidate picks the lowest-priority running thought the given
 // high-priority thought may preempt (only strictly lower-priority
 // victims; spec §3.2).
