@@ -129,6 +129,12 @@ const (
 	PortalActResume  PortalAction = "resume"
 	PortalActCancel  PortalAction = "cancel"
 	PortalActEnqueue PortalAction = "enqueue"
+	// TUI per-thought actions (NAVI-319): bump priority / retry a
+	// failed thought. The queue emits no event for these (scope: the
+	// TUI surfaces the operation result), so the portal returns them
+	// directly; authorization is applied like every other control.
+	PortalActBump  PortalAction = "bump"
+	PortalActRetry PortalAction = "retry"
 )
 
 // PortalAuthorizer governs attach + control (S040200). Authorizers are
@@ -414,6 +420,32 @@ func (p *Portal) Enqueue(identity string, t *thought.Thought) error {
 		return fmt.Errorf("portal: no queue bound")
 	}
 	return p.queue.Enqueue(t)
+}
+
+// BumpPriority changes a queued thought's priority through the queue's
+// BumpPriority (clamped by the queue; the operation result is the
+// immediate feedback — the queue itself emits no event for it).
+func (p *Portal) BumpPriority(identity, thoughtID string, prio int) error {
+	if err := p.authorize(PortalActBump, identity); err != nil {
+		return err
+	}
+	if p.queue == nil {
+		return fmt.Errorf("portal: no queue bound")
+	}
+	return p.queue.BumpPriority(thoughtID, prio)
+}
+
+// Retry re-queues a failed thought (S010002): the queue's Retry flips
+// it back to pending; the enqueued(retry) event comes back on the
+// stream.
+func (p *Portal) Retry(identity, thoughtID string) error {
+	if err := p.authorize(PortalActRetry, identity); err != nil {
+		return err
+	}
+	if p.queue == nil {
+		return fmt.Errorf("portal: no queue bound")
+	}
+	return p.queue.Retry(thoughtID)
 }
 
 // Queue returns the bound queue (serve paths use it to seed tests /

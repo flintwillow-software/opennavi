@@ -37,10 +37,10 @@ import (
 // (bounded memory; the ReadAfter cursor reports the gap).
 const DefaultPortalMailboxCap = 4096
 
-// portalHandler returns the gateway handler: GET /portal/events
+// PortalHandler returns the gateway handler: GET /portal/events
 // drains the stream after a cursor; POST /portal/control applies a
 // control action (authorizer-gated, fail closed).
-func portalHandler(d *Runtime) http.Handler {
+func PortalHandler(d *Runtime) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/portal/events":
@@ -168,6 +168,14 @@ func serveControl(w http.ResponseWriter, r *http.Request, d *Runtime) {
 		ctrlErr = d.Portal.Resume(identity, thoughtID)
 	case "cancel":
 		ctrlErr = d.Portal.Cancel(identity, thoughtID)
+	case "bump":
+		prio := 4
+		if v, ok := req["priority"].(float64); ok && v >= 1 && v <= 10 {
+			prio = int(v)
+		}
+		ctrlErr = d.Portal.BumpPriority(identity, thoughtID, prio)
+	case "retry":
+		ctrlErr = d.Portal.Retry(identity, thoughtID)
 	case "enqueue":
 		now := time.Now().UTC()
 		t := &thought.Thought{
