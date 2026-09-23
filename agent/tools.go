@@ -22,13 +22,28 @@ const maxFileReadBytes = 512 * 1024
 // maxShellOutputBytes caps shell_exec combined output.
 const maxShellOutputBytes = 100 * 1024
 
+// BuiltinTool pairs a builtin descriptor with its implementation.
+type BuiltinTool struct {
+	Tool AgentTool
+	Run  func(map[string]any) (string, error)
+}
+
+// BuiltinTools returns the builtin tools (file_read, shell_exec)
+// bound to the given working directory. Used both by
+// RegisterBuiltinTools and by registry-based registration
+// (tools/builtin).
+func BuiltinTools(workDir string) []BuiltinTool {
+	tr, hr := makeFileRead(workDir)
+	ts, hs := makeShellExec(workDir)
+	return []BuiltinTool{{Tool: tr, Run: hr}, {Tool: ts, Run: hs}}
+}
+
 // RegisterBuiltinTools registers the real tools (file_read, shell_exec)
 // bound to the given working directory.
 func RegisterBuiltinTools(ex *ToolExecutor, workDir string) {
-	tr, hr := makeFileRead(workDir)
-	ex.RegisterTool(tr, hr)
-	ts, hs := makeShellExec(workDir)
-	ex.RegisterTool(ts, hs)
+	for _, bt := range BuiltinTools(workDir) {
+		ex.RegisterTool(bt.Tool, bt.Run)
+	}
 }
 
 // safePath resolves p relative to workDir and rejects paths that escape

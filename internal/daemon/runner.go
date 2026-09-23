@@ -13,6 +13,8 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/tools/bridge"
+	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
 // checkpointPrefix is the self-describing magic for the checkpoint
@@ -40,6 +42,12 @@ type agentRunnerDeps struct {
 	workDir       string
 	compactBudget int
 	logger        *logging.Logger
+	// registry holds the assembled tool registry; bind carries the
+	// bridge options (ToolPolicy mapping) used to bind its active set
+	// into each thought run's executor. When nil, agents keep the
+	// executor NewAgent built (builtin-only, no registry governance).
+	registry *registry.Registry
+	bind     bridge.Options
 }
 
 // NewAgentRunner builds the agent-backed Runner.
@@ -63,10 +71,22 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	// One agent per thought: fresh state isolation (spec: one worker
 	// per thought, isolated processing).
 	a := agent.NewAgent(agent.AgentConfig{
-		Provider: "daemon-wired",
-		Model:    r.deps.model,
+		Provider:     "daemon-wired",
+		Model:        r.deps.model,
+		SystemPrompt: r.deps.systemPrompt,
+		Compaction:   compactionConfig(r.deps.compactBudget),
 	})
 	a.Provider = agentProviderAdapter{chain: r.deps.chain}
+
+	// Registry-first tool surface (S130400/NAVI-272): the executor is
+	// rebuilt from the registry's active set via tools/bridge, so the
+	// LLM-facing tool list is exactly the permitted active set and
+	// policy (allowed/blocked, timeout overrides) governs it. This
+	// replaces the executor NewAgent seeded with raw builtins — when
+	// the registry is governed, it is authoritative.
+	if err := r.bindTools(a); err != nil {
+		return fmt.Errorf("daemon: bind tool registry for thought %s: %w", t.ID, err)
+	}
 
 	// Crash recovery / resume: restore a checkpoint if present and
 	// restorable; a stale/corrupt checkpoint degrades to a fresh run
@@ -227,4 +247,32 @@ func (r *AgentRunner) persistConversation(t *thought.Thought, msgs []agent.Agent
 		sess.AppendEntry(e)
 	}
 	return r.deps.sessionM.SaveSession(sess)
+}
+
+// bindTools rebuilds the agent's executor from the registry's active
+// set via tools/bridge (registry authority: only active, permitted
+// tools are bound — inactive builtins disappear). No-op without a
+// registry (agents keep NewAgent's builtin seeding).
+func (r *AgentRunner) bindTools(a *agent.Agent) error {
+	if r.deps.registry == nil {
+		return nil
+	}
+	ex := agent.NewToolExecutor("parallel", 4)
+	bound, err := bridge.Bind(ex, r.deps.registry, r.deps.bind)
+	if err != nil {
+		return err
+	}
+	a.Executor = ex
+	if r.deps.logger != nil && len(bound) > 0 {
+		r.deps.logger.Debug("tools bound", map[string]any{"tools": bound})
+	}
+	return nil
+}
+
+// compactionConfig maps the CLI compact-budget flag onto the agent's
+func compactionConfig(budget int) *agent.CompactionConfig {
+	if budget <= 0 {
+		return nil
+	}
+	return &agent.CompactionConfig{Enabled: true, MaxTokens: budget}
 }
