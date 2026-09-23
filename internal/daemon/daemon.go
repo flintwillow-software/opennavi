@@ -23,6 +23,7 @@ import (
 	"github.com/flintwillow-software/opennavi/tools/builtin"
 	"github.com/flintwillow-software/opennavi/tools/note"
 	"github.com/flintwillow-software/opennavi/tools/registry"
+	timepkg "github.com/flintwillow-software/opennavi/tools/time"
 	"github.com/flintwillow-software/opennavi/tools/todo"
 )
 
@@ -135,6 +136,12 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 	if err := note.Register(reg, naviID, stateful); err != nil {
+		store.Close()
+		return nil, err
+	}
+	// Stateless catalog tools (S130500): time_read needs no store
+	// handle.
+	if err := timepkg.RegisterTools(reg); err != nil {
 		store.Close()
 		return nil, err
 	}

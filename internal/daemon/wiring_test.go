@@ -38,10 +38,10 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 	want := map[string]bool{
 		agent.ToolFileRead: true, agent.ToolShellExec: true,
 		"todo_read": true, "todo_write": true, "todo_update": true,
-		"note_read": true, "note_write": true,
+		"note_read": true, "note_write": true, "time_read": true,
 	}
 	if len(active) != len(want) {
-		t.Fatalf("active set = %v, want 7 tools", active)
+		t.Fatalf("active set = %v, want 8 tools", active)
 	}
 	for _, name := range active {
 		if !want[name] {
@@ -80,6 +80,18 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 	if !strings.Contains(out, "note tools registered") {
 		t.Fatalf("note_read output = %q", out)
 	}
+
+	// time_read dispatches statelessly and honors an IANA zone.
+	out, err = rt.Registry.Dispatch(context.Background(), "time_read", []byte(`{"timezone":"Asia/Kolkata"}`))
+	if err != nil {
+		t.Fatalf("dispatch time_read: %v", err)
+	}
+	if !strings.Contains(out, "+05:30") {
+		t.Fatalf("time_read output = %q, want a +05:30 offset", out)
+	}
+	if _, err := rt.Registry.Dispatch(context.Background(), "time_read", []byte(`{"timezone":"Mars/Olympus"}`)); err == nil {
+		t.Fatal("invalid timezone must error")
+	}
 }
 
 func TestAssembleToolPolicyComposesActiveSet(t *testing.T) {
@@ -106,8 +118,8 @@ tools:
 	defer rt.Store.Close()
 
 	active := rt.Registry.ActiveNames()
-	if len(active) != 6 { // file_read + 3 todo + 2 note (shell_exec blocked)
-		t.Fatalf("active set = %v, want file_read + todo + note tools", active)
+	if len(active) != 7 { // file_read + 3 todo + 2 note + time_read (shell_exec blocked)
+		t.Fatalf("active set = %v, want file_read + todo + note + time tools", active)
 	}
 	for _, name := range active {
 		if name == agent.ToolShellExec {

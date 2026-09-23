@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Daemon registration of the time tool (NAVI-272 wiring): `Assemble` registers the stateless `time_read` via `time.RegisterTools`; assembly tests extend dispatch coverage to time_read (IANA zone conversion + invalid-zone error) (NAVI-272)
+
+### Changed
+- `tools/time`: embed the IANA tzdata database (`_ "time/tzdata"`) — `time.LoadLocation` previously depended on the host's zoneinfo and would degrade to UTC-only in scratch/minimal containers (CGO_ENABLED=0 daemons included) (NAVI-272)
 - `tools/time` — stateless `time_read` tool (S130500 §03): current time in the requested IANA timezone (default UTC until the runtime zone-config lands) as ISO 8601 with UTC offset plus epoch seconds (on by default, `epoch: false` suppresses); invalid zones rejected with an error naming the zone; pure `time` stdlib, registered via plain `registry.Register` (NAVI-269)
 - Daemon registration of the note tools (NAVI-272 wiring): `Assemble` registers `note_read`/`note_write` for the navi's identity through the stateful seam (default 64 KiB / 10 MiB caps; per-navi total cap configurable via `note.Options` when a config surface lands); assembly tests extend the end-to-end dispatch coverage to note_write→note_read (NAVI-272)
 - Daemon registration of the todo tools (NAVI-272 wiring): `Assemble` registers `todo_read`/`todo_write`/`todo_update` for the navi's identity through the stateful seam (`todo.RegisterTools`, default `--navi-id` scope `default`) and includes them in the default active set; assembly tests verify end-to-end todo_write→todo_read dispatch through the assembled registry (NAVI-272)
