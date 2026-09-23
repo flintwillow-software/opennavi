@@ -488,3 +488,77 @@ func (r *routeRecorder) list() []QueueEvent {
 	defer r.mu.Unlock()
 	return append([]QueueEvent(nil), r.acks...)
 }
+
+// ── preemption across the foreground boundary (review #288) ─────────
+
+func TestPreemptSkipsForegroundSlotForNonForegroundPreemptor(t *testing.T) {
+	// Reviewer trace: MaxConcurrent=2, ForegroundSlots=1. Daemon prio 4
+	// holds the normal slot; interactive prio 5 holds the foreground
+	// slot. A high-priority NON-foreground thought must not preempt the
+	// foreground victim — it can never claim the freed slot, so the
+	// interactive thought would pause for nothing.
+	q, _ := NewQueue(Config{MaxConcurrent: 2, ForegroundSlots: 1}, NewMemoryStore())
+	_ = q.Enqueue(&Thought{ID: "d1", Prompt: "daemon", Priority: 4, Status: ThoughtPending})
+	_ = q.Enqueue(&Thought{ID: "fg-low", Prompt: "interactive", Priority: 5, Status: ThoughtPending, Foreground: true})
+	if _, ok := q.Dequeue(); !ok { // daemon → normal slot
+		t.Fatal("first claim failed")
+	}
+	if _, ok := q.Dequeue(); !ok { // interactive → foreground slot
+		t.Fatal("second claim failed")
+	}
+
+	// Direct probe: the foreground victim is invisible to a
+	// non-foreground preemptor — it picks the normal-slot victim
+	// instead (prio 4), whose freed slot it can actually use.
+	urgent := &Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}
+	if victim := q.preemptCandidate(urgent); victim != "d1" {
+		t.Fatalf("non-foreground preemptor picked %q, want d1 (normal slot; foreground slot is unusable to it)", victim)
+	}
+
+	// A foreground preemptor of the same priority CAN take it (fg → fg
+	// is type-compatible).
+	urgentFG := &Thought{ID: "urgent-fg", Prompt: "interactive urgent", Priority: 1, Status: ThoughtPending, Foreground: true}
+	if victim := q.preemptCandidate(urgentFG); victim != "fg-low" {
+		t.Fatalf("foreground preemptor picked %q, want fg-low", victim)
+	}
+}
+
+func TestPreemptNormalSlotVictimUnchanged(t *testing.T) {
+	// Non-foreground preemptor still preempts normal-slot victims
+	// (same priority/preemption rules; the reservation only guards
+	// foreground slots).
+	q, _ := NewQueue(Config{MaxConcurrent: 1}, NewMemoryStore())
+	_ = q.Enqueue(&Thought{ID: "victim", Prompt: "long", Priority: 5, Status: ThoughtPending})
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.GetThought("victim")
+	if !got.PreemptRequested {
+		t.Fatal("normal-slot victim must stay preemptable by high-priority work")
+	}
+}
+
+func TestPreemptForegroundTakesFreedSlot(t *testing.T) {
+	// Foreground preemptor frees the foreground slot and claims it:
+	// end-to-end park → re-claim without a stray non-foreground claim.
+	q, _ := NewQueue(Config{MaxConcurrent: 2, ForegroundSlots: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	_ = q.Enqueue(&Thought{ID: "d1", Prompt: "daemon", Priority: 4, Status: ThoughtPending})
+	_ = q.Enqueue(&Thought{ID: "fg-low", Prompt: "interactive", Priority: 5, Status: ThoughtPending, Foreground: true})
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("first claim failed")
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("second claim failed")
+	}
+	urgentFG := &Thought{ID: "urgent-fg", Prompt: "interactive urgent", Priority: 1, Status: ThoughtPending, Foreground: true}
+	if err := q.Enqueue(urgentFG); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.GetThought("fg-low")
+	if !got.PreemptRequested {
+		t.Fatal("foreground victim not preempted by foreground urgent work")
+	}
+}

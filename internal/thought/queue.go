@@ -523,6 +523,29 @@ func (q *ThoughtQueue) findSlotFor(t *Thought) string {
 // preemptCandidate finds the lowest-priority running thought that the
 // given thought may preempt (only high-priority thoughts preempt, and
 // only strictly lower-priority victims; spec §3.2).
+// slotOccupiedBy finds the slot currently held by a running thought
+// (caller holds q.mu). Returns nil when the thought occupies no slot.
+func (q *ThoughtQueue) slotOccupiedBy(thoughtID string) *Slot {
+	for i := range q.slots {
+		if q.slots[i].ThoughtID == thoughtID {
+			return &q.slots[i]
+		}
+	}
+	return nil
+}
+
+// preemptCandidate picks the lowest-priority running thought the given
+// high-priority thought may preempt (only strictly lower-priority
+// victims; spec §3.2).
+//
+// Slot-type rule (S010003 foreground reservation): a victim whose slot
+// the preemptor could not claim must not be picked — preemption frees
+// the victim's slot for the preemptor, and freeing a slot the
+// preemptor can never use (a foreground slot, for a non-foreground
+// preemptor) would park the interactive thought for nothing. Foreground
+// victims are therefore preemptable only by foreground preemptors;
+// normal-slot victims remain preemptable by anyone meeting the
+// priority rule (same priority/preemption rules as everything else).
 func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 	if t.EffectivePriority() > HighPriorityThreshold {
 		return ""
@@ -532,6 +555,9 @@ func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 	for _, r := range q.running {
 		if r.EffectivePriority() <= t.EffectivePriority() {
 			continue // can only preempt strictly lower priority
+		}
+		if slot := q.slotOccupiedBy(r.ID); slot != nil && slot.Foreground && !t.Foreground {
+			continue // would free a slot the preemptor can never claim
 		}
 		if victimID == "" || r.EffectivePriority() > victimPrio {
 			victimID = r.ID
