@@ -542,9 +542,10 @@ func (q *ThoughtQueue) slotOccupiedBy(thoughtID string) *Slot {
 // the preemptor could not claim must not be picked — preemption frees
 // the victim's slot for the preemptor, and freeing a slot the
 // preemptor can never use (a foreground slot, for a non-foreground
-// preemptor) would park the interactive thought for nothing. Foreground
-// victims are therefore preemptable only by foreground preemptors;
-// normal-slot victims remain preemptable by anyone meeting the
+// preemptor) would park the interactive thought for nothing. The
+// victim's occupied slot is resolved by r.SlotID (running thoughts
+// carry their claim); foreground-slot victims are preemptable only by
+// foreground preemptors, normal-slot victims by anyone meeting the
 // priority rule (same priority/preemption rules as everything else).
 func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 	if t.EffectivePriority() > HighPriorityThreshold {
@@ -556,7 +557,7 @@ func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 		if r.EffectivePriority() <= t.EffectivePriority() {
 			continue // can only preempt strictly lower priority
 		}
-		if slot := q.slotOccupiedBy(r.ID); slot != nil && slot.Foreground && !t.Foreground {
+		if slot := q.slotBy(r.SlotID); slot != nil && slot.Foreground && !t.Foreground {
 			continue // would free a slot the preemptor can never claim
 		}
 		if victimID == "" || r.EffectivePriority() > victimPrio {

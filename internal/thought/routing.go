@@ -90,6 +90,16 @@ func (q *ThoughtQueue) SetSteeringRouter(fn SteeringRouter) {
 	q.mu.Unlock()
 }
 
+// slotBy returns the slot with the given ID (caller holds q.mu).
+func (q *ThoughtQueue) slotBy(slotID string) *Slot {
+	for i := range q.slots {
+		if q.slots[i].ID == slotID {
+			return &q.slots[i]
+		}
+	}
+	return nil
+}
+
 // locate finds the thought by id across all queue lists and reports
 // which list holds it (caller holds q.mu). The returned pointer is
 // the queue's own thought — mutation is safe under q.mu.

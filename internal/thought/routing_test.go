@@ -562,3 +562,70 @@ func TestPreemptForegroundTakesFreedSlot(t *testing.T) {
 		t.Fatal("foreground victim not preempted by foreground urgent work")
 	}
 }
+
+// TestPreemptNoNormalCapacityStaysPending: a non-foreground
+// high-priority thought does NOT preempt a foreground thought
+// occupying its reserved slot when no normal capacity is free — the
+// capacity genuinely belongs to the interactive session, so urgent
+// work stays pending rather than parking the interactive thought for
+// a slot it can never claim.
+func TestPreemptNoNormalCapacityStaysPending(t *testing.T) {
+	q, _ := NewQueue(Config{MaxConcurrent: 2, ForegroundSlots: 1}, NewMemoryStore())
+	// Foreground thought holds the reserved slot; the normal slot is
+	// occupied by an equal-priority (non-preemptable) thought — so no
+	// normal capacity is free AND no claimable victim exists.
+	_ = q.Enqueue(&Thought{ID: "fg", Prompt: "interactive", Priority: 5, Status: ThoughtPending, Foreground: true})
+	_ = q.Enqueue(&Thought{ID: "peer", Prompt: "equal priority", Priority: 1, Status: ThoughtPending})
+	if _, ok := q.Dequeue(); !ok { // fg → foreground slot
+		t.Fatal("first claim failed")
+	}
+	if _, ok := q.Dequeue(); !ok { // peer → normal slot
+		t.Fatal("second claim failed")
+	}
+
+	urgent := &Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}
+	if victim := q.preemptCandidate(urgent); victim != "" {
+		t.Fatalf("no-capacity trace picked victim %q — must stay pending (fg slot unusable, peer not strictly lower priority)", victim)
+	}
+	// End-to-end: enqueue → no cooperative preemption of the
+	// interactive thought; urgent waits per PolicyQueue.
+	if err := q.Enqueue(urgent); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	got, _ := q.GetThought("fg")
+	if got.PreemptRequested {
+		t.Fatal("interactive thought preempted despite unclaimable freed slot")
+	}
+}
+
+// TestPreemptForegroundOnNormalSlot: a non-foreground high-priority
+// thought DOES preempt a foreground thought sitting on a normal slot
+// (fallback usage) — the freed normal slot is claimable via the
+// fallback path.
+func TestPreemptForegroundOnNormalSlot(t *testing.T) {
+	q, _ := NewQueue(Config{MaxConcurrent: 2, ForegroundSlots: 1}, NewMemoryStore())
+	// Fill the reserved slot with another foreground thought so the
+	// low-priority foreground thought falls back to the normal slot.
+	_ = q.Enqueue(&Thought{ID: "fg-holder", Prompt: "interactive", Priority: 5, Status: ThoughtPending, Foreground: true})
+	_ = q.Enqueue(&Thought{ID: "fg-low", Prompt: "interactive 2", Priority: 5, Status: ThoughtPending, Foreground: true})
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("first claim failed")
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("second claim failed")
+	}
+	// Confirm fg-low actually holds the normal slot (fallback path).
+	low, _ := q.GetThought("fg-low")
+	if strings.HasSuffix(low.SlotID, "slot-2") { // slot-2 is the foreground slot (tail carve)
+		t.Fatalf("test setup: fg-low should sit on a normal slot, got %s", low.SlotID)
+	}
+
+	// Non-foreground urgent work preempts it: freed normal slot is
+	// claimable by the preemptor.
+	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := q.GetThought("fg-low"); !got.PreemptRequested {
+		t.Fatal("foreground-on-normal-slot victim must be preemptable by non-foreground work")
+	}
+}
