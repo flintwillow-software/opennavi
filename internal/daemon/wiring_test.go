@@ -38,9 +38,10 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 	want := map[string]bool{
 		agent.ToolFileRead: true, agent.ToolShellExec: true,
 		"todo_read": true, "todo_write": true, "todo_update": true,
+		"note_read": true, "note_write": true,
 	}
 	if len(active) != len(want) {
-		t.Fatalf("active set = %v, want 5 tools", active)
+		t.Fatalf("active set = %v, want 7 tools", active)
 	}
 	for _, name := range active {
 		if !want[name] {
@@ -64,6 +65,20 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 	items, err := rt.Stateful.ListTodos("default", "", 0)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("stateful list = %v (err %v)", items, err)
+	}
+
+	// Note tools dispatch through the same seam (defaults: 64 KiB /
+	// 10 MiB caps).
+	if _, err := rt.Registry.Dispatch(context.Background(), "note_write",
+		[]byte(`{"title":"wiring","body":"note tools registered","tags":["epic"]}`)); err != nil {
+		t.Fatalf("dispatch note_write: %v", err)
+	}
+	out, err = rt.Registry.Dispatch(context.Background(), "note_read", []byte(`{"tag":"epic"}`))
+	if err != nil {
+		t.Fatalf("dispatch note_read: %v", err)
+	}
+	if !strings.Contains(out, "note tools registered") {
+		t.Fatalf("note_read output = %q", out)
 	}
 }
 
@@ -91,8 +106,8 @@ tools:
 	defer rt.Store.Close()
 
 	active := rt.Registry.ActiveNames()
-	if len(active) != 4 { // file_read + 3 todo tools (shell_exec blocked)
-		t.Fatalf("active set = %v, want file_read + todo tools", active)
+	if len(active) != 6 { // file_read + 3 todo + 2 note (shell_exec blocked)
+		t.Fatalf("active set = %v, want file_read + todo + note tools", active)
 	}
 	for _, name := range active {
 		if name == agent.ToolShellExec {

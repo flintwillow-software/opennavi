@@ -21,6 +21,7 @@ import (
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/builtin"
+	"github.com/flintwillow-software/opennavi/tools/note"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 	"github.com/flintwillow-software/opennavi/tools/todo"
 )
@@ -130,6 +131,10 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		naviID = "default"
 	}
 	if err := todo.RegisterTools(reg, naviID, stateful); err != nil {
+		store.Close()
+		return nil, err
+	}
+	if err := note.Register(reg, naviID, stateful); err != nil {
 		store.Close()
 		return nil, err
 	}
