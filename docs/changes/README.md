@@ -23,6 +23,7 @@
 | 0.1.0 | feat | agent-utility-tools | [130000, 130400, 130500—130507] | draft |
 | 0.1.0 | feat | agent-roles | [140000—140900] | draft |
 | 0.2.0 | feat | thought-loop | [010003, 010104, 010312, 000406, 000407] | docs/changes/0.2.0/feat/thought-loop/ | draft |
+| 0.2.0 | feat | thought-management-tools | [130600—130604] | docs/changes/0.2.0/feat/thought-management-tools/ | draft |
 
 ## Version Log
 

@@ -1,7 +1,7 @@
 ---
 status: active
 created: '2026-08-15'
-updated: '2026-09-12'
+updated: '2026-09-23'
 tags:
   - spec-tree
   - component
@@ -24,6 +24,7 @@ spec-refs: [130000, 130100, 130200, 130300, 130400, 130500]
 | [S130300 Search, Test & Code Intelligence](03-search-test-code-intel.md) | Search, Test & Code Intelligence | active | file_grep, file_find, test_run, code_ast_parse, code_symbol_search schemas + recovery |
 | [S130400 Tool Registry & Discovery](04-tool-registry.md) | Tool Registry & Discovery | active | SDK ToolDefinition, registered vs active, provenance, discovery queries, namespace naming, validation |
 | [S130500 Agent Utility Tools](05-agent-utility-tools.md) | Agent Utility Tools | active | todo_read/write/update, time_read, note_read/write, http_request schemas + recovery; stateful tool storage seam |
+| [S130600 Thought Management Tools](06-thought-management-tools.md) | Thought Management Tools | draft | thoughts_read/create/update/delete — queue-attached tools for self-scheduling, deferred pickup (`defer_until`), and queue reshaping |
 
 > `spec-refs` lists the codes of the features in this component.
 
