@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tools/bridge` — public runtime bridge between the tool registry and the agent runtime (S130400 runtime-integration): binds the registry's active, access-permitted tools into an `agent.ToolExecutor`, applying allowed/blocked policy and per-tool timeout overrides; every call dispatches through `registry.Dispatch` so schema validation and active-set enforcement stay in the registry, and calls are aborted with a timeout error even against ctx-ignoring handlers (NAVI-75)
 - Stateful tool storage seam (S130500 §07): `store.StatefulToolStore` contract with per-navi scoping on every method (`ListTodos`/`ReplaceTodos`/`UpdateTodos`/`ReadNotes`/`UpsertNote`/`RemoveNote`), `Todo`/`Note`/`TodoUpdate`/`NoteQuery` types, and `ErrTodoNotFound`/`ErrNoteNotFound` sentinels (NAVI-267)
 - `store/sqlite`: migration 6 adds `todos` + `notes` tables keyed `(navi_id, id)` with navi-scoped indexes; `StatefulStore` implementation with transactional full-replace and atomic batch updates (unknown id rejects the whole batch)
 - `tools/registry.RegisterStateful` — registration variant binding a per-navi store handle; stateful handlers receive `StateContext{NaviID, Store}` per dispatch; stateless `Register` untouched (NAVI-267)
