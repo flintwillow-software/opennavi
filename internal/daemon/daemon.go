@@ -16,6 +16,7 @@ import (
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
+	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
 	"github.com/flintwillow-software/opennavi/internal/session"
@@ -52,6 +53,11 @@ type Runtime struct {
 	// SetSteeringRouter closure delegates here. Test seam: read via
 	// steeringSnapshot to verify injection.
 	inflight *inFlightAgents
+	// Portal is the served observation/control surface (S000407); nil
+	// when PortalAddr is unset (zero cost). PortalBuf is the served
+	// stream's bounded mailbox (single attachment for the shim).
+	Portal    *interfaces.Portal
+	PortalBuf *interfaces.PortalMailbox
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -74,6 +80,14 @@ type RuntimeParams struct {
 	// empty (the default) disables the metrics endpoint entirely —
 	// zero cost when unset.
 	MetricsAddr string
+	// PortalAddr serves the portal observation + control attachment
+	// (S000407) on "host:port" — the metrics-addr pattern. Empty
+	// (the default) disables the portal serve path entirely.
+	PortalAddr string
+	// OverrideAuthorizer is a test seam replacing the fail-closed nil
+	// authorizer (S040200): production wires nil, so every portal
+	// attachment is refused until IAM lands.
+	OverrideAuthorizer interfaces.PortalAuthorizer
 	// NaviID is the per-navi scoping key for stateful tool storage
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
@@ -243,6 +257,18 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
+	// Portal (S000407): the observation + control surface served on
+	// PortalAddr when set — zero cost when unset (mirrors MetricsAddr).
+	// No authorizer is wired in production (OverrideAuthorizer is a
+	// test seam): IAM lands later, so attachments and control fail
+	// closed until then (S040200 fail-closed stub).
+	var portal *interfaces.Portal
+	var portalBuf *interfaces.PortalMailbox
+	if params.PortalAddr != "" {
+		portal = interfaces.NewPortal(q, params.OverrideAuthorizer)
+		portalBuf = portal.Subscribe(DefaultPortalMailboxCap)
+	}
+
 	// Test seam: an injected logger replaces the env-built one.
 	var logger *logging.Logger
 	if params.Logger != nil {
@@ -267,6 +293,14 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// start; the router closure runs outside q.mu (RouteMessage
 	// guarantee) so snapshot reads are safe.
 	tracker := newInFlightAgents()
+	// Per-thought agent events (S000407): the portal observes the
+	// running agents' event buses through this hook when served.
+	var agentEvents func(thoughtID string, ev agent.AgentEvent)
+	if portal != nil {
+		agentEvents = func(thoughtID string, ev agent.AgentEvent) {
+			portal.ObserveAgent(thoughtID, ev)
+		}
+	}
 	runner := NewAgentRunner(agentRunnerDeps{
 		chain:         chain,
 		sessionM:      sessionM,
@@ -278,6 +312,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		bind:          bindOpts,
 		logger:        logger,
 		tracker:       tracker,
+		agentEvents:   agentEvents,
 	})
 	// Steering bridge (S010312/S010310): binary runs route messages to
 	// the in-flight agent's steering queue at turn boundaries. Daemon
@@ -315,6 +350,8 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		Logger:    logger,
 		Metrics:   collector,
 		inflight:  tracker,
+		Portal:    portal,
+		PortalBuf: portalBuf,
 	}, nil
 }
 
@@ -501,6 +538,37 @@ func (d *Runtime) Run(ctx context.Context) error {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			_ = metricsSrv.Shutdown(shutdownCtx)
+		}()
+	}
+
+	// Serve the portal attachment (S000407) when PortalAddr is set
+	// (Runtime.Portal non-nil iff PortalAddr was set): same listener
+	// lifecycle and graceful shutdown ordering as the metrics server.
+	// The serve shim (portal.go) is a loopback-grade JSON mapping;
+	// the real wire protocol is deferred. Control and attach fail
+	// closed until IAM lands (no authorizer wired).
+	var portalSrv *http.Server
+	if d.Portal != nil {
+		addr := d.Config.PortalAddr
+		portalSrv = &http.Server{
+			Addr:              addr,
+			Handler:           portalHandler(d),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("daemon: portal listener on %s: %w", addr, err)
+		}
+		d.Logger.Info("portal attachment serving", map[string]any{"addr": addr, "path": "/portal/events"})
+		go func() {
+			if serr := portalSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+				d.Logger.Error("portal server error", map[string]any{"error": serr.Error()})
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = portalSrv.Shutdown(shutdownCtx)
 		}()
 	}
 
