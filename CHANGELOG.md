@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Stateful tool storage seam (S130500 §07): `store.StatefulToolStore` contract with per-navi scoping on every method (`ListTodos`/`ReplaceTodos`/`UpdateTodos`/`ReadNotes`/`UpsertNote`/`RemoveNote`), `Todo`/`Note`/`TodoUpdate`/`NoteQuery` types, and `ErrTodoNotFound`/`ErrNoteNotFound` sentinels (NAVI-267)
+- `store/sqlite`: migration 6 adds `todos` + `notes` tables keyed `(navi_id, id)` with navi-scoped indexes; `StatefulStore` implementation with transactional full-replace and atomic batch updates (unknown id rejects the whole batch)
+- `tools/registry.RegisterStateful` — registration variant binding a per-navi store handle; stateful handlers receive `StateContext{NaviID, Store}` per dispatch; stateless `Register` untouched (NAVI-267)
+
+### Added
 - `sdk/` public package (S000800): `NaviDef` authoring types (name, version, personality, skills, tools, interfaces, extensions, permissions) and the `Build()` entry point with full definition validation; the S000300 builder pipeline remains pending, so `Build` fails with `ErrBuilderUnavailable` (NAVI-273)
 - Starter templates per S000313: `templates/navi-code/` (CLI coding agent) and `templates/navi-daemon/` (daemon-style) as nested Go modules pinned to the published SDK, each with an author tool registered through `tools/registry` and an example runtime config (NAVI-273)
 - CI: starter-template build job against the SDK on main and release tags (S000805 guardrail) (NAVI-273)
