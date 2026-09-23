@@ -27,6 +27,7 @@ func runDaemon(args []string) error {
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
 	compactBudget := fs.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
 	workers := fs.Int("workers", 2, "thought worker count")
+	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address, e.g. :9090 (default: disabled)")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	logFile := fs.String("log-file", "", "log file path (default stderr)")
 	if err := fs.Parse(args); err != nil {
@@ -61,6 +62,7 @@ func runDaemon(args []string) error {
 		Workers:       *workers,
 		Logger:        logger,
 		NaviID:        *naviID,
+		MetricsAddr:   *metricsAddr,
 	})
 	if err != nil {
 		return err
