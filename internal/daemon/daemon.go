@@ -45,6 +45,13 @@ type Runtime struct {
 	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
 	Logger    *logging.Logger
 	Metrics   *metrics.Collector // queue metrics; nil when disabled
+
+	// inflight resolves a running thought's in-flight agent for the
+	// steering bridge (S010312 running path; S010310 turn-boundary
+	// injection). Registered by the runner per run; the queue's
+	// SetSteeringRouter closure delegates here. Test seam: read via
+	// steeringSnapshot to verify injection.
+	inflight *inFlightAgents
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -71,6 +78,13 @@ type RuntimeParams struct {
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
 	NaviID string
+	// Foreground marks a binary run (S010003 §06): in-process queue,
+	// no connectors — the interactive session's thought occupies a
+	// reserved foreground slot (Config.ForegroundSlots >= 1), the
+	// steering bridge is registered so routed messages reach the
+	// in-flight agent, and the process exits when the session ends
+	// and the queue drains (RunForeground).
+	Foreground bool
 }
 
 // Assemble runs the startup chain: runtime merge → store → provider
@@ -207,6 +221,22 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		PrioritySlots:  thoughtPrioritySlots(rc),
 		SlotExhaustion: thought.PolicyQueue,
 	}
+	// Foreground reservation (S010003 §06, NAVI-320): a binary run
+	// reserves one slot for the interactive session's thought. The
+	// reservation is carved from the pool (disjoint from priority
+	// slots), so a binary run needs at least two slots of capacity —
+	// bump MaxConcurrent when the config is too tight (an operator
+	// setting of 1 cannot express a reservation; the interactive
+	// session would otherwise starve all daemon-style work).
+	if params.Foreground {
+		if defCfg.MaxConcurrent < 2 {
+			defCfg.MaxConcurrent = 2
+		}
+		if defCfg.PrioritySlots+1 > defCfg.MaxConcurrent {
+			defCfg.PrioritySlots = defCfg.MaxConcurrent - 1
+		}
+		defCfg.ForegroundSlots = 1
+	}
 	q, err := thought.NewQueue(defCfg, thoughtStore)
 	if err != nil {
 		store.Close()
@@ -230,6 +260,13 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		logger.Debug(msg, fields)
 	})
 	sessionM := session.NewSessionManager(store)
+
+	// In-flight agent tracker: the steering bridge resolves a running
+	// thought's agent for turn-boundary message injection (S010312
+	// running path; S010310). The runner registers each agent on run
+	// start; the router closure runs outside q.mu (RouteMessage
+	// guarantee) so snapshot reads are safe.
+	tracker := newInFlightAgents()
 	runner := NewAgentRunner(agentRunnerDeps{
 		chain:         chain,
 		sessionM:      sessionM,
@@ -240,7 +277,13 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		registry:      reg,
 		bind:          bindOpts,
 		logger:        logger,
+		tracker:       tracker,
 	})
+	// Steering bridge (S010312/S010310): binary runs route messages to
+	// the in-flight agent's steering queue at turn boundaries. Daemon
+	// mode works too (messages may arrive for any running thought) —
+	// the bridge is harmless when no route targets a running thought.
+	q.SetSteeringRouter(tracker.steer)
 	WireLogging(logger, q, sched)
 
 	// Metrics (NAVI-258): subscribe the collector to the queue's event
@@ -271,6 +314,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		Provider:  chain,
 		Logger:    logger,
 		Metrics:   collector,
+		inflight:  tracker,
 	}, nil
 }
 
