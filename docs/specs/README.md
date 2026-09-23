@@ -59,6 +59,7 @@ Each change is named for its primary spec code: `docs/changes/<version>/<NN>-<ke
 | Change | S-Code | Version | Spec Refs | Status |
 |--------|--------|---------|-----------|--------|
 | thought-loop (house model, TUI portal, remote attachment) | S010003 | 0.2.0 | [010003, 010104, 010312, 000406, 000407] | active |
+| thought-management tools (self-scheduling, deferred pickup) | S130600 | 0.2.0 | [130600, 130601—130604] | active |
 | — | — | — | — | — |
 
 ## Components
