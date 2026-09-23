@@ -31,9 +31,16 @@ import (
 // output is marked partial with a truncation notice.
 const DefaultMaxResponseBytes = 256 * 1024
 
+// DefaultTimeout is the per-call timeout in seconds (S130500 §06:
+// 30s). Per-call overrides are clamped to this ceiling — the bridge's
+// registry envelope enforces the definition's Timeout anyway, so a
+// longer per-call value could only silently shrink.
+const DefaultTimeout = 30
+
 // MaxRedirects bounds how many redirect hops http_request follows per
 // call (S130500 §06: "max 3"). Every hop is re-validated against the
-// SSRF policy before it is dialed.
+// SSRF policy before it is dialed — both in the redirect hook and,
+// authoritatively, at dial time via the pinned dialer.
 const MaxRedirects = 3
 
 // AllowedMethods is the CRUD method set the tool accepts (S130500
@@ -255,14 +262,86 @@ func validateTarget(target *url.URL, o Options) error {
 }
 
 // redirectHook builds the client's CheckRedirect policy: every hop is
-// re-validated against the SSRF policy, and the hop count is bounded
-// at MaxRedirects.
+// re-validated against the SSRF policy (fail fast, with a clear
+// error), and the hop count is bounded at MaxRedirects. The dial-time
+// check in the pinned Transport is the authoritative backstop for both
+// the initial request and every redirect hop.
 func redirectHook(o Options) func(req *http.Request, via []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) >= MaxRedirects+1 {
 			return fmt.Errorf("http_request: too many redirects (max %d)", MaxRedirects)
 		}
 		return validateTarget(req.URL, o)
+	}
+}
+
+// ── pinned dialer (SSRF backstop) ───────────────────────────────────────
+
+// pinDialer is the standard net dialer used to place the connection
+// AFTER the dial-time policy check. Dialing a literal IP means the
+// connection target is the validated address — DNS cannot be queried
+// a second time between check and connect.
+var pinDialer = &net.Dialer{}
+
+// dialNet dials addr through the standard net dialer.
+func dialNet(ctx context.Context, network, addr string) (net.Conn, error) {
+	return pinDialer.DialContext(ctx, network, addr)
+}
+
+// dialHook builds the Transport.DialContext for http_request: the
+// SSRF backstop that closes the validate-then-dial TOCTOU window.
+// Resolution happens INSIDE the dial path and the connection is pinned
+// to a validated address, so a rebinding nameserver cannot return a
+// public address to validation and a private one to the dial.
+func dialHook(o Options) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return dialHookWithLookup(o, net.LookupIP, dialNet)
+}
+
+// dialHookWithLookup is dialHook with the resolution and final-dial
+// steps injectable (the test seam: a rebinding-style resolver and a
+// recording dialer prove the address pinning without touching the
+// network).
+func dialHookWithLookup(o Options, lookup func(host string) ([]net.IP, error), dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("http_request: SSRF guard: dial %q: %w", addr, err)
+		}
+		if hostListed(o.Denylist, host) {
+			return nil, fmt.Errorf("http_request: SSRF guard: dial %q denied (host denylisted)", addr)
+		}
+		if hostListed(o.Allowlist, host) {
+			// Named internal service: dial the hostname as configured
+			// (an allowlisted internal host legitimately uses a
+			// private address).
+			return dial(ctx, network, addr)
+		}
+
+		ips := []net.IP{}
+		if ip := net.ParseIP(host); ip != nil {
+			ips = append(ips, ip)
+		} else {
+			var lerr error
+			ips, lerr = lookup(host)
+			if lerr != nil {
+				return nil, fmt.Errorf("http_request: SSRF guard: dial %q: resolve %q: %w", addr, host, lerr)
+			}
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("http_request: SSRF guard: dial %q: %q resolved to no addresses", addr, host)
+		}
+		for _, ip := range ips {
+			if rangeListed(o.Denylist, ip) {
+				return nil, fmt.Errorf("http_request: SSRF guard: dial %q denied (address %s denylisted)", addr, ip.String())
+			}
+			if !rangeListed(o.Allowlist, ip) && inDeniedRange(ip) {
+				return nil, fmt.Errorf("http_request: SSRF guard: dial %q denied (address %s is not permitted)", addr, ip.String())
+			}
+		}
+		// Pin the connection to the validated address: the dial
+		// target is the resolved IP, never the raw hostname, so a
+		// DNS answer cannot change between check and connect.
+		return dial(ctx, network, ips[0].String()+":"+port)
 	}
 }
 
@@ -280,9 +359,12 @@ func requestHandler(o Options) registry.Handler {
 			return "", errors.New("http_request: url is required")
 		}
 
-		timeout := 30
+		timeout := DefaultTimeout
 		if v, ok := args["timeout"].(float64); ok && int(v) > 0 {
 			timeout = int(v)
+			if timeout > DefaultTimeout {
+				timeout = DefaultTimeout // registry envelope caps at 30s regardless
+			}
 		}
 		maxBytes := o.MaxResponseBytes
 		if v, ok := args["maxResponseBytes"].(float64); ok && int(v) > 0 {
@@ -344,7 +426,14 @@ func requestHandler(o Options) registry.Handler {
 			req.Header.Set("Authorization", cred)
 		}
 
-		client := &http.Client{Timeout: time.Duration(float64(timeout) * float64(time.Second)), CheckRedirect: redirectHook(o)}
+		// Direct dials only (no environment proxies): the pinned
+		// Transport is the SSRF backstop, and every dial goes through
+		// it — initial request and redirect hops alike.
+		client := &http.Client{
+			Transport:     &http.Transport{DialContext: dialHook(o)},
+			CheckRedirect: redirectHook(o),
+			Timeout:       time.Duration(float64(timeout) * float64(time.Second)),
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return "", fmt.Errorf("http_request: %w", err)

@@ -3,8 +3,10 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -490,4 +492,88 @@ type testResolver struct {
 
 func (r testResolver) Resolve(authRef string) (string, error) {
 	return r.value, nil
+}
+
+// dialRecorder captures the address handed to the final dial, the way
+// a recording net dialer would — it never opens a socket.
+type dialRecorder struct {
+	last string
+}
+
+func (r *dialRecorder) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	r.last = addr
+	return nil, errors.New("stub dial not executed")
+}
+
+// ---------------------------------------------------------------------------
+// Dial-time SSRF backstop (DNS rebinding / TOCTOU): resolution happens
+// inside the dial path and the connection is pinned to the validated
+// address, so a nameserver answer cannot change between validation and
+// connect.
+
+func TestPinnedDialDeniesRebindingToPrivateRange(t *testing.T) {
+	// Rebind scenario: the SSRF guard's pre-dial validation sees a
+	// PUBLIC answer; by dial time the same hostname resolves PRIVATE.
+	// The dial-time check must deny the private answer before any
+	// connection is placed.
+	var rebinding func(host string) ([]net.IP, error) = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("10.9.8.7")}, nil
+	}
+	rec := &dialRecorder{}
+	hook := dialHookWithLookup(Options{MaxResponseBytes: 64}, rebinding, rec.dial)
+
+	_, err := hook(context.Background(), "tcp", "attacker.example.com:80")
+	if err == nil || !strings.Contains(err.Error(), "SSRF") {
+		t.Errorf("rebinding dial not denied: %v", err)
+	}
+	if rec.last != "" {
+		t.Errorf("dial placed despite private resolution: %q", rec.last)
+	}
+}
+
+func TestPinnedDialConnectsToValidatedAddress(t *testing.T) {
+	// Public answer: the hook must dial the VALIDATED IP literal —
+	// never the raw hostname — so the connection is pinned to what was
+	// checked.
+	var pub func(host string) ([]net.IP, error) = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}
+	rec := &dialRecorder{}
+	hook := dialHookWithLookup(Options{}, pub, rec.dial)
+
+	_, _ = hook(context.Background(), "tcp", "public.example.com:443")
+	if rec.last != "8.8.8.8:443" {
+		t.Errorf("dial target %q, want pinned 8.8.8.8:443", rec.last)
+	}
+}
+
+func TestPinnedDialHostnameAllowlistDialedAsConfigured(t *testing.T) {
+	// A hostname allowlist entry names an internal service: the dial
+	// proceeds against the hostname itself (which may legitimately
+	// resolve to a private address) — scope-limited to that entry.
+	rec := &dialRecorder{}
+	hook := dialHookWithLookup(Options{Allowlist: []string{"inner-svc"}}, net.LookupIP, rec.dial)
+
+	_, _ = hook(context.Background(), "tcp", "inner-svc:8080")
+	if rec.last != "inner-svc:8080" {
+		t.Errorf("dial target %q, want allowlisted hostname as configured", rec.last)
+	}
+}
+
+func TestPerCallTimeoutClampedSmoke(t *testing.T) {
+	// Per-call timeout above the 30s definition cap is clamped, not
+	// honored verbatim (the bridge envelope would cap it anyway).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	reg := allowLo(t)
+	doc, err := dispatch(t, reg, fmt.Sprintf(`{"method":"GET","url":%q,"timeout":60}`, srv.URL))
+	if err != nil {
+		t.Fatalf("GET with oversized per-call timeout: %v", err)
+	}
+	if statusOf(doc) != 200 {
+		t.Errorf("status = %v", doc["status"])
+	}
 }
