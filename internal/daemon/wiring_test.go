@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,8 +25,8 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 		t.Fatal("registry/stateful store not assembled")
 	}
 
-	// Builtins register with complete metadata; the default active set
-	// is the full registered set (no policy configured).
+	// Builtins register with complete metadata; the todo tools register
+	// statefully for the navi (default scope when NaviID is unset).
 	def, ok := rt.Registry.Get(agent.ToolFileRead)
 	if !ok {
 		t.Fatal("file_read not registered")
@@ -33,14 +35,35 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 		t.Fatalf("file_read origin = %v", def.SourceInfo.Origin)
 	}
 	active := rt.Registry.ActiveNames()
-	if len(active) != 2 { // file_read + shell_exec
-		t.Fatalf("active set = %v, want the two builtins", active)
+	want := map[string]bool{
+		agent.ToolFileRead: true, agent.ToolShellExec: true,
+		"todo_read": true, "todo_write": true, "todo_update": true,
+	}
+	if len(active) != len(want) {
+		t.Fatalf("active set = %v, want 5 tools", active)
+	}
+	for _, name := range active {
+		if !want[name] {
+			t.Fatalf("unexpected active tool %q", name)
+		}
 	}
 
-	// The stateful store round-trips: per-navi scoping is the seam's
-	// concern, here we just verify the tables exist over the shared DB.
-	if _, err := rt.Stateful.ListTodos("navi-under-test", "", 0); err != nil {
-		t.Fatalf("list todos: %v", err)
+	// End-to-end: todo_write through the assembled registry persists
+	// via the stateful store and todo_read returns the items.
+	if _, err := rt.Registry.Dispatch(context.Background(), "todo_write",
+		[]byte(`{"items":[{"text":"wire note tools","priority":2}]}`)); err != nil {
+		t.Fatalf("dispatch todo_write: %v", err)
+	}
+	out, err := rt.Registry.Dispatch(context.Background(), "todo_read", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("dispatch todo_read: %v", err)
+	}
+	if !strings.Contains(out, "wire note tools") {
+		t.Fatalf("todo_read output = %q", out)
+	}
+	items, err := rt.Stateful.ListTodos("default", "", 0)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("stateful list = %v (err %v)", items, err)
 	}
 }
 
@@ -68,8 +91,13 @@ tools:
 	defer rt.Store.Close()
 
 	active := rt.Registry.ActiveNames()
-	if len(active) != 1 || active[0] != agent.ToolFileRead {
-		t.Fatalf("active set = %v, want [file_read]", active)
+	if len(active) != 4 { // file_read + 3 todo tools (shell_exec blocked)
+		t.Fatalf("active set = %v, want file_read + todo tools", active)
+	}
+	for _, name := range active {
+		if name == agent.ToolShellExec {
+			t.Fatal("blocked shell_exec is active")
+		}
 	}
 }
 
