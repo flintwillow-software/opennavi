@@ -1,34 +1,35 @@
 ---
 status: draft
 created: '08'
-updated: '2026-08-11'
+updated: '2026-09-23'
 tags:
   - spec
   - agent-runtime
 priority: medium
-spec-refs: [010000, 010001, 010002]
+spec-refs: [010000, 010001, 010002, 010003]
 ---
 
 # Plan: Thought Process System: Thoughts & Queue
 
-**Scope:** The thought process system — thoughts as the fundamental unit of a navi's short-term memory, the thought queue with priority management, per-thought session logging, and inter-navi communication. Covers both daemon navis (with thought queues) and one-off navis (simple prompt processing).
+**Scope:** The thought process system — thoughts as the fundamental unit of a navi's short-term memory, the thought queue with priority management, per-thought session logging, and inter-navi communication. The thought queue is the navi runtime's main loop in every run mode (see S010003); this file covers the house and its doors.
 
 > **Part of:** [Plan: Thought Process System](./README.md) — split into 3 parts for readability.
 
 ## 00 Overview
 
-### 1.1 Two Execution Models
+### 1.1 The House and Its Doors
 
-OpenNavi uses **two complementary execution models**, chosen based on the navi's role:
+The navi runtime is the **house**; the thought queue is its **main loop** — in every run mode. Whether the house runs as an always-on daemon or as the plain binary, the same queue drives it: durable, prioritized, preemptible thoughts with identical lifecycle, persistence, and crash recovery.
 
-| Model | Where Used | Purpose |
+The **doors** differ per run mode; the queue does not:
+
+| Door | Enters as | Granularity |
 |-------|-----------|---------|
-| **Thought Queue** | Long-running (daemon) navis | Priority scheduling, crash recovery, per-thought session logs |
-| **ChatSession** | Council mode, one-off delegation | Short-lived multi-agent coordination |
+| Connectors (gateway, cron, bot adapters, CLI enqueue) | one thought per message | discrete, schedulable work |
+| TUI (human portal) | attach/steer existing thoughts, or schedule new ones | conversational (operator decision: connector messages are thought-per-message; TUI messages attach/steer/schedule) |
+| Tools | the navi acting out through the governed tool registry | — (tool calls happen inside a running thought) |
 
-**The thought queue is for daemon navis** — those with gateway and/or cron interfaces that run as always-on processes. It provides priority scheduling, crash recovery, and per-thought session logs. **One-off navis** (CLI-only) use a simpler model: process pending work and exit.
-
-**ChatSession is for council mode and delegation** — when navis need to coordinate in a shared context (multi-agent discussion, one-off task delegation). It provides a clean session model with participants, rounds, and explicit coordination.
+**No door bypasses the loop.** There is no execution path that drives the agent around the queue: a navi run without connectors (interactive/binary run) drives the same queue in-process with a foreground slot (S010003); daemon navis run the queue against external doors. ChatSession remains for what it actually is — council-mode and delegation coordination (short-lived multi-agent sessions) — not an alternative execution model for ordinary work.
 
 ### 1.2 The Thought
 
@@ -61,15 +62,27 @@ Navis communicate by **sending messages to each other**. The mechanism depends o
 
 This is unified under the concept of **chat** — a navi opens a conversation with another navi, and the messages become thoughts (or session entries) in the recipient's context.
 
-### Requirement: Two Execution Models
+### Requirement: One House, One Queue, Many Doors
 
-The system SHALL support two complementary execution models: the thought queue for daemon navis that require priority scheduling and crash recovery, and ChatSession for council mode and one-off delegation that requires short-lived multi-agent coordination.
+The system SHALL run every navi through the thought queue as its main loop: the navi runtime (the house) runs the queue whether it executes as an always-on daemon or as the plain binary, and every interface (TUI, connectors, tools) enters the house as a door feeding the same queue.
 
 #### Scenario: Daemon navi uses thought queue
 
 GIVEN a navi configured with gateway and/or cron interfaces
 WHEN the navi starts
 THEN the system SHALL initialize a thought queue with priority scheduling and crash recovery.
+
+#### Scenario: Binary run uses the same queue in-process
+
+GIVEN a navi run as the plain binary with no connectors (interactive session)
+WHEN the user submits work through the TUI
+THEN the system SHALL enqueue it as a durable thought in the same in-process queue (foreground slot per S010003) with identical lifecycle, persistence, park-with-checkpoint, and crash-recovery semantics as daemon work.
+
+#### Scenario: No door bypasses the queue
+
+GIVEN any interface implementation (TUI, gateway adapter, cron, CLI)
+WHEN it delivers work to the navi
+THEN the system SHALL route it through the thought queue — no interface SHALL drive `agent.Prompt()` (or equivalent) directly as an execution model.
 
 #### Scenario: Council mode uses ChatSession
 
@@ -500,6 +513,36 @@ THEN the system SHALL load pending thoughts from queue.yaml, load running though
 
 ---
 
+## 06 Binary-Run Semantics (S010003)
+
+### Requirement: Foreground Slot for Binary Runs
+
+A navi run without connectors (the plain binary, interactive session) SHALL drive the same thought queue in-process: the session's current thought occupies a foreground slot, and all work submitted through the TUI is enqueued as durable thoughts.
+
+#### Scenario: User message becomes a durable thought
+
+GIVEN a navi running as the plain binary with an attached TUI
+WHEN the user schedules new work through the TUI
+THEN the system SHALL enqueue a thought with the same lifecycle as daemon-enqueued work.
+
+#### Scenario: Interactive work parks on interrupt
+
+GIVEN a foreground thought is running in an interactive session
+WHEN the session is interrupted (preemption, Ctrl+C, process signal)
+THEN the system SHALL park the thought with a checkpoint (running → paused), never kill-and-lose.
+
+#### Scenario: Session ends and the queue is drained
+
+GIVEN a binary run whose foreground thought is complete and no further work is queued
+WHEN the user exits the session
+THEN the navi process SHALL exit; no daemon lifecycle is implied.
+
+#### Scenario: Foreground work is schedulable like any other
+
+GIVEN a binary run with a foreground thought running and additional enqueued thoughts
+WHEN the queue schedules work
+THEN the foreground session's thoughts SHALL compete for slots by the same priority and preemption rules as daemon work.
+
 ## Related
 
 
@@ -514,3 +557,5 @@ THEN the system SHALL load pending thoughts from queue.yaml, load running though
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S010000 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-23 | S010003 | 0.2.0 | House model: queue is the runtime's main loop in every run mode; §1.1 rewritten from two-execution-models to house-and-doors; binary-run (in-process queue, foreground slot) spec'd; no-door-bypasses-the-queue requirement added (thought-loop case study) |
+

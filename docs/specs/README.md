@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-07-29'
-updated: '2025-08-13'
+updated: '2026-09-23'
 tags:
   - spec-tree
   - specification
@@ -15,7 +15,7 @@ tags:
 
 - Components: 15
 - Changes: 0 in-flight
-- Latest version: 0.2.0 — additions: tool catalog (13), agent roles (14), binary distribution, team deployment, LM Studio provider, board-based work discovery
+- Latest version: 0.2.0 — additions: tool catalog (13), agent roles (14), binary distribution, team deployment, LM Studio provider, board-based work discovery; 2026-09-23: thought loop (house model — queue as universal main loop, TUI portal, remote attachment, queue-level message routing)
 
 ## Conventions
 
@@ -58,6 +58,7 @@ Each change is named for its primary spec code: `docs/changes/<version>/<NN>-<ke
 
 | Change | S-Code | Version | Spec Refs | Status |
 |--------|--------|---------|-----------|--------|
+| thought-loop (house model, TUI portal, remote attachment) | S010003 | 0.2.0 | [010003, 010104, 010312, 000406, 000407] | active |
 | — | — | — | — | — |
 
 ## Components

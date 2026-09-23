@@ -1,12 +1,12 @@
 ---
 status: draft
 created: '08'
-updated: '2026-08-11'
+updated: '2026-09-23'
 tags:
   - spec
   - agent-runtime
 priority: medium
-spec-refs: [010100, 010101, 010102, 010103]
+spec-refs: [010100, 010101, 010102, 010103, 010104]
 ---
 
 # Plan: Thought Process System: Workers & Navi Communication
@@ -498,15 +498,15 @@ THEN the system SHALL read the origin navi name from the thought metadata, creat
 
 ## 02 Navi Lifecycle
 
-### 6.1 Execution Model Selection
+### 6.1 Doors, Not Forks
 
-Navis use different execution models based on their interfaces:
+Every interface is a door into the same house: there is one execution model (the thought queue, S010000) and doors differ only in how they feed it. No interface maps to a separate execution model:
 
-| Interfaces | Execution Model | Reason |
+| Interfaces | Door | How it feeds the queue |
 |-----------|----------------|--------|
-| `[gateway, cron]` | **Thought Queue** (daemon) | Always-on, needs priority scheduling and crash recovery |
-| `[cli]` only | **Simple processing** (one-off) | Process pending work and exit |
-| Any, used as sub-agent | **ChatSession** (delegation) | Short-lived, session-based coordination |
+| `[gateway, cron]`, bot adapters | **Daemon run** (external doors open) | one thought per inbound message / firing |
+| `[tui]` (binary run or remote attach) | **Portal door** | schedule new thoughts; attach/steer existing ones (S010104 foreground slot in-process, or the same view attached via gateway S000407) |
+| Any, used as sub-agent | **ChatSession** (delegation only) | Short-lived, session-based coordination — not an execution model for ordinary work |
 
 ### 6.2 Long-running Navi (Thought Queue)
 
@@ -770,6 +770,18 @@ THEN the system SHALL return an error to the caller immediately.
 
 ---
 
+## 05 Binary-Run Navi (S010104)
+
+### Requirement: Binary Run Drives the Queue In-Process
+
+A navi run with only the TUI interface SHALL run the thought queue in-process with a foreground slot, rather than a separate one-off execution path.
+
+#### Scenario: TUI session attached to the in-process queue
+
+GIVEN a navi run as the plain binary with the TUI attached
+WHEN the session schedules or steers thoughts
+THEN the system SHALL route them through the same queue, pool, and runner surface a daemon uses, with the session's current thought in the foreground slot.
+
 ## Related
 
 
@@ -784,3 +796,5 @@ THEN the system SHALL return an error to the caller immediately.
 | Date | S-Code | Version | Change |
 |------|--------|---------|--------|
 | 2026-08-13 | S010100 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
+| 2026-09-23 | S010104 | 0.2.0 | Doors-not-forks: §6.1 mapping revised — no interface maps to a separate execution model; binary run uses the in-process queue with a foreground slot (thought-loop case study) |
+
