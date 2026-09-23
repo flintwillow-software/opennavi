@@ -22,6 +22,7 @@ import (
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/builtin"
 	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tools/todo"
 )
 
 // Runtime is the assembled daemon: everything long-running needs.
@@ -118,6 +119,17 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// agent executor per thought run.
 	reg := registry.New()
 	if err := builtin.Register(reg, params.WorkDir); err != nil {
+		store.Close()
+		return nil, err
+	}
+	// Stateful catalog tools (S130500): the todo tools register for
+	// this navi's identity; note/time/http tools join as they land.
+	// Empty NaviID falls back to the shared default scope.
+	naviID := params.NaviID
+	if naviID == "" {
+		naviID = "default"
+	}
+	if err := todo.RegisterTools(reg, naviID, stateful); err != nil {
 		store.Close()
 		return nil, err
 	}
