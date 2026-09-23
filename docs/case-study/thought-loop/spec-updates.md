@@ -32,7 +32,7 @@
 ### S000407 (added) — Remote portal attachment
 - **Repo/file:** repos/opennavi/docs/specs/00-navi-core/04-interface-set.md
 - **What:** the daemon's gateway gains a portal-attachment surface: an event stream (queue + thought events — the same events a locally-run TUI consumes in-process) and a control channel (attach/steer/pause/resume/cancel/enqueue), so the identical TUI manages a navi running elsewhere. Trust/authorization alignment with S040200 noted as a requirement scenario; wire-protocol details deferred to 05-messaging.
-- **Why:** remote management of a running navi is a core case-study demand with no current spec coverage.
+- **Why:** remote management of a running navi is a core case-study demand with no current spec coverage. **Corollary (operator, approved with this proposal):** because doors are just consumers of the same queue events + control surface, future surfaces — a WebUI, a chat bot's web view, whatever — are additional doors, not new execution paths. "Implementing a WebUI" becomes "slap a connector on the door surface".
 
 ### S010312 (extend) — Queue-level message routing
 - **Repo/file:** repos/opennavi/docs/specs/01-agent-runtime/03-agent-runtime.md
