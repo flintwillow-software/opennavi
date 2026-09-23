@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tools/http` — stateless `http_request` tool (S130500 §06): CRUD methods (GET/POST/PUT/PATCH/DELETE) returning status, filtered headers, and body; non-2xx responses are normal output; SSRF guard denies private/loopback/link-local/multicast destinations — every DNS-resolved address is checked at validation AND again at dial time via a pinned transport dialer (closes the DNS-rebinding TOCTOU), with per-navi allowlist/denylist (hostname, IP-literal, or CIDR entries), deny-wins precedence, and per-hop redirect re-validation (max 3); `authRef` credential references resolve server-side through the `AuthResolver` interface stub (S100400 planned) and fail closed without one; `Authorization`/`Set-Cookie` echoes stripped from responses; 256 KiB response cap (and method/timeout/cap) configurable per call and via `Options`, with per-call timeout clamped to the 30s definition ceiling (NAVI-271)
 - Daemon registration of the time tool (NAVI-272 wiring): `Assemble` registers the stateless `time_read` via `time.RegisterTools`; assembly tests extend dispatch coverage to time_read (IANA zone conversion + invalid-zone error) (NAVI-272)
 
 ### Changed
