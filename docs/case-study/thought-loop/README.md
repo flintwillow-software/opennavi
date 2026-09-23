@@ -12,11 +12,11 @@ priority: high
 
 # Thought Loop — One Queue, Two Front Doors
 
-> Make the thought queue the universal main loop for every navi execution mode: interactive (TUI) sessions run through the queue exactly like daemon work, and the TUI is a portal into the running thought process — view the queue, monitor the in-flight thought, and inject messages into any thought — locally or connected to a remote daemon.
+> Make the thought queue the universal main loop of the navi runtime: the runtime is the **house** — whether it runs as an always-on daemon or as the plain binary, the same queue drives it. The TUI, connectors, and tools are the **doors**: the TUI is a portal into the running thought process — view the queue, monitor the in-flight thought, and inject messages into any thought — locally or connected to a navi running elsewhere.
 
 ## Summary
 
-The original design intent: **when a navi runs — manually or as a daemon — it is running through the thought queue.** The thought queue is not a daemon-only scheduling device; it is the navi's main loop. The TUI is not a REPL that happens to drive an agent; it is a **portal** over the thought system:
+The original design intent: **when a navi runs — as a daemon or as the plain binary — it is running through the thought queue.** The runtime is the house; the thought queue is not a daemon-only scheduling device, it is the navi's main loop inside the house. The TUI is not a REPL that happens to drive an agent; it is a **door** into that house:
 
 - It presents the thought queue (statuses, priorities, progress).
 - The user can **attach a message to any thought** — queued or running.
