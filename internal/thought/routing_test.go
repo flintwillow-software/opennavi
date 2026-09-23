@@ -481,6 +481,7 @@ func lastRouted(t *testing.T, acks []QueueEvent) QueueEvent {
 type routeRecorder struct {
 	mu   sync.Mutex
 	acks []QueueEvent
+	all  []QueueEvent
 }
 
 func (r *routeRecorder) list() []QueueEvent {
@@ -628,4 +629,80 @@ func TestPreemptForegroundOnNormalSlot(t *testing.T) {
 	if got, _ := q.GetThought("fg-low"); !got.PreemptRequested {
 		t.Fatal("foreground-on-normal-slot victim must be preemptable by non-foreground work")
 	}
+}
+
+func TestDeleteEmitsDeletedEvent(t *testing.T) {
+	// Review #291 catch: Queue.Delete must emit an event carrying the
+	// PRIOR status so metrics observers (event-only) can decrement
+	// the right gauge — removal is not cancellation.
+	q, _ := routeQueue(t)
+	rec := &routeRecorder{}
+	q.OnEvent(rec.record)
+
+	// Pending delete: Detail = "pending".
+	_ = q.Enqueue(&Thought{ID: "p1", Prompt: "x", Priority: 4, Status: ThoughtPending})
+	if err := q.Delete("p1"); err != nil {
+		t.Fatalf("Delete(pending): %v", err)
+	}
+	evs := rec.allEvents()
+	var deleted []QueueEvent
+	for _, ev := range evs {
+		if ev.Kind == EventDeleted {
+			deleted = append(deleted, ev)
+		}
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("deleted events = %d, want 1 (all: %+v)", len(deleted), evs)
+	}
+	if deleted[0].ThoughtID != "p1" || deleted[0].Detail != string(ThoughtPending) {
+		t.Fatalf("deleted event = %+v, want prior status pending in Detail", deleted[0])
+	}
+
+	// Paused delete: prior status paused.
+	_ = q.Enqueue(&Thought{ID: "pz", Prompt: "x", Priority: 4, Status: ThoughtPending})
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+	if err := q.Pause("pz", []byte("cp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Delete("pz"); err != nil {
+		t.Fatalf("Delete(paused): %v", err)
+	}
+	deleted = nil
+	for _, ev := range rec.allEvents() {
+		if ev.Kind == EventDeleted && ev.ThoughtID == "pz" {
+			deleted = append(deleted, ev)
+		}
+	}
+	if len(deleted) != 1 || deleted[0].Detail != string(ThoughtPaused) {
+		t.Fatalf("paused delete event = %+v, want prior status paused", deleted)
+	}
+
+	// Protected deletes emit nothing.
+	before := len(rec.allEvents())
+	_ = q.Enqueue(&Thought{ID: "r1", Prompt: "x", Priority: 4, Status: ThoughtPending})
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+	if err := q.Delete("r1"); err == nil {
+		t.Fatal("running delete should be rejected")
+	}
+	if after := len(rec.allEvents()); after != before+2 { // enqueued+started only
+		t.Fatalf("protected delete emitted events: %+v", rec.allEvents()[before:])
+	}
+}
+
+// record captures every queue event (used by the delete-ack test).
+func (r *routeRecorder) record(ev QueueEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.all = append(r.all, ev)
+}
+
+// allEvents returns every event seen by the recorder.
+func (r *routeRecorder) allEvents() []QueueEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]QueueEvent(nil), r.all...)
 }

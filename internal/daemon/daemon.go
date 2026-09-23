@@ -192,10 +192,9 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 	bindOpts := bindOptions(rc.Tools)
-	if err := reg.SetActive(activeNames(reg.AllNames(), rc.Tools)); err != nil {
-		store.Close()
-		return nil, err
-	}
+	// Active set is composed ONCE after all registrations (incl. the
+	// thoughts tools, which need the queue created first) — the
+	// second SetActive below replaces this pre-queue composition.
 
 	// Providers: primary from config; fallback chain per #189 when a
 	// fallback provider is configured.

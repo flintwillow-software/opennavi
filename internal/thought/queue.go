@@ -61,6 +61,13 @@ const (
 	EventFailed    QueueEventKind = "failed"
 	EventCancelled QueueEventKind = "cancelled"
 	EventPreempted QueueEventKind = "preempted"
+	// EventDeleted fires when a thought record is removed entirely
+	// (Queue.Delete, S130600 §04) — distinct from EventCancelled:
+	// removal is not cancellation, and the audit/ack trail
+	// distinguishes them. Detail carries the PRIOR status so metrics
+	// observers (which only see events) can decrement the right
+	// by_status gauge.
+	EventDeleted QueueEventKind = "deleted"
 	// EventPersistFailed fires when a worker cannot persist a thought
 	// transition (Complete/Fail/Pause) — in-memory and stored state may
 	// have diverged.
@@ -739,29 +746,45 @@ func (q *ThoughtQueue) AppendContext(id, msg string) error {
 // cancelled) stay queued for inspection rather than deleted here.
 // Pending (including deferred) and paused thoughts are removable.
 func (q *ThoughtQueue) Delete(id string) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	var evts []QueueEvent
 
+	q.mu.Lock()
 	t, _, idx, ok := q.locate(id)
 	if !ok {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: delete %q: %w", id, ErrThoughtNotFound)
 	}
 	switch t.Status {
 	case ThoughtRunning:
+		q.mu.Unlock()
 		return fmt.Errorf("thought: delete %s: %w (running — pause or cancel via the lifecycle first)", id, ErrThoughtProtected)
 	case ThoughtComplete, ThoughtCancelled:
+		q.mu.Unlock()
 		return fmt.Errorf("thought: delete %s: %w (terminal record kept for inspection)", id, ErrThoughtProtected)
 	case ThoughtPending:
 		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
 	case ThoughtPaused:
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 	default:
+		q.mu.Unlock()
 		return fmt.Errorf("thought: delete %s: %w (state %s)", id, ErrThoughtProtected, t.Status)
 	}
+	// Ack event with the PRIOR status (S010312-style accounting:
+	// metrics observers only see events — Detail names the gauge to
+	// decrement). Deferred collect/emit: event leaves q.mu's scope.
+	evts = append(evts, QueueEvent{
+		Kind:      EventDeleted,
+		ThoughtID: id,
+		Detail:    string(t.Status),
+		At:        time.Now().UTC(),
+	})
 	if q.store != nil {
 		if err := q.store.DeleteThought(id); err != nil {
+			q.mu.Unlock()
 			return fmt.Errorf("thought: delete %s: persist: %w", id, err)
 		}
 	}
+	q.mu.Unlock()
+	q.emit(evts)
 	return nil
 }

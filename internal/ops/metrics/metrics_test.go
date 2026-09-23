@@ -418,3 +418,56 @@ func (m *memStore) DeleteThought(id string) error {
 	delete(m.thoughts, id)
 	return nil
 }
+
+func TestDeletedEventAccounting(t *testing.T) {
+	// Delete is an exact-delta compensator: in_queue/by_status return
+	// to their pre-enqueue values (S130600 §04 review catch).
+	c := newTestCollector()
+
+	// Pending delete: queued → deleted nets to zero.
+	send(c, thought.EventEnqueued, "p1", "")
+	send(c, thought.EventDeleted, "p1", string(thought.ThoughtPending))
+	body := c.Render()
+	if got := valueOf(t, body, "opennavi_thoughts_in_queue"); got != 0 {
+		t.Fatalf("in_queue after enqueue+delete = %v, want 0", got)
+	}
+	if got := valueOf(t, body, `opennavi_thoughts_by_status{status="pending"}`); got != 0 {
+		t.Fatalf("pending after enqueue+delete = %v, want 0", got)
+	}
+	if got := valueOf(t, body, "opennavi_thoughts_queued_total"); got != 1 {
+		t.Fatalf("queued_total = %v, want 1 (the enqueue happened)", got)
+	}
+
+	// Paused delete: pausedSet disambiguation (paused work is in_queue).
+	send(c, thought.EventEnqueued, "p2", "")
+	send(c, thought.EventStarted, "p2", "")
+	send(c, thought.EventPausedEv, "p2", "")
+	send(c, thought.EventDeleted, "p2", string(thought.ThoughtPaused))
+	body = c.Render()
+	if got := valueOf(t, body, "opennavi_thoughts_in_queue"); got != 0 {
+		t.Fatalf("in_queue after paused delete = %v, want 0", got)
+	}
+	if got := valueOf(t, body, `opennavi_thoughts_by_status{status="paused"}`); got != 0 {
+		t.Fatalf("paused after delete = %v, want 0", got)
+	}
+	if got := valueOf(t, body, `opennavi_thoughts_by_status{status="cancelled"}`); got != 0 {
+		t.Fatalf("delete must not tick cancelled = %v", got)
+	}
+
+	// clampZero: a delete without a matching enqueue cannot push
+	// gauges negative.
+	send(c, thought.EventDeleted, "ghost", string(thought.ThoughtPending))
+	body = c.Render()
+	if got := valueOf(t, body, "opennavi_thoughts_in_queue"); got != 0 {
+		t.Fatalf("ghost delete drove in_queue negative: %v", got)
+	}
+}
+
+func TestDeletedEventUnknownPriorStatusClamps(t *testing.T) {
+	// Unexpected prior status (defensive): clamps keep gauges honest.
+	c := newTestCollector()
+	send(c, thought.EventDeleted, "ghost", "running")
+	if got := valueOf(t, c.Render(), "opennavi_thoughts_in_queue"); got != 0 {
+		t.Fatalf("unknown-prior delete drove in_queue: %v", got)
+	}
+}
