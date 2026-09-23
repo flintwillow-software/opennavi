@@ -50,6 +50,32 @@ type ThoughtQueueConfig struct {
 	SlotExhaustion string `yaml:"slot_exhaustion,omitempty"`
 }
 
+// ToolCapsConfig tunes tool-level caps and egress policy (NAVI-272,
+// S130500): note body caps and http_request egress policy. Nil
+// sections and zero fields keep the tool packages' safe defaults.
+type ToolCapsConfig struct {
+	Notes *NoteCapsConfig   `yaml:"notes,omitempty"`
+	HTTP  *HTTPEgressConfig `yaml:"http,omitempty"`
+}
+
+// NoteCapsConfig caps note tool storage (S130500 §05).
+type NoteCapsConfig struct {
+	// MaxBodyBytes caps one note body (default 64 KiB).
+	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
+	// MaxNaviBytes caps the navi's total stored note body bytes
+	// (default 10 MiB).
+	MaxNaviBytes int `yaml:"max_navi_bytes,omitempty"`
+}
+
+// HTTPEgressConfig tunes http_request egress (S130500 §06). Allowlist
+// entries exempt internal services from the SSRF rules; denylist
+// entries remove them again (deny wins).
+type HTTPEgressConfig struct {
+	MaxResponseBytes int      `yaml:"max_response_bytes,omitempty"` // default 256 KiB
+	Allowlist        []string `yaml:"allowlist,omitempty"`
+	Denylist         []string `yaml:"denylist,omitempty"`
+}
+
 // RuntimeConfig is the user-modifiable configuration (spec "Static
 // Definition vs. Runtime Config Separation"): LLM provider keys,
 // session settings, tool policy overrides. It never modifies the
@@ -57,6 +83,8 @@ type ThoughtQueueConfig struct {
 type RuntimeConfig struct {
 	Provider ProviderConfig `yaml:"provider,omitempty"`
 	Tools    ToolPolicy     `yaml:"tools,omitempty"`
+	// ToolCaps tunes tool caps and egress (nil = package defaults).
+	ToolCaps *ToolCapsConfig `yaml:"tool_caps,omitempty"`
 	// SessionDB is the session/memory SQLite path.
 	SessionDB string `yaml:"session_db,omitempty"`
 	// EmbedModel is the local embedding model (memory Tier 5).
@@ -184,6 +212,18 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 		c := *src.Cron
 		dst.Cron = &c
 	}
+	if src.ToolCaps != nil {
+		tc := *src.ToolCaps
+		if src.ToolCaps.Notes != nil {
+			n := *src.ToolCaps.Notes
+			tc.Notes = &n
+		}
+		if src.ToolCaps.HTTP != nil {
+			h := *src.ToolCaps.HTTP
+			tc.HTTP = &h
+		}
+		dst.ToolCaps = &tc
+	}
 }
 
 // applyEnv applies environment overrides (layer 3). Known variables:
@@ -220,6 +260,19 @@ func (rc RuntimeConfig) Validate() error {
 	if rc.Cron != nil {
 		if err := rc.Cron.Validate(); err != nil {
 			return err
+		}
+	}
+	if tc := rc.ToolCaps; tc != nil {
+		if tc.Notes != nil {
+			if tc.Notes.MaxBodyBytes < 0 {
+				return fmt.Errorf("config: tool_caps.notes.max_body_bytes %d must be >= 0", tc.Notes.MaxBodyBytes)
+			}
+			if tc.Notes.MaxNaviBytes < 0 {
+				return fmt.Errorf("config: tool_caps.notes.max_navi_bytes %d must be >= 0", tc.Notes.MaxNaviBytes)
+			}
+		}
+		if tc.HTTP != nil && tc.HTTP.MaxResponseBytes < 0 {
+			return fmt.Errorf("config: tool_caps.http.max_response_bytes %d must be >= 0", tc.HTTP.MaxResponseBytes)
 		}
 	}
 	return nil

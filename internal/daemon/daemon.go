@@ -21,6 +21,7 @@ import (
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/builtin"
+	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
 	"github.com/flintwillow-software/opennavi/tools/note"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 	timepkg "github.com/flintwillow-software/opennavi/tools/time"
@@ -135,13 +136,21 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	if err := note.Register(reg, naviID, stateful); err != nil {
+	if err := note.Register(reg, naviID, stateful, noteCaps(rc.ToolCaps)...); err != nil {
 		store.Close()
 		return nil, err
 	}
 	// Stateless catalog tools (S130500): time_read needs no store
 	// handle.
 	if err := timepkg.RegisterTools(reg); err != nil {
+		store.Close()
+		return nil, err
+	}
+	// http_request: stateless egress tool; the SSRF allow/deny lists
+	// and response cap come from tool_caps config (deny still wins in
+	// the tool). Auth stays nil — S100400 credential resolution lands
+	// separately, so authRef calls fail closed.
+	if err := toolhttp.Register(reg, httpEgress(rc.ToolCaps)...); err != nil {
 		store.Close()
 		return nil, err
 	}
@@ -261,6 +270,32 @@ func bindOptions(tp config.ToolPolicy) bridge.Options {
 			Timeouts: timeouts,
 		},
 	}
+}
+
+// noteCaps maps tool_caps.notes config onto note registration options
+// (zero fields keep the package defaults).
+func noteCaps(tc *config.ToolCapsConfig) []note.Options {
+	if tc == nil || tc.Notes == nil {
+		return nil
+	}
+	return []note.Options{{
+		MaxBodyBytes: tc.Notes.MaxBodyBytes,
+		MaxNaviBytes: tc.Notes.MaxNaviBytes,
+	}}
+}
+
+// httpEgress maps tool_caps.http config onto http registration options
+// (allow/deny lists, response cap). The auth resolver stays nil until
+// S100400 lands — authRef calls fail closed.
+func httpEgress(tc *config.ToolCapsConfig) []toolhttp.Options {
+	if tc == nil || tc.HTTP == nil {
+		return nil
+	}
+	return []toolhttp.Options{{
+		MaxResponseBytes: tc.HTTP.MaxResponseBytes,
+		Allowlist:        tc.HTTP.Allowlist,
+		Denylist:         tc.HTTP.Denylist,
+	}}
 }
 
 // activeNames composes the default active set from the registered
