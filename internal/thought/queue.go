@@ -171,12 +171,23 @@ func (q *ThoughtQueue) OnEvent(fn func(QueueEvent)) {
 // returns an error immediately; with PolicyQueue/PolicyBlock the
 // thought waits for a worker to claim it. High-priority thoughts
 // preempt lower-priority running thoughts when no slot is free.
+//
+// The deferral parameter arrives on the thought itself (S130600 §02):
+// when t.DeferUntil is set, the thought is queued — and persisted —
+// immediately but is not claimable by the pool until the not-before
+// time passes (durable state, S010002). Self-scheduled thoughts
+// (Metadata origin `self`/`tool`) have their priority clamped to the
+// conservative band (§1.2) — a navi cannot enqueue its own work ahead
+// of external work by default.
 func (q *ThoughtQueue) Enqueue(t *Thought) error {
 	if t.ID == "" {
 		return fmt.Errorf("thought: enqueue requires an ID")
 	}
 	if t.Status != ThoughtPending {
 		return fmt.Errorf("%w: enqueue requires pending status, got %s", ErrInvalidTransition, t.Status)
+	}
+	if origin, ok := t.Metadata["origin"]; ok && (origin == OriginSelf || origin == OriginTool) {
+		t.Priority = t.EffectiveSelfPriority()
 	}
 
 	// Events collected under lock, emitted after unlock — OnEvent
@@ -220,14 +231,21 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 	return nil
 }
 
-// Dequeue claims the highest-priority pending thought for which a slot
-// is available, transitions it to running, and allocates the slot
-// (spec §3.3). Returns ok=false when nothing is claimable.
+// Dequeue claims the highest-priority pending thought that is DUE and
+// for which a slot is available, transitions it to running, and
+// allocates the slot (spec §3.3, S130600 §02). Deferred thoughts are
+// skipped until their not-before time passes — a deferred entry never
+// blocks a due thought of any priority. Returns ok=false when nothing
+// is claimable.
 func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 	var evts []QueueEvent
+	now := time.Now().UTC()
 
 	q.mu.Lock()
 	for i, t := range q.pending {
+		if !t.Due(now) {
+			continue // deferred: not claimable until defer_until passes
+		}
 		slotID := q.findSlotFor(t)
 		if slotID == "" {
 			continue

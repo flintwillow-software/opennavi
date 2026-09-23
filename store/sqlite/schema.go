@@ -220,6 +220,10 @@ var migrations = []string{
 		PRIMARY KEY (navi_id, id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notes_activity ON notes(navi_id, updated_at)`,
+	// 7: defer_until queue mechanism (S130600 §02) — not-before
+	// timestamp on thoughts for durable deferred pickup (S010002):
+	// deferred thoughts are real queue records that survive restarts.
+	`ALTER TABLE thoughts ADD COLUMN defer_until DATETIME`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

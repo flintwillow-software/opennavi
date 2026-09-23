@@ -35,6 +35,13 @@ type Thought struct {
 
 	Priority int // 1 (highest) to 10 (lowest)
 
+	// DeferUntil is the not-before timestamp (S130600 §02): the
+	// thought is queued — and persisted — immediately but is not
+	// claimable by the pool until this time passes. Zero = claimable
+	// now. Deferral is durable state (S010002), not an in-memory
+	// timer: crash recovery preserves it.
+	DeferUntil time.Time
+
 	Status    ThoughtStatus
 	SessionID string // associated LLM session (if running)
 
@@ -50,6 +57,23 @@ type Thought struct {
 	// return; the worker then parks the thought (running → paused).
 	PreemptRequested bool
 }
+
+// OriginSelf / OriginTool tag thoughts the navi scheduled for itself
+// (S130600 §1.2 "origin tagging"): self-directed work is distinguishable
+// from connector-sourced work in dashboards, and the queue clamps its
+// priority to the conservative band. The spec uses `origin: self`; the
+// thought-tool layers tag `origin: tool` — both spellings count as
+// self-scheduled.
+const OriginSelf = "self"
+const OriginTool = "tool"
+
+// SelfScheduledHighBound is the default priority floor for
+// self-scheduled thoughts (S130600 §1.2 "priority clamp"): any
+// priority above it (numerically lower) is clamped down, so
+// self-directed work can never preempt external work (preemption
+// needs priority ≤ HighPriorityThreshold) or squat the reserved slots
+// unless runtime config grants it.
+const SelfScheduledHighBound = 5
 
 // Sentinel lifecycle errors.
 var (
@@ -123,4 +147,26 @@ func (t *Thought) EffectivePriority() int {
 		return 10
 	}
 	return t.Priority
+}
+
+// EffectiveSelfPriority clamps a self-scheduled thought's priority to
+// the conservative band (S130600 §1.2): the navi cannot schedule
+// itself ahead of external work by default. The queue applies this
+// inside Enqueue for origin-tagged thoughts; the tool layer may also
+// pre-clamp before enqueue.
+func (t *Thought) EffectiveSelfPriority() int {
+	p := t.EffectivePriority()
+	if p < SelfScheduledHighBound {
+		return SelfScheduledHighBound
+	}
+	return p
+}
+
+// Due reports whether the thought is claimable by the pool at time
+// now: no deferral, or the not-before time has passed (S130600 §02).
+func (t *Thought) Due(now time.Time) bool {
+	if t.DeferUntil.IsZero() {
+		return true
+	}
+	return !t.DeferUntil.After(now)
 }

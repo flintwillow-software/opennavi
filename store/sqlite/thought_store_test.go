@@ -145,4 +145,91 @@ func TestThoughtStoreQueueCrashRecovery(t *testing.T) {
 	}
 }
 
+func TestThoughtStoreDeferUntilRoundTrip(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	due := testNow().Add(1 * time.Hour)
+	want := &thought.Thought{ID: "t-defer", Prompt: "later", Status: thought.ThoughtPending, DeferUntil: due}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-defer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DeferUntil.Compare(due) != 0 {
+		t.Fatalf("defer_until = %v, want %v", got.DeferUntil, due)
+	}
+	// Round-trips through the full scan (LoadThoughts) too.
+	all, err := ts.LoadThoughts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].DeferUntil.Compare(due) != 0 {
+		t.Fatalf("LoadThoughts defer_until: %+v", all)
+	}
+	// A thought without a deferral stays empty (zero time).
+	plain := &thought.Thought{ID: "t-plain", Prompt: "now"}
+	if err := ts.SaveThought(plain); err != nil {
+		t.Fatal(err)
+	}
+	plainLoaded, err := ts.LoadThought("t-plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plainLoaded.DeferUntil.IsZero() {
+		t.Fatal("unset defer_until became non-zero")
+	}
+}
+
+func TestDeferralSurvivesRestartViaSqlite(t *testing.T) {
+	// End-to-end durability (S010002): a deferred thought enqueued
+	// through the queue persists, survives a fresh queue over the same
+	// database, and is skipped by the pool until the not-before time.
+	path := t.TempDir() + "/defer.db"
+	st, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, err := NewThoughtStore(st.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := testNow().Add(400 * time.Millisecond)
+	deferred := &thought.Thought{ID: "deferred", Prompt: "later work", Priority: 2, Status: thought.ThoughtPending, DeferUntil: later}
+	if err := q.Enqueue(deferred); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// Reopen: fresh queue over the same database recovers the
+	// deferral and skips the thought until it is due.
+	st2, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	ts2, err := NewThoughtStore(st2.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q2, err := thought.NewQueue(thought.Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, ts2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := q2.Dequeue(); ok {
+		t.Fatal("deferred thought claimable right after restart (sqlite)")
+	}
+	time.Sleep(600 * time.Millisecond)
+	tk, ok := q2.Dequeue()
+	if !ok || tk.ID != "deferred" {
+		t.Fatalf("deferred thought not claimable after due: %v %v", tk, ok)
+	}
+}
+
 func testNow() time.Time { return time.Now().UTC() }

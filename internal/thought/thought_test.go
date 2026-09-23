@@ -13,6 +13,179 @@ func newThought(id string, prio int) *Thought {
 	return &Thought{ID: id, Prompt: "task " + id, Priority: prio, Status: ThoughtPending}
 }
 
+func TestEffectiveSelfPriority(t *testing.T) {
+	// Clamped into the conservative band from either side.
+	low := &Thought{Priority: 1}
+	if low.EffectiveSelfPriority() != SelfScheduledHighBound {
+		t.Errorf("prio 1 self-clamped to %d, want %d", low.EffectiveSelfPriority(), SelfScheduledHighBound)
+	}
+	if low.EffectivePriority() != 1 {
+		t.Errorf("plain EffectivePriority must be untouched: %d", low.EffectivePriority())
+	}
+	band := &Thought{Priority: SelfScheduledHighBound}
+	if band.EffectiveSelfPriority() != SelfScheduledHighBound {
+		t.Errorf("band boundary moved: %d", band.EffectiveSelfPriority())
+	}
+	high := &Thought{Priority: 9}
+	if high.EffectiveSelfPriority() != 9 || high.EffectiveSelfPriority() != high.EffectivePriority() {
+		t.Errorf("below-band priority must pass through: %d", high.EffectiveSelfPriority())
+	}
+	// The clamp never produces something above the band (numerically
+	// lower than SelfScheduledHighBound).
+	for _, p := range []int{1, 2, 3, 4, 5, 6, 10} {
+		tt := &Thought{Priority: p}
+		c := tt.EffectiveSelfPriority()
+		if c < SelfScheduledHighBound {
+			t.Errorf("prio %d self clamped to %d — outside band", p, c)
+		}
+	}
+}
+
+func TestDue(t *testing.T) {
+	now := time.Now().UTC()
+
+	if !(&Thought{}).Due(now) {
+		t.Error("no deferral must be due now")
+	}
+	past := &Thought{DeferUntil: now.Add(-(10 * time.Second))}
+	if !past.Due(now) {
+		t.Error("past deferral must be due")
+	}
+	future := &Thought{DeferUntil: now.Add(10 * time.Second)}
+	if future.Due(now) {
+		t.Error("future deferral must not be due")
+	}
+}
+
+// ── defer_until queue mechanism (S130600 §02) ───────────────────────────
+
+func TestQueueDefersUntilDue(t *testing.T) {
+	q, err := NewQueue(Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	later := time.Now().UTC().Add(400 * time.Millisecond)
+	deferred := newThought("deferred", 1) // highest priority, but not due
+	deferred.DeferUntil = later
+	if err := q.Enqueue(deferred); err != nil {
+		t.Fatal(err)
+	}
+	immediate := newThought("immediate", 4)
+	if err := q.Enqueue(immediate); err != nil {
+		t.Fatal(err)
+	}
+
+	// The due thought is claimable even though the deferred one has
+	// higher priority; the deferred one is skipped.
+	tk, ok := q.Dequeue()
+	if !ok {
+		t.Fatal("due thought not claimable")
+	}
+	if tk.ID != "immediate" {
+		t.Errorf("claimed %q, want the due thought", tk.ID)
+	}
+	if _, ok := q.Dequeue(); ok {
+		t.Fatal("deferred thought claimed before its time")
+	}
+
+	// Once the not-before time passes, the deferred thought is
+	// claimable and back in priority order.
+	time.Sleep(600 * time.Millisecond)
+	tk, ok = q.Dequeue()
+	if !ok {
+		t.Fatal("deferred thought never became claimable")
+	}
+	if tk.ID != "deferred" {
+		t.Errorf("claimed %q, want the deferred thought", tk.ID)
+	}
+}
+
+func TestQueueDeferralSurvivesRestart(t *testing.T) {
+	// Durability (S010002): the deferral is persisted, so a rebuilt
+	// queue over the same store still skips the thought until due.
+	store := NewMemoryStore()
+	cfg := Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}
+
+	q, err := NewQueue(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().UTC().Add(400 * time.Millisecond)
+	deferred := newThought("deferred", 2)
+	deferred.DeferUntil = later
+	deferred.Metadata = map[string]string{"origin": OriginTool}
+	if err := q.Enqueue(deferred); err != nil {
+		t.Fatal(err)
+	}
+
+	// "Restart": a fresh queue over the same store performs crash
+	// recovery and reloads the deferred thought.
+	q2, err := NewQueue(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q2.Dequeue(); ok {
+		t.Fatal("deferred thought claimable right after restart")
+	}
+	loaded, err := q2.GetThought("deferred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DeferUntil.IsZero() {
+		t.Fatal("defer_until lost across restart")
+	}
+
+	time.Sleep(600 * time.Millisecond)
+	if _, ok := q2.Dequeue(); !ok {
+		t.Fatal("deferred thought still not claimable after the not-before time")
+	}
+}
+
+func TestEnqueueClampsSelfScheduledPriority(t *testing.T) {
+	q, err := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Self-scheduled (origin: tool) at max priority is clamped into
+	// the conservative band.
+	self := newThought("self", 1)
+	self.Metadata = map[string]string{"origin": OriginTool}
+	if err := q.Enqueue(self); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.GetThought("self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectivePriority() != SelfScheduledHighBound {
+		t.Errorf("self priority = %d, want clamp band %d", got.EffectivePriority(), SelfScheduledHighBound)
+	}
+
+	// The spec spelling origin: self clamps the same way.
+	self2 := newThought("self2", 1)
+	self2.Metadata = map[string]string{"origin": OriginSelf}
+	if err := q.Enqueue(self2); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = q.GetThought("self2")
+	if got.EffectivePriority() != SelfScheduledHighBound {
+		t.Errorf("origin:self priority = %d, want %d", got.EffectivePriority(), SelfScheduledHighBound)
+	}
+
+	// Untagged work keeps its priority — the clamp is scoped to
+	// self-scheduled thoughts.
+	external := newThought("ext", 1)
+	if err := q.Enqueue(external); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = q.GetThought("ext")
+	if got.EffectivePriority() != 1 {
+		t.Errorf("external priority = %d, want 1 untouched", got.EffectivePriority())
+	}
+}
+
 func TestTransitionMatrix(t *testing.T) {
 	valid := map[ThoughtStatus][]ThoughtStatus{
 		ThoughtPending:   {ThoughtRunning, ThoughtCancelled},
