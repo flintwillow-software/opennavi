@@ -716,3 +716,52 @@ func (q *ThoughtQueue) Slots() []Slot {
 	copy(out, q.slots)
 	return out
 }
+
+// AppendContext appends a message to a thought's Context (S130600 §03
+// context append): the queue owns the record — callers mutate through
+// this method, never through GetThought clones (which the queue no
+// longer controls). Persisted with the change.
+func (q *ThoughtQueue) AppendContext(id, msg string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	t, err := q.lookup(id)
+	if err != nil {
+		return err
+	}
+	t.AppendMessage(msg)
+	return q.save(t)
+}
+
+// Delete removes a thought record entirely from the queue and its
+// persistence (S130600 §04). Lifecycle protection: a RUNNING thought
+// cannot be deleted in place — it must be paused or cancelled first
+// (the error names the constraint); terminal thoughts (complete/
+// cancelled) stay queued for inspection rather than deleted here.
+// Pending (including deferred) and paused thoughts are removable.
+func (q *ThoughtQueue) Delete(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	t, _, idx, ok := q.locate(id)
+	if !ok {
+		return fmt.Errorf("thought: delete %q: %w", id, ErrThoughtNotFound)
+	}
+	switch t.Status {
+	case ThoughtRunning:
+		return fmt.Errorf("thought: delete %s: %w (running — pause or cancel via the lifecycle first)", id, ErrThoughtProtected)
+	case ThoughtComplete, ThoughtCancelled:
+		return fmt.Errorf("thought: delete %s: %w (terminal record kept for inspection)", id, ErrThoughtProtected)
+	case ThoughtPending:
+		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
+	case ThoughtPaused:
+		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
+	default:
+		return fmt.Errorf("thought: delete %s: %w (state %s)", id, ErrThoughtProtected, t.Status)
+	}
+	if q.store != nil {
+		if err := q.store.DeleteThought(id); err != nil {
+			return fmt.Errorf("thought: delete %s: persist: %w", id, err)
+		}
+	}
+	return nil
+}

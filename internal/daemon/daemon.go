@@ -28,6 +28,7 @@ import (
 	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
 	"github.com/flintwillow-software/opennavi/tools/note"
 	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tools/thoughts"
 	timepkg "github.com/flintwillow-software/opennavi/tools/time"
 	"github.com/flintwillow-software/opennavi/tools/todo"
 )
@@ -253,6 +254,22 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 	q, err := thought.NewQueue(defCfg, thoughtStore)
 	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	// Thought-management tools (S130600, NAVI-323): the navi manages
+	// its own queue through the catalog mechanism — queue-attached via
+	// thought.RegisterQueueTools, bound to THIS runtime's queue. The
+	// #287 rails apply at Enqueue (origin:tool tag, self-scheduled
+	// priority clamp); no new config surface (clamp band default).
+	// The active set is recomputed after registration so the tools
+	// surface only when active + permitted (same governance as any
+	// catalog tool).
+	if err := thoughts.Register(reg, q); err != nil {
+		store.Close()
+		return nil, err
+	}
+	if err := reg.SetActive(activeNames(reg.AllNames(), rc.Tools)); err != nil {
 		store.Close()
 		return nil, err
 	}
