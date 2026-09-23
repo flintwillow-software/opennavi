@@ -39,9 +39,10 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 		agent.ToolFileRead: true, agent.ToolShellExec: true,
 		"todo_read": true, "todo_write": true, "todo_update": true,
 		"note_read": true, "note_write": true, "time_read": true,
+		"http_request": true,
 	}
 	if len(active) != len(want) {
-		t.Fatalf("active set = %v, want 8 tools", active)
+		t.Fatalf("active set = %v, want 9 tools", active)
 	}
 	for _, name := range active {
 		if !want[name] {
@@ -92,6 +93,14 @@ func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {
 	if _, err := rt.Registry.Dispatch(context.Background(), "time_read", []byte(`{"timezone":"Mars/Olympus"}`)); err == nil {
 		t.Fatal("invalid timezone must error")
 	}
+
+	// http_request is governed by the SSRF guard: loopback is denied by
+	// default (no dial placed — the guard rejects before connecting).
+	_, err = rt.Registry.Dispatch(context.Background(), "http_request",
+		[]byte(`{"method":"GET","url":"http://127.0.0.1:1/x"}`))
+	if err == nil || !strings.Contains(err.Error(), "SSRF") {
+		t.Fatalf("http_request to loopback = %v, want SSRF denial", err)
+	}
 }
 
 func TestAssembleToolPolicyComposesActiveSet(t *testing.T) {
@@ -118,13 +127,57 @@ tools:
 	defer rt.Store.Close()
 
 	active := rt.Registry.ActiveNames()
-	if len(active) != 7 { // file_read + 3 todo + 2 note + time_read (shell_exec blocked)
-		t.Fatalf("active set = %v, want file_read + todo + note + time tools", active)
+	if len(active) != 8 { // file_read + 3 todo + 2 note + time + http (shell_exec blocked)
+		t.Fatalf("active set = %v, want file_read + todo + note + time + http tools", active)
 	}
 	for _, name := range active {
 		if name == agent.ToolShellExec {
 			t.Fatal("blocked shell_exec is active")
 		}
+	}
+}
+
+func TestAssembleToolCapsConfig(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+provider:
+  primary: mock
+  model: test-model
+tool_caps:
+  notes:
+    max_body_bytes: 16
+  http:
+    denylist:
+      - example.com
+    max_response_bytes: 1024
+`
+	if err := os.WriteFile(rcPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Assemble(RuntimeParams{
+		RuntimeFile: rcPath,
+		SessionDB:   filepath.Join(t.TempDir(), "daemon.db"),
+		Model:       "test-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Store.Close()
+
+	// The configured note cap (64 KiB default → 16 bytes) governs
+	// note_write dispatch through the assembled registry.
+	big := strings.Repeat("x", 32)
+	_, err = rt.Registry.Dispatch(context.Background(), "note_write",
+		[]byte(`{"title":"t","body":"`+big+`"}`))
+	if err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("oversized note = %v, want cap rejection", err)
+	}
+
+	// The configured denylist is enforced on http_request dispatch.
+	_, err = rt.Registry.Dispatch(context.Background(), "http_request",
+		[]byte(`{"method":"GET","url":"https://example.com/"}`))
+	if err == nil || !strings.Contains(err.Error(), "SSRF") {
+		t.Fatalf("denylisted host = %v, want SSRF denial", err)
 	}
 }
 
