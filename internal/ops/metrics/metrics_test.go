@@ -471,3 +471,27 @@ func TestDeletedEventUnknownPriorStatusClamps(t *testing.T) {
 		t.Fatalf("unknown-prior delete drove in_queue: %v", got)
 	}
 }
+
+func TestDeletedCounterIncrements(t *testing.T) {
+	// thoughts_deleted_total: audit-relevant distinction from
+	// cancellation (review #291 — counter approved over the no-new-
+	// series default).
+	c := newTestCollector()
+	send(c, thought.EventEnqueued, "p1", "")
+	send(c, thought.EventDeleted, "p1", string(thought.ThoughtPending))
+	send(c, thought.EventEnqueued, "p2", "")
+	send(c, thought.EventStarted, "p2", "")
+	send(c, thought.EventPausedEv, "p2", "")
+	send(c, thought.EventDeleted, "p2", string(thought.ThoughtPaused))
+	body := c.Render()
+	if got := valueOf(t, body, "opennavi_thoughts_deleted_total"); got != 2 {
+		t.Fatalf("deleted_total = %v, want 2 (pending + paused deletes)", got)
+	}
+	if got := valueOf(t, body, "opennavi_thoughts_in_queue"); got != 0 {
+		t.Fatalf("in_queue = %v, want 0", got)
+	}
+	// Cancellation remains distinct: zero here.
+	if got := valueOf(t, body, `opennavi_thoughts_by_status{status="cancelled"}`); got != 0 {
+		t.Fatalf("cancelled = %v, want 0", got)
+	}
+}
