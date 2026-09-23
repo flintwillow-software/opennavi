@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
+	"github.com/flintwillow-software/opennavi/internal/interfaces/tui"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
@@ -20,12 +21,14 @@ import (
 // runInteractive is the `navi run` subcommand — the binary-run entry
 // (S010003 §06): the same thought queue, pool, and registry-governed
 // tools as `navi daemon`, driven in-process with no connectors. The
-// session's current thought occupies a foreground slot; stdin lines
-// enqueue durable thoughts (first input) or steer the in-flight run
-// (RouteMessage, turn-boundary injection); Ctrl+C parks the foreground
-// thought with its checkpoint (never kill-and-lose); the process exits
-// when the session ends and the queue drains. No TUI — that attaches
-// over the same runtime later (NAVI-319).
+// session's current thought occupies a foreground slot; by default the
+// Bubble Tea TUI is the front door (S000406, NAVI-319), attached
+// in-process over the portal; stdin lines enqueue durable thoughts
+// (first input) or steer the in-flight run (RouteMessage, turn-boundary
+// injection); Ctrl+C parks the foreground thought with its checkpoint
+// (never kill-and-lose); the process exits when the session ends and
+// the queue drains. --headless keeps the classic stdin loop (TUI
+// skipped) for pipes/automation.
 func runInteractive(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	runtimeFile := fs.String("config", "", "path to runtime config YAML (optional)")
@@ -38,6 +41,7 @@ func runInteractive(args []string) error {
 	workers := fs.Int("workers", 2, "thought worker count")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	logFile := fs.String("log-file", "", "log file path (default stderr)")
+	headless := fs.Bool("headless", false, "run the classic stdin loop instead of the TUI")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -78,10 +82,28 @@ func runInteractive(args []string) error {
 	logger.Info("binary run started", map[string]any{"model": *model, "db": *dbPath})
 
 	sessionDone := make(chan struct{})
-	go readSession(rt, logger, sessionDone)
+	runDone := make(chan error, 1)
+	go func() { runDone <- rt.RunForeground(ctx, sessionDone) }()
 
-	fmt.Println("navi binary run — type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
-	runErr := rt.RunForeground(ctx, sessionDone)
+	// Session driver: the Bubble Tea TUI is the front door (S000406,
+	// NAVI-319), attached in-process over the portal; --headless keeps
+	// the classic stdin loop for pipes/automation.
+	var tuiRun error
+	if *headless {
+		go readSession(rt, logger, sessionDone)
+		fmt.Println("navi binary run — type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
+	} else {
+		tport, terr := tui.NewInProcess(rt.Queue)
+		if terr != nil {
+			return terr
+		}
+		tuiRun = tui.Run(tport) // Bubble Tea owns the terminal; quitting ends the session
+		close(sessionDone)      // session over — RunForeground drains remaining work
+	}
+	if tuiRun != nil {
+		return tuiRun
+	}
+	runErr := <-runDone
 	if runErr == nil {
 		logger.Info("binary run stopped", nil)
 		return nil

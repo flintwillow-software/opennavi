@@ -567,7 +567,7 @@ func (d *Runtime) Run(ctx context.Context) error {
 		addr := d.Config.PortalAddr
 		portalSrv = &http.Server{
 			Addr:              addr,
-			Handler:           portalHandler(d),
+			Handler:           PortalHandler(d),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		ln, err := net.Listen("tcp", addr)
