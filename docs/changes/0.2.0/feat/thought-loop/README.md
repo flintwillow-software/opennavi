@@ -47,6 +47,14 @@ S010003, S010104, S000406, S000407, S010312
 
 ## Notes
 
-- **Epic shape for Step 4**: one epic ("Thought loop: one house, many doors") with sub-issues in dependency order — (1) queue message routing + foreground slot (blocks 2–4), (2) portal observation API + gateway attachment surface, (3) TUI portal client, (4) binary-run entry + steering bridge. S010312 delivery-ack events are part of (1).
+- **Step 4 grouping**: one epic — NAVI-316 (parent NAVI-50, "Thought loop — one house, many doors") with sub-issues in dependency order — NAVI-317 queue message routing + foreground slot (blocks 2–4), NAVI-318 portal observation API + gateway attachment surface, NAVI-319 TUI portal client, NAVI-320 binary-run entry + steering bridge. S010312 delivery-ack events are part of NAVI-317.
 - **Already partially built** (call out in issue bodies to avoid re-work): the agent runner binds the registry-governed tool set per thought run; park-with-checkpoint, crash recovery, and the event fanout all exist; `QueueEvent` kinds and the store-backed queue are ready for routing to build on.
 - **Deferred by spec**: messaging wire protocol (05-messaging owns it); council/ChatSession untouched.
+
+## Tracked
+
+- Epic: Thought loop — one house, many doors — NAVI-316 [priority: high]
+  - Issue: Queue message routing + foreground slot — NAVI-317 [priority: high, blocks: NAVI-318/319/320]
+  - Issue: Portal observation API + gateway attachment surface — NAVI-318 [priority: medium, blocked-by: NAVI-317, blocks: NAVI-319]
+  - Issue: TUI portal client — NAVI-319 [priority: medium, blocked-by: NAVI-317/318]
+  - Issue: Binary-run entry + steering bridge — NAVI-320 [priority: medium, blocked-by: NAVI-317]
