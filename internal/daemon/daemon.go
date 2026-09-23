@@ -192,9 +192,8 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 	bindOpts := bindOptions(rc.Tools)
-	// Active set is composed ONCE after all registrations (incl. the
-	// thoughts tools, which need the queue created first) — the
-	// second SetActive below replaces this pre-queue composition.
+	// Active set is composed ONCE, here, after all registrations (the
+	// thoughts tools need the queue created first).
 
 	// Providers: primary from config; fallback chain per #189 when a
 	// fallback provider is configured.
