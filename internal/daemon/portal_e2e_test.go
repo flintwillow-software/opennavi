@@ -12,9 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 )
+
+// allowAllAuth is an authorizer that permits every identity/action:
+// the e2e test seam used exactly where the production runtime wires
+// nil (fail closed).
+type allowAllAuth struct{}
+
+func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+	return nil
+}
 
 // portalFreePort grabs an ephemeral port for the portal listener.
 func portalFreePort(t *testing.T) string {
@@ -88,8 +98,9 @@ func happenings(doc map[string]any) ([]string, int) {
 
 // TestPortalEndpointServesLiveStream: an assembled runtime with
 // PortalAddr set streams the thought lifecycle + per-thought agent
-// events over the serve path; control actions fail closed (no
-// authorizer wired — IAM pending).
+// events over the serve path. Observation is an attachment (S000407),
+// so the allow-all authorizer seam is wired for the happy path;
+// control still fails closed for the unauthorizing metrics-style stub.
 func TestPortalEndpointServesLiveStream(t *testing.T) {
 	addr := portalFreePort(t)
 	rt, err := Assemble(RuntimeParams{
@@ -97,6 +108,9 @@ func TestPortalEndpointServesLiveStream(t *testing.T) {
 		Model:      "test-model",
 		Workers:    1,
 		PortalAddr: addr,
+		// Test seam: production wires nil and fails closed (covered by
+		// TestPortalObservationFailClosedWithoutAuthorizer).
+		OverrideAuthorizer: allowAllAuth{},
 		OverrideProvider: llm.NewMockProvider([]llm.StreamEvent{
 			{Type: llm.StreamEventContentDelta, Content: "portal hello"},
 			{Type: llm.StreamEventStop},
@@ -116,7 +130,7 @@ func TestPortalEndpointServesLiveStream(t *testing.T) {
 	go func() { done <- rt.Run(ctx) }()
 
 	base := "http://" + addr
-	url := base + "/portal/events"
+	url := base + "/portal/events?identity=portal-user"
 	// Wait for the endpoint to come up.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -183,11 +197,14 @@ func TestPortalEndpointServesLiveStream(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	// Control fails closed: this runtime wires no authorizer, so a
-	// pause request must be refused 403, never defaulted open.
-	code := portalPostControl(t, base+"/portal/control", `{"identity":"tui-user","action":"pause","thoughtID":"portal-e2e-1"}`)
-	if code != http.StatusForbidden {
-		t.Errorf("unauthorized control returned %d, want 403", code)
+	// Control is AUTHORIZED in this test (allow-all seam): it passes
+	// the authorization gate and reaches the queue — the thought is
+	// already complete by now, so the queue rejects the pause, but
+	// crucially it is NOT an authorization 403 (fail-closed refusal
+	// is covered by TestPortalObservationFailClosedWithoutAuthorizer).
+	code := portalPostControl(t, base+"/portal/control?identity=portal-user", `{"action":"pause","thoughtID":"portal-e2e-1"}`)
+	if code == http.StatusForbidden {
+		t.Error("authorized control was refused 403")
 	}
 
 	// Unknown route/method are 404/405, not a crash.
@@ -197,6 +214,70 @@ func TestPortalEndpointServesLiveStream(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("unknown path = %d, want 404", resp.StatusCode)
 		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon Run did not shut down")
+	}
+}
+
+// TestPortalObservationFailClosedWithoutAuthorizer: with NO authorizer
+// wired, observation AND control are attachments that fail closed
+// (S040200) — the stream (prompt content, tool-input snippets) is
+// never served to an unauthorized identity, and control is never
+// defaulted open.
+func TestPortalObservationFailClosedWithoutAuthorizer(t *testing.T) {
+	addr := portalFreePort(t)
+	rt, err := Assemble(RuntimeParams{
+		SessionDB:  t.TempDir() + "/portal-failclosed.db",
+		Model:      "test-model",
+		Workers:    1,
+		PortalAddr: addr,
+		OverrideProvider: llm.NewMockProvider([]llm.StreamEvent{
+			{Type: llm.StreamEventStop},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Store.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rt.Run(ctx) }()
+
+	streamURL := "http://" + addr + "/portal/events?identity=intruder&from=0"
+	// Wait for the endpoint to come up (refused requests still hit it).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if resp, err := http.Get(streamURL); err == nil {
+			resp.Body.Close()
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("portal endpoint never came up: %v", err)
+		} else {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+
+	// Observation is denied: fail closed, never defaulted open.
+	resp, err := http.Get(streamURL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("unattached observation returned %d, want 403", resp.StatusCode)
+	}
+
+	// Control is refused the same way.
+	code := portalPostControl(t, "http://"+addr+"/portal/control?identity=intruder", `{"action":"steer","thoughtID":"x","text":"hi"}`)
+	if code != http.StatusForbidden {
+		t.Errorf("unauthorized control returned %d, want 403", code)
 	}
 
 	cancel()

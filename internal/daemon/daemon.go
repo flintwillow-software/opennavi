@@ -84,6 +84,10 @@ type RuntimeParams struct {
 	// (S000407) on "host:port" — the metrics-addr pattern. Empty
 	// (the default) disables the portal serve path entirely.
 	PortalAddr string
+	// OverrideAuthorizer is a test seam replacing the fail-closed nil
+	// authorizer (S040200): production wires nil, so every portal
+	// attachment is refused until IAM lands.
+	OverrideAuthorizer interfaces.PortalAuthorizer
 	// NaviID is the per-navi scoping key for stateful tool storage
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
@@ -255,12 +259,13 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 
 	// Portal (S000407): the observation + control surface served on
 	// PortalAddr when set — zero cost when unset (mirrors MetricsAddr).
-	// No authorizer is wired: IAM lands later, so attach/control fail
+	// No authorizer is wired in production (OverrideAuthorizer is a
+	// test seam): IAM lands later, so attachments and control fail
 	// closed until then (S040200 fail-closed stub).
 	var portal *interfaces.Portal
 	var portalBuf *interfaces.PortalMailbox
 	if params.PortalAddr != "" {
-		portal = interfaces.NewPortal(q, nil)
+		portal = interfaces.NewPortal(q, params.OverrideAuthorizer)
 		portalBuf = portal.Subscribe(DefaultPortalMailboxCap)
 	}
 

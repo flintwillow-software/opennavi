@@ -57,6 +57,7 @@ type agentRunnerDeps struct {
 	// (S000407). It must be cheap: the agent bus already delivers
 	// asynchronously per subscriber.
 	agentEvents func(thoughtID string, ev agent.AgentEvent)
+}
 
 // NewAgentRunner builds the agent-backed Runner.
 func NewAgentRunner(deps agentRunnerDeps) *AgentRunner {
@@ -105,6 +106,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	if r.deps.tracker != nil {
 		unregister := r.deps.tracker.track(t.ID, a)
 		defer unregister()
+	}
 	// Portal observation hook (S000407): forward the thought's agent
 	// events (content deltas, tool calls, transitions) to the portal
 	// seam. The agent delivers async-per-subscriber, so this never

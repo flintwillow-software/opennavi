@@ -8,10 +8,14 @@
 // serve pattern (#280): same listener lifecycle, same graceful
 // shutdown, errors logged never fatal.
 //
-// Authorization: the daemon wires NO authorizer (IAM is pending), so
-// every attach/control action fails closed (S040200) — the same
-// fail-closed stub as the http tool's nil AuthResolver. Observation
-// (GET /portal/events) is open, like the metrics endpoint.
+// Authorization: OBSERVATION is an attachment (S000407) — the stream
+// carries prompt content and tool-input snippets, so attaching to it
+// is governed by the same portal authorization as control. Every
+// request (stream or control) authorizes through Portal.Attach; with
+// no authorizer wired (IAM pending) everything fails closed with 403
+// (S040200) — the same fail-closed stub as the http tool's nil
+// AuthResolver. In-process consumers (future TUI) are unaffected:
+// they use Portal.Subscribe directly, not the shim.
 package daemon
 
 import (
@@ -60,18 +64,39 @@ func portalHandler(d *Runtime) http.Handler {
 // formatEventAt renders a portal event timestamp for JSON.
 func formatEventAt(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
-// serveEvents answers GET /portal/events?from=N with the events after
-// cursor N plus the next cursor and a lost flag (bounded-window gap).
+// attachIdentity extracts the client identity for a request: the
+// `identity` query parameter, falling back to the X-Portal-Identity
+// header. Empty means anonymous — the authorizer decides.
+func attachIdentity(r *http.Request) string {
+	if v := r.URL.Query().Get("identity"); v != "" {
+		return v
+	}
+	return r.Header.Get("X-Portal-Identity")
+}
+
+// serveEvents answers GET /portal/events?from=N&identity=ID with the
+// events after cursor N. Streaming requires a prior authorization
+// (S000407 attach): the identity is authorized through Portal.Attach;
+// without an authorizer every attachment is refused 403 fail-closed.
 func serveEvents(w http.ResponseWriter, r *http.Request, d *Runtime) {
+	if d.Portal == nil || d.PortalBuf == nil {
+		http.Error(w, "portal stream unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if aerr := d.Portal.Attach(attachIdentity(r)); aerr != nil {
+		if errors.Is(aerr, interfaces.ErrPortalUnauthorized) {
+			http.Error(w, "portal: unauthorized (fail closed)", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "portal: attachment refused: "+aerr.Error(), http.StatusForbidden)
+		return
+	}
+
 	cursor := 0
 	if v := r.URL.Query().Get("from"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			cursor = int(n)
 		}
-	}
-	if d.PortalBuf == nil {
-		http.Error(w, "portal stream unavailable", http.StatusServiceUnavailable)
-		return
 	}
 	events, next, lost := d.PortalBuf.ReadAfter(cursor)
 
@@ -109,6 +134,9 @@ func serveControl(w http.ResponseWriter, r *http.Request, d *Runtime) {
 		http.Error(w, "portal control unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	// Streaming and control both require the attachment authorization;
+	// the identity is taken from the request before any action runs.
+	identity := attachIdentity(r)
 	blob, rerr := io.ReadAll(r.Body)
 	if rerr != nil {
 		http.Error(w, "portal: read body: "+rerr.Error(), http.StatusBadRequest)
@@ -125,7 +153,6 @@ func serveControl(w http.ResponseWriter, r *http.Request, d *Runtime) {
 		}
 		return ""
 	}
-	identity := str("identity")
 	action := strings.ToLower(str("action"))
 	thoughtID := str("thoughtID")
 
