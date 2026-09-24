@@ -720,7 +720,6 @@ priority_slots: 1
 2. If reserved slots are full, priority thoughts can preempt lower-priority running thoughts
 3. Normal thoughts only fill non-reserved slots
 4. When non-reserved slots are full, normal thoughts are blocked/rejected/queued based on `slot_exhaustion`
-
 ### 7.3 Slot Exhaustion Policies
 
 | Policy | Behavior | Use Case |
@@ -765,6 +764,49 @@ GIVEN a navi with slot_exhaustion set to "reject"
 WHEN all slots are full
 THEN the system SHALL return an error to the caller immediately.
 
+### 7.4 Logging Configuration (S010003, NAVI-328)
+
+The runtime logger is tunable through the same YAML surface as every other runtime knob:
+
+```yaml
+logging:
+  format: human   # "json" (structured, default for --log-file/pipes) | "human" (console)
+  level: info     # debug | info | warn | error
+```
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `format` | string | context-dependent | Line rendering: `json` (one JSON object per line) or `human` (`time LEVEL msg key=value...`). Default: `human` on an interactive TTY, `json` otherwise (pipes, redirects, `--log-file`) |
+| `level` | string | `info` | Minimum severity: `debug`, `info`, `warn`, `error` |
+
+### Requirement: Log-Format Knob (Config Mirrors Flags)
+
+The system SHALL expose the log format and level through both the CLI flags (`--log-format`, `--log-level`) and the runtime config (`logging:{format, level}`), with the flag winning on conflict per the merge chain, and a documented default: `human` on an interactive TTY, `json` otherwise (pipes, redirects, log files).
+
+**Surface rule (operator design principle):** the config is another way to turn the same knobs as the flags, with obvious exceptions (e.g. the config file's own path). New runtime knobs SHALL appear in both surfaces unless there is a concrete reason not to.
+
+#### Scenario: Human format on a terminal
+
+GIVEN a navi run on an interactive terminal with no explicit format
+WHEN the runtime logs
+THEN the output SHALL be human-readable console lines (`time LEVEL msg key=value...`, fields sorted, level aligned).
+
+#### Scenario: JSON for non-interactive sinks
+
+GIVEN a navi run with stderr redirected (or `--log-file` set) and no explicit format
+WHEN the runtime logs
+THEN the system SHALL render structured JSON lines — one object per line, unchanged from the pre-knob behavior.
+
+#### Scenario: Flag wins on conflict
+
+GIVEN the runtime config sets `logging.format: human` and the CLI passes `--log-format json`
+WHEN the runtime starts
+THEN the system SHALL render JSON lines (flag beats config per the merge chain).
+WHEN all slots are full
+THEN the system SHALL return an error to the caller immediately.
+
 ---
 
 
@@ -798,4 +840,5 @@ THEN the system SHALL route them through the same queue, pool, and runner surfac
 | 2026-08-13 | S010100 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-23 | S010104 | 0.2.0 | Doors-not-forks: §6.1 mapping revised — no interface maps to a separate execution model; binary run uses the in-process queue with a foreground slot (thought-loop case study) |
 | 2026-09-23 | S010104 | 0.2.1 | One assembly (NAVI-325): run modes assemble the same runtime with connectors always loaded; `run --daemon` is the headless presentation; the foreground slot is reserved only when a session (TUI) is attached |
+| 2026-09-23 | S010104 | 0.2.2 | Log-format knob (NAVI-328): §7.4 logging:{format, level} runtime-config section — the config turns the same knobs as the flags (flag wins on conflict); documented TTY-dependent default (human on interactive TTY, json otherwise) |
 

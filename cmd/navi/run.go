@@ -43,8 +43,9 @@ func runInteractive(args []string) error {
 	workers := fs.Int("workers", 2, "thought worker count")
 	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address, e.g. :9090 (default: disabled)")
 	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
-	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
-	logFile := fs.String("log-file", "", "log file path (default stderr)")
+	logLevel := fs.String("log-level", "", "log level: debug, info, warn, error (default info; empty = config/default)")
+	logFormat := fs.String("log-format", "", "log format: human | json (default: human on an interactive TTY, json otherwise)")
+	logFile := fs.String("log-file", "", "log file path (default stderr; files log JSON)")
 	daemonMode := fs.Bool("daemon", false, "headless presentation: no TUI, stdin-loop session driver, no foreground slot (human-readable lines kept)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -54,7 +55,8 @@ func runInteractive(args []string) error {
 	}
 
 	var lw io.Writer = os.Stderr
-	if *logFile != "" {
+	logFileSet := *logFile != ""
+	if logFileSet {
 		f, ferr := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if ferr != nil {
 			return fmt.Errorf("run: open log file %s: %w", *logFile, ferr)
@@ -62,7 +64,16 @@ func runInteractive(args []string) error {
 		defer f.Close()
 		lw = f
 	}
+	// Log-format default (NAVI-328, documented): human on an
+	// interactive stderr TTY, json otherwise — pipes/redirects and
+	// --log-file always get the structured form. Assemble overrides
+	// with the config section / flag per the merge chain (flag wins).
+	format := logging.FormatJSON
+	if !logFileSet && stderrIsTTY() {
+		format = logging.FormatHuman
+	}
 	logger := logging.New(lw, logging.ParseLevel(*logLevel), nil)
+	logger.SetFormat(format)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -74,6 +85,8 @@ func runInteractive(args []string) error {
 		OllamaHost:    *ollamaHost,
 		WorkDir:       *workDir,
 		Logger:        logger,
+		LogFormat:     *logFormat,
+		LogLevel:      *logLevel,
 		NaviID:        *naviID,
 		Foreground:    !*daemonMode, // TUI session attached → foreground slot
 		CompactBudget: *compactBudget,
@@ -184,4 +197,15 @@ func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{
 	}
 	// EOF (Ctrl+D) ends the session; RunForeground drains the queue
 	// and exits.
+}
+
+// stderrIsTTY reports whether stderr is an interactive terminal — the
+// documented log-format default basis (NAVI-328): human on an
+// interactive TTY, json otherwise (pipes, redirects, log files).
+func stderrIsTTY() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
