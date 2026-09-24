@@ -105,7 +105,7 @@ func TestQueueDeferralSurvivesRestart(t *testing.T) {
 	// Durability (S010002): the deferral is persisted, so a rebuilt
 	// queue over the same store still skips the thought until due.
 	store := NewMemoryStore()
-	cfg := Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}
+	cfg := Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue, FlushInterval: -1} // legacy sync: the restart test needs persisted rows
 
 	q, err := NewQueue(cfg, store)
 	if err != nil {

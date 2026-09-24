@@ -195,7 +195,15 @@ func TestDeferralSurvivesRestartViaSqlite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, ts)
+	q, err := thought.NewQueue(thought.Config{
+		MaxConcurrent:  2,
+		PrioritySlots:  0,
+		SlotExhaustion: thought.PolicyQueue,
+		// Legacy sync (NAVI-338): this test's premise is synchronous
+		// persistence across the restart boundary (st.Close() follows
+		// Enqueue immediately — the dirty-set flusher would race it).
+		FlushInterval: -1,
+	}, ts)
 	if err != nil {
 		t.Fatal(err)
 	}

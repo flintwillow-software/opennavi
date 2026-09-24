@@ -126,10 +126,14 @@ func (d *Runtime) RunForeground(ctx context.Context, sessionDone <-chan struct{}
 		// Connector shutdown AFTER the drain (the scheduler may still
 		// fire during the drain; servers close last) — same ordering as
 		// Runtime.Run's graceful path. The reconcile loop stops last
-		// (external adoption during the drain is legitimate).
+		// (external adoption during the drain is legitimate), then the
+		// flusher's final drain persists remaining dirty thoughts.
 		stopConnectors()
 		if d.StopReconcile != nil {
 			d.StopReconcile()
+		}
+		if d.StopFlusher != nil {
+			d.StopFlusher()
 		}
 	}()
 

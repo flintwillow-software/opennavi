@@ -162,7 +162,7 @@ func TestReconcileHonorsExternalDeferUntil(t *testing.T) {
 func TestReconcileNoDuplicateAdoptionAfterRestart(t *testing.T) {
 	st := newExtStore()
 	// First queue persists two thoughts through normal Enqueue.
-	q1, err := NewQueue(Config{MaxConcurrent: 2, ReconcileInterval: -1}, st)
+	q1, err := NewQueue(Config{MaxConcurrent: 2, ReconcileInterval: -1, FlushInterval: -1}, st)
 	if err != nil {
 		t.Fatal(err)
 	}
