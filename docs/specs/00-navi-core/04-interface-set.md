@@ -498,6 +498,8 @@ The TUI is a **door into the house** (S010000): a portal over the thought queue,
 
 > S000406 delta (operator decision, 2026-09-23, NAVI-330): the "not a chat REPL" statement refers to the **queue home view** — the TUI is not a general-purpose chat terminal. The **live thought view** (hopping into a running thought) IS now a chat-window **presentation** of the conversation: the thought's prompt as the opening user turn, assistant deltas accumulated into one assistant turn, tool calls as indented blocks, lifecycle transitions as system lines, and steering deliveries as user turns at their injection point. Presentation only — the portal event stream stays the source of truth.
 
+> S000406 delta (CLI channel, 2026-09-24, NAVI-337): `navi enqueue` is a portal **control-channel client** — with a known portal endpoint (`--portal` flag, then `NAVI_PORTAL` env; resolution order documented in the CLI help) it POSTs the enqueue control action (identity `cli`), falling back to the DB mailbox (durable, NAVI-336 reconcile adopts it) with a visible note when the navi is unreachable or the channel fails closed (enqueue is an authorized action; the 403-until-IAM posture keeps that fail-closed).
+
 ### Requirement: Queue View as Home
 
 The TUI SHALL present the navi's thought queue as its home view: each thought with id, status, priority, age, checkpoint presence, and session-log pointer, updated live from the queue event fanout.
