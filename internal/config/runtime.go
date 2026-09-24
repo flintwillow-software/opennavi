@@ -85,6 +85,10 @@ type RuntimeConfig struct {
 	Tools    ToolPolicy     `yaml:"tools,omitempty"`
 	// ToolCaps tunes tool caps and egress (nil = package defaults).
 	ToolCaps *ToolCapsConfig `yaml:"tool_caps,omitempty"`
+	// Logging tunes the runtime logger (NAVI-328): the config surface
+	// turns the same knobs as the --log-format/--log-level flags
+	// (flag wins on conflict, per the merge chain).
+	Logging *LoggingConfig `yaml:"logging,omitempty"`
 	// SessionDB is the session/memory SQLite path.
 	SessionDB string `yaml:"session_db,omitempty"`
 	// EmbedModel is the local embedding model (memory Tier 5).
@@ -224,6 +228,22 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 		}
 		dst.ToolCaps = &tc
 	}
+	if src.Logging != nil {
+		// Per-field merge (NAVI-328): the section mirrors the flags, so
+		// partial values (format-only, level-only) compose across layers
+		// instead of the last layer clobbering the whole section.
+		if dst.Logging == nil {
+			lc := *src.Logging
+			dst.Logging = &lc
+		} else {
+			if src.Logging.Format != "" {
+				dst.Logging.Format = src.Logging.Format
+			}
+			if src.Logging.Level != "" {
+				dst.Logging.Level = src.Logging.Level
+			}
+		}
+	}
 }
 
 // applyEnv applies environment overrides (layer 3). Known variables:
@@ -275,5 +295,29 @@ func (rc RuntimeConfig) Validate() error {
 			return fmt.Errorf("config: tool_caps.http.max_response_bytes %d must be >= 0", tc.HTTP.MaxResponseBytes)
 		}
 	}
+	if lc := rc.Logging; lc != nil {
+		if lc.Format != "" && lc.Format != "json" && lc.Format != "human" {
+			return fmt.Errorf("config: logging.format %q must be \"json\" or \"human\"", lc.Format)
+		}
+		if lc.Level != "" {
+			switch strings.ToLower(lc.Level) {
+			case "debug", "info", "warn", "warning", "error":
+			default:
+				return fmt.Errorf("config: logging.level %q must be one of debug, info, warn, error", lc.Level)
+			}
+		}
+	}
 	return nil
+}
+
+// LoggingConfig tunes the runtime logger (NAVI-328): the config
+// surface mirrors the --log-format/--log-level flags — "the config is
+// another way to turn the same knobs as the flags" (operator design
+// principle; the flag wins on conflict per the merge chain).
+type LoggingConfig struct {
+	// Format renders lines: "json" (structured, default for
+	// --log-file/pipes) or "human" (console-friendly).
+	Format string `yaml:"format,omitempty"`
+	// Level is the minimum severity: debug|info|warn|error.
+	Level string `yaml:"level,omitempty"`
 }

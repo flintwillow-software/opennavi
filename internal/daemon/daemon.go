@@ -67,10 +67,14 @@ type Runtime struct {
 // navi.yaml: definition-level concerns are compiled into the navi
 // binary, and the daemon consumes only runtime config.
 type RuntimeParams struct {
-	RuntimeFile      string          // runtime config YAML ("" = none)
-	SessionDB        string          // final session DB path (post-merge)
-	Model            string          // CLI model override (flags layer)
-	OllamaHost       string          // CLI host override (flags layer)
+	RuntimeFile string // runtime config YAML ("" = none)
+	SessionDB   string // final session DB path (post-merge)
+	Model       string // CLI model override (flags layer)
+	OllamaHost  string // CLI host override (flags layer)
+	// LogFormat/LogLevel are CLI log-knob overrides (NAVI-328, flags
+	// layer; empty = unset so the logging config section wins).
+	LogFormat        string
+	LogLevel         string
 	CompactBudget    int             // compaction budget (0 = off)
 	WorkDir          string          // working directory for file/shell tools
 	SystemPrompt     string          // CLI system prompt override
@@ -130,6 +134,22 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// flag > env > YAML by construction.
 	if params.OllamaHost != "" {
 		flags.Provider.Endpoint = params.OllamaHost
+	}
+	// Log-format knob (NAVI-328): --log-format/--log-level are flags-
+	// layer overrides — the config surface turns the same knobs (flag
+	// wins on conflict, per the merge chain); empty = unset, so the
+	// config section wins when the flag is absent.
+	if params.LogFormat != "" {
+		if flags.Logging == nil {
+			flags.Logging = &config.LoggingConfig{}
+		}
+		flags.Logging.Format = params.LogFormat
+	}
+	if params.LogLevel != "" {
+		if flags.Logging == nil {
+			flags.Logging = &config.LoggingConfig{}
+		}
+		flags.Logging.Level = params.LogLevel
 	}
 	rc := config.MergeRuntime(fileRC, flags)
 
@@ -299,6 +319,18 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		logger = params.Logger
 	} else {
 		logger = logging.WireFromEnv()
+	}
+	// Log-format knob application (NAVI-328): the merged logging
+	// section turns the same knobs as the flags — applied to the
+	// runtime's logger (SetFormat/SetLevel; empty = unset, so the
+	// cmd-layer TTY default survives when nothing is configured).
+	if rc.Logging != nil {
+		if rc.Logging.Format != "" {
+			logger.SetFormat(logging.ParseFormat(rc.Logging.Format))
+		}
+		if rc.Logging.Level != "" {
+			logger.SetLevel(logging.ParseLevel(rc.Logging.Level))
+		}
 	}
 
 	sched, cerr := WireCron(store.DB(), rc.Cron, q)

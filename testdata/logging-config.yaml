@@ -1,0 +1,6 @@
+provider:
+  primary: mock
+  model: test-model
+logging:
+  format: human
+  level: warn

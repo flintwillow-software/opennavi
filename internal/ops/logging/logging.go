@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -55,19 +56,43 @@ func ParseLevel(s string) Level {
 	}
 }
 
-// Logger writes structured JSON log lines. Safe for concurrent use.
+// Logger writes structured log lines. Format: JSON (default, one
+// object per line) or human (console-friendly). Safe for concurrent
+// use.
 type Logger struct {
 	mu     sync.Mutex
 	out    io.Writer
 	min    Level
+	format Format
 	fields map[string]any
 }
 
 // New creates a logger writing to w at the given minimum level, with
 // optional base fields injected into every line (context injection:
-// navi name, host, etc.).
+// navi name, host, etc.). The format defaults to FormatJSON; switch
+// with SetFormat (NAVI-328 log-format knob).
 func New(w io.Writer, min Level, baseFields map[string]any) *Logger {
 	return &Logger{out: w, min: min, fields: baseFields}
+}
+
+// SetFormat switches the line rendering at runtime (NAVI-328 knob:
+// the config surface turns the same knob as --log-format). No-op on
+// unknown formats.
+func (l *Logger) SetFormat(f Format) {
+	if !f.Valid() {
+		return
+	}
+	l.mu.Lock()
+	l.format = f
+	l.mu.Unlock()
+}
+
+// SetLevel adjusts the minimum level at runtime (NAVI-328 knob: the
+// config surface mirrors --log-level).
+func (l *Logger) SetLevel(min Level) {
+	l.mu.Lock()
+	l.min = min
+	l.mu.Unlock()
 }
 
 // Default returns a stderr logger at info level.
@@ -101,12 +126,60 @@ func (l *Logger) Log(level Level, msg string, fields map[string]any) {
 		}
 	}
 
+	if l.format == FormatHuman {
+		l.writeHumanLocked(level, msg, line)
+		return
+	}
+
 	blob, err := json.Marshal(line)
 	if err != nil {
 		fmt.Fprintf(l.out, `{"level":"error","msg":"log marshal failed: %v"}`+"\n", err)
 		return
 	}
 	fmt.Fprintf(l.out, "%s\n", blob)
+}
+
+// writeHumanLocked renders the console-friendly line (NAVI-328):
+// `time LEVEL msg key=value ...` — fields sorted for deterministic
+// output, level padded for alignment. Reserved keys (level/time/msg)
+// are excluded from the field tail (already rendered).
+func (l *Logger) writeHumanLocked(level Level, msg string, line map[string]any) {
+	var b strings.Builder
+	b.WriteString(line["time"].(string))
+	b.WriteByte(' ')
+	b.WriteString(fmt.Sprintf("%-5s", strings.ToUpper(level.String())))
+	b.WriteByte(' ')
+	b.WriteString(msg)
+	keys := make([]string, 0, len(line))
+	for k := range line {
+		switch k {
+		case "level", "time", "msg":
+			continue // rendered above
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteByte(' ')
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(renderHumanValue(line[k]))
+	}
+	b.WriteByte('\n')
+	fmt.Fprint(l.out, b.String())
+}
+
+// renderHumanValue renders a field value in k=v form: plain strings
+// unquoted, everything else JSON-encoded (maps, numbers, nested).
+func renderHumanValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	blob, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(blob)
 }
 
 // Debug logs at debug level.
