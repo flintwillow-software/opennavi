@@ -27,6 +27,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
 
@@ -70,6 +71,12 @@ type Transport interface {
 	// (zero = due now). In-process thoughts are foreground-tagged so
 	// they claim the foreground slot (S010003).
 	Enqueue(prompt string, prio int, deferUntil time.Time) error
+	// Transcript returns the persisted session whose name matches the
+	// thought id — the replay source for completed thoughts
+	// (NAVI-334). nil session = none (no transcript available;
+	// remote transports return nil by design — the wire protocol will
+	// carry it).
+	Transcript(thoughtID string) (*session.Session, error)
 }
 
 // ── in-process transport ─────────────────────────────────────────────────
@@ -77,19 +84,24 @@ type Transport interface {
 // inProcessTransport attaches directly to a portal built over the
 // navi's own queue with the local-trust authorizer: the console user
 // is the trusted principal pre-IAM. The daemon's served portal is
-// untouched (and stays fail-closed until IAM lands).
+// untouched (and stays fail-closed until IAM lands). sessions gives
+// the transport access to persisted transcripts for replay (NAVI-334;
+// nil = no replay source).
 type inProcessTransport struct {
-	portal *interfaces.Portal
-	feed   *interfaces.PortalMailbox
+	portal   *interfaces.Portal
+	feed     *interfaces.PortalMailbox
+	sessions *session.SessionManager
 }
 
 // NewInProcess builds the in-process transport over the navi's queue.
-func NewInProcess(q *thought.ThoughtQueue) (*inProcessTransport, error) {
+// sessions (the runtime's SessionManager) enables transcript replay;
+// pass nil to disable.
+func NewInProcess(q *thought.ThoughtQueue, sessions *session.SessionManager) (*inProcessTransport, error) {
 	if q == nil {
 		return nil, errors.New("tui: in-process transport requires a queue")
 	}
 	p := interfaces.NewPortal(q, LocalAuthorizer{})
-	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap)}, nil
+	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap), sessions: sessions}, nil
 }
 
 func (t *inProcessTransport) Feed() *interfaces.PortalMailbox { return t.feed }
@@ -116,6 +128,32 @@ func (t *inProcessTransport) Cancel(thoughtID string) error {
 }
 func (t *inProcessTransport) Retry(thoughtID string) error {
 	return t.portal.Retry(LocalIdentity, thoughtID)
+}
+
+// Transcript resolves the persisted session for the thought: the
+// daemon runner creates sessions per thought with the THOUGHT ID as
+// the session WorkDir (persistConversation), so the join key is
+// WorkDir == thought id — bounded listing, best-effort (a session
+// aged out of the listing window falls back to the live/prompt view).
+// nil session (nil error) = no transcript.
+func (t *inProcessTransport) Transcript(thoughtID string) (*session.Session, error) {
+	if t.sessions == nil {
+		return nil, nil
+	}
+	infos, err := t.sessions.ListSessions(session.ListOptions{Limit: 200})
+	if err != nil {
+		return nil, fmt.Errorf("tui: list sessions: %w", err)
+	}
+	for _, info := range infos {
+		s, lerr := t.sessions.LoadSession(info.ID)
+		if lerr != nil {
+			continue
+		}
+		if s.WorkDir == thoughtID {
+			return s, nil
+		}
+	}
+	return nil, nil
 }
 
 // newThoughtID builds a session-created thought id (pattern: the
@@ -311,6 +349,12 @@ func (t *remoteTransport) Cancel(thoughtID string) error {
 }
 func (t *remoteTransport) Retry(thoughtID string) error { return t.control("retry", thoughtID, "", 0) }
 
+// Transcript: out of scope for the remote transport (needs the wire
+// protocol); returns nil so the live view falls back gracefully.
+func (t *remoteTransport) Transcript(thoughtID string) (*session.Session, error) {
+	return nil, nil
+}
+
 // Enqueue posts a session thought through the shim's enqueue control
 // (`{id, prompt, priority}`; the id is generated client-side). The
 // optional not-before time rides along as an ISO field for forward-
@@ -402,7 +446,8 @@ type tuiModel struct {
 	// tool blocks, lifecycle system lines, steers as user turns.
 	// Presentation-only — the stream stays the source of truth.
 	turns      []turn
-	liveScroll int // 0 = tail-follow; >0 = lines scrolled back
+	liveScroll int  // 0 = tail-follow; >0 = lines scrolled back
+	replay     bool // header: chat rebuilt from the persisted transcript
 	input      string
 	inputID    string
 	// enqueue input flow: when inputID is set the input line attaches a
@@ -684,11 +729,22 @@ const maxLiveTurns = 80
 // Context as steering user turns (in-process snapshot; best-effort
 // window — a viewer attaching mid-run sees events only from attach on
 // (NAVI-330)).
+// enterLive opens the live view for thoughtID. When a persisted
+// session transcript exists (transport.Transcript), the chat is
+// REPLAYED from the store (NAVI-334); otherwise the snapshot prompt
+// (plus Context steers) seeds it and the live stream fills in. The
+// header marks the source: chat (replay) vs chat (live).
 func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
 	m.liveScroll = 0
 	m.turns = []turn{}
+	m.replay = false
+	if sess, serr := m.transport.Transcript(thoughtID); serr == nil && sess != nil && len(sess.Entries) > 0 {
+		m.replaySession(sess)
+		m.replay = true
+		return
+	}
 	if thoughts, err := m.transport.Snapshot(); err == nil {
 		for _, t := range thoughts {
 			if t.ID != thoughtID {
@@ -705,6 +761,40 @@ func (m *tuiModel) enterLive(thoughtID string) {
 	}
 	if len(m.turns) == 0 {
 		m.turns = append(m.turns, turn{role: TurnUser, text: thoughtID})
+	}
+}
+
+// replaySession rebuilds the chat from a persisted session transcript:
+// user entries → user turns, assistant entries → assistant turns
+// (tool-call entries → tool blocks), tool entries → tool results
+// (merged into the preceding tool block), compacted/system entries →
+// system lines.
+func (m *tuiModel) replaySession(s *session.Session) {
+	for _, e := range s.Entries {
+		if e.IsCompacted {
+			m.addTurn(turn{role: TurnSystem, text: "(compacted) " + m.clip(e.Message, 60)})
+			continue
+		}
+		switch e.Role {
+		case session.RoleUser:
+			m.addTurn(turn{role: TurnUser, text: e.Message})
+		case session.RoleAssistant:
+			if e.ToolName != "" {
+				m.addTurn(turn{role: TurnTool, tool: m.clip(e.ToolName, 40), toolIn: m.clip(string(e.ToolInput), 40)})
+			} else {
+				m.addTurn(turn{role: TurnAssistant, text: e.Message})
+			}
+		case session.RoleTool:
+			// Result of the tool call: append to the preceding tool
+			// block when there is one, else a standalone block.
+			if n := len(m.turns); n > 0 && m.turns[n-1].role == TurnTool {
+				m.turns[n-1].toolOut = m.clip(e.Message, 60)
+			} else {
+				m.addTurn(turn{role: TurnTool, toolOut: m.clip(e.Message, 60)})
+			}
+		case session.RoleSystem:
+			m.addTurn(turn{role: TurnSystem, text: e.Message})
+		}
 	}
 }
 
@@ -979,7 +1069,11 @@ func (m *tuiModel) renderInput() string {
 }
 
 func (m *tuiModel) renderLive() string {
-	out := fmt.Sprintf(" live: %s (esc returns)", m.liveID)
+	kind := "live"
+	if m.replay {
+		kind = "replay"
+	}
+	out := fmt.Sprintf(" chat: %s · %s (esc returns)", m.liveID, kind)
 	if m.liveScroll > 0 {
 		out += fmt.Sprintf(" · scrolled −%d lines", m.liveScroll)
 	}

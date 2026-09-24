@@ -142,7 +142,7 @@ func runInteractive(args []string) error {
 		go readSession(rt, logger, sessionDone, false)
 		fmt.Println("navi run --daemon — headless; type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
 	} else {
-		tport, terr := tui.NewInProcess(rt.Queue)
+		tport, terr := tui.NewInProcess(rt.Queue, rt.SessionM)
 		if terr != nil {
 			return terr
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 )
 
@@ -25,6 +26,13 @@ type allowAllAuth struct{}
 
 func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
 	return nil
+}
+
+// sessionSessions builds a session manager over an in-memory store
+// (the tui test seam for transcript replay, NAVI-334).
+func sessionSessions(t *testing.T) *session.SessionManager {
+	t.Helper()
+	return session.NewSessionManager(session.NewMemoryStore())
 }
 
 func newQueue(t *testing.T) *thought.ThoughtQueue {
@@ -60,7 +68,7 @@ func TestLocalAuthorizerPermitsLocal(t *testing.T) {
 
 func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	q := newQueue(t)
-	tport, err := NewInProcess(q)
+	tport, err := NewInProcess(q, sessionSessions(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +100,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 
 func TestModelAckDisplay(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t2", 4)); err != nil {
@@ -110,7 +118,7 @@ func TestModelAckDisplay(t *testing.T) {
 
 func TestModelLiveView(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t3", 4)); err != nil {
@@ -176,7 +184,7 @@ func TestModelLiveView(t *testing.T) {
 
 func TestActionsThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	if err := tport.Bump("x", 2); err == nil {
 		t.Error("bump of unknown thought succeeded")
 	}
@@ -245,7 +253,7 @@ func TestActionsThroughTransport(t *testing.T) {
 
 func TestEnqueueThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 
 	// Default priority thought, due now, foreground-tagged.
 	if err := tport.Enqueue("a brand new task", 0, time.Time{}); err != nil {
@@ -307,7 +315,7 @@ func keyEnter(m *tuiModel) { _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) }
 
 func TestModelEnqueueFlow(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -375,7 +383,7 @@ func TestModelEnqueueFlow(t *testing.T) {
 
 func TestModelEnqueueRejectsEmptyPrompt(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -526,7 +534,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 
 func TestTeaProgramRunsAndQuits(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("smoke", 4)); err != nil {
@@ -556,7 +564,7 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 
 func TestModelShowsModelColumn(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	tagged := th("mm1", 4)
@@ -579,7 +587,7 @@ func TestModelShowsModelColumn(t *testing.T) {
 
 func TestSanitizeRowNewlines(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q)
+	tport, _ := NewInProcess(q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	weird := th("n1", 4)
@@ -616,5 +624,90 @@ func TestSanitizeRowNewlines(t *testing.T) {
 	got, gerr := q.GetThought("n1")
 	if gerr != nil || !strings.Contains(got.Prompt, "\n") {
 		t.Error("render sanitization leaked into the data")
+	}
+}
+
+// ── transcript replay (NAVI-334) ────────────────────────────────────────
+
+// persistConversationFor mirrors the daemon runner: create a session
+// named after the thought and fill it with user/assistant/tool/system
+// entries.
+func persistConversationFor(t *testing.T, sessM *session.SessionManager, thoughtID string) {
+	t.Helper()
+	sess, err := sessM.CreateSession("daemon", thoughtID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(role session.Role, msg string) session.SessionEntry {
+		e := session.NewEntry(role, msg)
+		return e
+	}
+	sess.AppendEntry(entry(session.RoleUser, "what is the capital?"))
+
+	// Assistant content entry.
+	assistant := entry(session.RoleAssistant, "The capital is Paris.")
+	sess.AppendEntry(assistant)
+	// Assistant tool-call entry.
+	tool := session.NewEntry(session.RoleAssistant, "")
+	tool.ToolName = "note_write"
+	tool.ToolInput = json.RawMessage(`{"title":"x"}`)
+	sess.AppendEntry(tool)
+	// Tool result entry.
+	sess.AppendEntry(entry(session.RoleTool, "saved note x"))
+	// System entry.
+	sess.AppendEntry(entry(session.RoleSystem, "compaction ran"))
+	if err := sessM.SaveSession(sess); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplayCompletedThought(t *testing.T) {
+	q := newQueue(t)
+	sessM := sessionSessions(t)
+	tport, _ := NewInProcess(q, sessM)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	if err := q.Enqueue(th("done1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	persistConversationFor(t, sessM, "done1")
+	drain(m)
+
+	// Hop into the completed thought's live view.
+	m.sel = 0
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ModeLive || m.liveID != "done1" {
+		t.Fatal("did not enter live view")
+	}
+	view := m.View()
+	if !strings.Contains(view, "replay") {
+		t.Errorf("header should mark the chat as (replay):\n%s", view)
+	}
+	if !strings.Contains(view, "what is the capital?") ||
+		!strings.Contains(view, "The capital is Paris.") ||
+		!strings.Contains(view, "note_write") ||
+		!strings.Contains(view, "saved note x") {
+		t.Errorf("replayed conversation incomplete:\n%s", view)
+	}
+	// Tool result merged into the tool block (one ⚙ block).
+	if strings.Contains(view, "⚙") == false {
+		t.Error("tool block missing")
+	}
+}
+
+func TestLiveViewHeaderMarksLive(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q, sessionSessions(t))
+	m := NewModel(tport)
+	_ = m.Init()
+	if err := q.Enqueue(th("run1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	m.sel = 0
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "live") || strings.Contains(m.View(), "replay") {
+		t.Errorf("running view should be chat (live):\n%s", m.View())
 	}
 }
