@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
@@ -42,6 +43,11 @@ type agentRunnerDeps struct {
 	workDir       string
 	compactBudget int
 	logger        *logging.Logger
+	// providerConfig is the runtime provider config: the fallback
+	// source for per-thought provider overrides (S010104). The
+	// prebuilt chain + model are the runtime primary / fallback chain
+	// used when the thought carries no override.
+	providerConfig config.ProviderConfig
 	// registry holds the assembled tool registry; bind carries the
 	// bridge options (ToolPolicy mapping) used to bind its active set
 	// into each thought run's executor. When nil, agents keep the
@@ -64,6 +70,28 @@ func NewAgentRunner(deps agentRunnerDeps) *AgentRunner {
 	return &AgentRunner{deps: deps}
 }
 
+// resolvePerThoughtProvider resolves the provider + model for ONE
+// thought (S010104): a thought-level Provider override replaces the
+// runtime chain (built from the runtime provider config with the
+// existing buildProviderFor — the same construction the primary uses;
+// unknown names fail with a clear error, never a silent fallback).
+// Model override applies on top; empty fields keep the runtime
+// primary/fallback chain and runtime model.
+func (r *AgentRunner) resolvePerThoughtProvider(t *thought.Thought) (llm.Provider, string, error) {
+	if t.Provider == "" {
+		return r.deps.chain, r.deps.model, nil
+	}
+	p, err := buildProviderFor(t.Provider, r.deps.providerConfig)
+	if err != nil {
+		return nil, "", fmt.Errorf("daemon: thought %s: provider %q: %w (no silent fallback — check the runtime provider config)", t.ID, t.Provider, err)
+	}
+	model := r.deps.model
+	if t.Model != "" {
+		model = t.Model
+	}
+	return p, model, nil
+}
+
 // Run executes one thought (spec: one thought ≈ one agent run).
 //
 // Outcomes:
@@ -77,15 +105,22 @@ func NewAgentRunner(deps agentRunnerDeps) *AgentRunner {
 // never wedges a worker or loses the thought — worst case is a re-run.
 func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	start := time.Now()
+	// Provider/model per thought (S010104): the thought's override,
+	// when present, replaces the runtime chain; the resolution fails
+	// the thought on unknown providers.
+	chain, model, perr := r.resolvePerThoughtProvider(t)
+	if perr != nil {
+		return perr
+	}
 	// One agent per thought: fresh state isolation (spec: one worker
 	// per thought, isolated processing).
 	a := agent.NewAgent(agent.AgentConfig{
 		Provider:     "daemon-wired",
-		Model:        r.deps.model,
+		Model:        model,
 		SystemPrompt: r.deps.systemPrompt,
 		Compaction:   compactionConfig(r.deps.compactBudget),
 	})
-	a.Provider = agentProviderAdapter{chain: r.deps.chain}
+	a.Provider = agentProviderAdapter{chain: chain}
 
 	// Registry-first tool surface (S130400/NAVI-272): the executor is
 	// rebuilt from the registry's active set via tools/bridge, so the

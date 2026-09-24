@@ -374,6 +374,7 @@ type row struct {
 	priority   int
 	prompt     string
 	age        string // seconds since last activity
+	model      string // per-thought provider overrides/selected model (abbreviated)
 	checkpoint bool   // thought carries a checkpoint (parked/resumable)
 	session    string // session-log pointer
 }
@@ -467,17 +468,18 @@ func (m *tuiModel) rebuild(thoughts []*thought.Thought) {
 	m.rows = []row{}
 	m.byID = make(map[string]int)
 	for _, t := range thoughts {
-		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, len(t.Checkpoint) > 0, t.SessionID, t.UpdatedAt)
+		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.SessionID, t.UpdatedAt)
 	}
 }
 
-func (m *tuiModel) upsert(id, status string, prio int, prompt string, checkpoint bool, session string, at time.Time) {
+func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, session string, at time.Time) {
 	if i, ok := m.byID[id]; ok && i < len(m.rows) {
 		m.rows[i].status = status
 		m.rows[i].priority = prio
 		if prompt != "" {
 			m.rows[i].prompt = prompt
 		}
+		m.rows[i].model = model
 		m.rows[i].checkpoint = checkpoint
 		m.rows[i].session = session
 		m.rows[i].age = m.age(at)
@@ -488,6 +490,7 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt string, checkpoint
 		status:     status,
 		priority:   prio,
 		prompt:     prompt,
+		model:      model,
 		checkpoint: checkpoint,
 		session:    session,
 		age:        m.age(at),
@@ -533,7 +536,7 @@ func (m *tuiModel) queueEvent(ev interfaces.PortalEvent) {
 		if thoughts, _ := m.transport.Snapshot(); len(thoughts) > 0 {
 			m.rebuild(thoughts)
 		} else {
-			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", false, "", time.Now().UTC())
+			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, "", time.Now().UTC())
 		}
 		_ = ok
 	}
@@ -842,8 +845,8 @@ func (m *tuiModel) renderList() string {
 		if r.session != "" {
 			flags += "S"
 		}
-		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %s %s\n",
-			mark, r.thoughtID, r.status, r.priority, r.age, flags, m.clip(r.prompt, 30))
+		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s\\n",
+			mark, r.thoughtID, r.status, r.priority, r.age, m.clip(r.model, 10), flags, m.clip(r.prompt, 30))
 	}
 	return out
 }
