@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,11 @@ type Transport interface {
 	Resume(thoughtID string) error
 	Cancel(thoughtID string) error
 	Retry(thoughtID string) error
+	// Enqueue creates a session thought (S000406): prompt with
+	// optional priority (1-10; 0 = default) and not-before time
+	// (zero = due now). In-process thoughts are foreground-tagged so
+	// they claim the foreground slot (S010003).
+	Enqueue(prompt string, prio int, deferUntil time.Time) error
 }
 
 // ── in-process transport ─────────────────────────────────────────────────
@@ -110,6 +116,34 @@ func (t *inProcessTransport) Cancel(thoughtID string) error {
 }
 func (t *inProcessTransport) Retry(thoughtID string) error {
 	return t.portal.Retry(LocalIdentity, thoughtID)
+}
+
+// newThoughtID builds a session-created thought id (pattern: the
+// headless loop's fg- ids).
+func newThoughtID() string {
+	return fmt.Sprintf("tui-%d", time.Now().UTC().UnixNano())
+}
+
+// Enqueue creates a session thought through the portal: foreground-
+// tagged so it claims the foreground slot (S010003), with optional
+// priority (1-10; out-of-range or 0 keeps the default 4) and not-before
+// time.
+func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Time) error {
+	now := time.Now().UTC()
+	if prio < 1 || prio > 10 {
+		prio = 4
+	}
+	th := &thought.Thought{
+		ID:         newThoughtID(),
+		Prompt:     prompt,
+		Priority:   prio,
+		Status:     thought.ThoughtPending,
+		Foreground: true,
+		DeferUntil: deferUntil,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	return t.portal.Enqueue(LocalIdentity, th)
 }
 
 // ── remote transport (gateway attachment) ────────────────────────────────
@@ -277,6 +311,51 @@ func (t *remoteTransport) Cancel(thoughtID string) error {
 }
 func (t *remoteTransport) Retry(thoughtID string) error { return t.control("retry", thoughtID, "", 0) }
 
+// Enqueue posts a session thought through the shim's enqueue control
+// (`{id, prompt, priority}`; the id is generated client-side). The
+// optional not-before time rides along as an ISO field for forward-
+// compat — the current shim ignores unknown fields, so remote
+// deferral is an in-process capability until the shim learns it.
+func (t *remoteTransport) Enqueue(prompt string, prio int, deferUntil time.Time) error {
+	if prio < 1 || prio > 10 {
+		prio = 4
+	}
+	payload := map[string]any{
+		"action": "enqueue",
+		"id":     newThoughtID(),
+		"prompt": prompt,
+	}
+	if prio > 0 {
+		payload["priority"] = prio
+	}
+	if !deferUntil.IsZero() {
+		payload["defer_until"] = deferUntil.UTC().Format(time.RFC3339Nano)
+	}
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("tui: encode control: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/portal/control?identity=%s", t.base, t.identity), strings.NewReader(string(blob)))
+	if err != nil {
+		return fmt.Errorf("tui: build control: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("tui: control enqueue: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("tui: enqueue: unauthorized (fail closed; no authorizer on the gateway)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("tui: enqueue: http %d: %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+	}
+	return nil
+}
+
 // ── the model ────────────────────────────────────────────────────────────
 
 // ModeKind selects the rendered screen.
@@ -320,6 +399,14 @@ type tuiModel struct {
 	live      []string
 	input     string
 	inputID   string
+	// enqueue input flow: when inputID is set the input line attaches a
+	// message to that thought; otherwise it walks the enqueue prompt
+	// stages (0 prompt, 1 priority, 2 defer minutes) and Enqueues.
+	enqueue   bool
+	stage     int
+	enqPrompt string
+	enqPrio   int
+	enqMin    int
 	status    string
 	lost      bool
 }
@@ -519,6 +606,9 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		if m.mode == ModeLive || m.mode == ModeInput {
 			m.mode = ModeList
 			m.input = ""
+			m.inputID = ""
+			m.enqueue = false
+			m.stage = 0
 		}
 	case "up", "k":
 		if m.mode == ModeList && m.sel > 0 {
@@ -537,19 +627,38 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 				m.mode = ModeLive
 			}
 		case ModeInput:
-			if m.inputID != "" && strings.TrimSpace(m.input) != "" {
-				if err := m.transport.Steer(m.inputID, m.input); err != nil {
-					m.status = "steer failed: " + err.Error()
-				} else {
-					m.status = fmt.Sprintf("steered %s", m.inputID)
+			if m.inputID != "" {
+				// Attach-message flow (steer): unchanged.
+				if strings.TrimSpace(m.input) != "" {
+					if err := m.transport.Steer(m.inputID, m.input); err != nil {
+						m.status = "steer failed: " + err.Error()
+					} else {
+						m.status = fmt.Sprintf("steered %s", m.inputID)
+					}
 				}
+				m.mode = ModeList
+				m.input = ""
+				m.inputID = ""
+			} else {
+				// Enqueue flow: prompt -> optional priority -> optional
+				// deferral (minutes); the enqueued event comes back on
+				// the stream and lands the row in the queue view.
+				m.enqueueStep()
 			}
-			m.mode = ModeList
+		}
+	case "n":
+		if m.mode == ModeList {
+			m.enqueue = true
+			m.inputID = ""
+			m.stage = 0
 			m.input = ""
+			m.mode = ModeInput
 		}
 	case "a":
 		if m.mode == ModeList && len(m.rows) > 0 {
+			m.enqueue = false
 			m.inputID = m.rows[m.sel].thoughtID
+			m.stage = 0
 			m.input = ""
 			m.mode = ModeInput
 		}
@@ -597,6 +706,62 @@ func maxPriority(p int) int {
 	}
 	return p
 }
+
+// parsePrio parses a priority 1-10 (empty/invalid keeps the default 4).
+func parsePrio(s string) int {
+	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32); err == nil && n >= 1 && n <= 10 {
+		return int(n)
+	}
+	return 4
+}
+
+// parseMinutes parses a deferral in minutes (empty/invalid = 0).
+func parseMinutes(s string) int {
+	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32); err == nil && n > 0 {
+		return int(n)
+	}
+	return 0
+}
+
+// enqueueStep walks the new-thought input stages (prompt -> priority
+// -> defer minutes) and enqueues through the transport; the enqueued
+// event comes back on the stream and lands the row in the queue view.
+func (m *tuiModel) enqueueStep() {
+	switch m.stage {
+	case 0:
+		m.enqPrompt = m.input
+		m.input = ""
+		if strings.TrimSpace(m.enqPrompt) == "" {
+			m.status = "enqueue cancelled: prompt is required"
+			m.mode = ModeList
+			m.enqueue = false
+			return
+		}
+		m.stage = 1
+	case 1:
+		m.enqPrio = parsePrio(m.input)
+		m.input = ""
+		m.stage = 2
+	case 2:
+		m.enqMin = parseMinutes(m.input)
+		var notBefore time.Time
+		if m.enqMin > 0 {
+			notBefore = time.Now().UTC().Add(time.Duration(float64(m.enqMin) * float64(time.Minute)))
+		}
+		if err := m.transport.Enqueue(m.enqPrompt, m.enqPrio, notBefore); err != nil {
+			m.status = "enqueue failed: " + err.Error()
+		} else {
+			deferNote := ""
+			if !notBefore.IsZero() {
+				deferNote = " (deferred)"
+			}
+			m.status = fmt.Sprintf("enqueued at p%d%s", m.enqPrio, deferNote)
+		}
+		m.mode = ModeList
+		m.enqueue = false
+		m.input = ""
+	}
+}
 func minPriority(p int) int {
 	if p > 10 {
 		return 10
@@ -636,12 +801,11 @@ func (m *tuiModel) render() string {
 	case ModeLive:
 		out += m.renderLive()
 	case ModeInput:
-		out += m.renderList()
-		out += fmt.Sprintf(" attach to %s > %s█\n", m.inputID, m.input)
+		out += m.renderInput()
 	}
 	out += repeat("-", 60) + "\n"
 	out += " " + m.status + "\n"
-	out += " q quit · j/k move · enter/i live · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
+	out += " q quit · j/k move · enter/i live · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
 	return out
 }
 
@@ -682,6 +846,21 @@ func (m *tuiModel) renderList() string {
 			mark, r.thoughtID, r.status, r.priority, r.age, flags, m.clip(r.prompt, 30))
 	}
 	return out
+}
+
+func (m *tuiModel) renderInput() string {
+	if m.inputID != "" {
+		return fmt.Sprintf(" attach to %s > %s█\n", m.inputID, m.input)
+	}
+	switch m.stage {
+	case 0:
+		return fmt.Sprintf(" new thought prompt > %s█\n", m.input)
+	case 1:
+		return fmt.Sprintf(" priority 1-10 (default 4) > %s█\n", m.input)
+	case 2:
+		return fmt.Sprintf(" defer minutes (0 = now) > %s█\n", m.input)
+	}
+	return ""
 }
 
 func (m *tuiModel) renderLive() string {
