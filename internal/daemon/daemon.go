@@ -525,76 +525,16 @@ func unmarshalState(blob []byte) ([]agent.AgentMessage, error) {
 // parked-with-checkpoint on cancellation). No thought is killed-and-
 // lost; park-with-checkpoint is the spec-correct terminal path.
 func (d *Runtime) Run(ctx context.Context) error {
-	// Start the scheduler (begins ticking against the queue).
-	if d.Scheduler != nil {
-		d.Scheduler.Start()
-	}
+	// One assembly (NAVI-325): connectors start identically in every
+	// run mode — RunForeground uses the same starters. Shutdown
+	// ordering preserved: servers first (stop closure), then
+	// scheduler stop, then the pool drain by the caller below.
+	stopConnectors := d.startConnectors()
 
 	// Start the worker pool — without this the daemon never claims
 	// thoughts (found during live E2E validation: #247).
 	if d.Pool != nil {
 		d.Pool.Start()
-	}
-
-	// Serve the Prometheus exposition when metrics are enabled
-	// (Runtime.Metrics non-nil iff MetricsAddr was set). The server
-	// shuts down with the runtime; scrape failures must never take
-	// the daemon down, so ListenAndServe errors after shutdown are
-	// logged, not propagated.
-	var metricsSrv *http.Server
-	if d.Metrics != nil {
-		addr := d.Config.MetricsAddr
-		metricsSrv = &http.Server{
-			Addr:              addr,
-			Handler:           d.Metrics.Handler(),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("daemon: metrics listener on %s: %w", addr, err)
-		}
-		d.Logger.Info("metrics endpoint serving", map[string]any{"addr": addr, "path": "/metrics"})
-		go func() {
-			if serr := metricsSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
-				d.Logger.Error("metrics server error", map[string]any{"error": serr.Error()})
-			}
-		}()
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = metricsSrv.Shutdown(shutdownCtx)
-		}()
-	}
-
-	// Serve the portal attachment (S000407) when PortalAddr is set
-	// (Runtime.Portal non-nil iff PortalAddr was set): same listener
-	// lifecycle and graceful shutdown ordering as the metrics server.
-	// The serve shim (portal.go) is a loopback-grade JSON mapping;
-	// the real wire protocol is deferred. Control and attach fail
-	// closed until IAM lands (no authorizer wired).
-	var portalSrv *http.Server
-	if d.Portal != nil {
-		addr := d.Config.PortalAddr
-		portalSrv = &http.Server{
-			Addr:              addr,
-			Handler:           PortalHandler(d),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("daemon: portal listener on %s: %w", addr, err)
-		}
-		d.Logger.Info("portal attachment serving", map[string]any{"addr": addr, "path": "/portal/events"})
-		go func() {
-			if serr := portalSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
-				d.Logger.Error("portal server error", map[string]any{"error": serr.Error()})
-			}
-		}()
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = portalSrv.Shutdown(shutdownCtx)
-		}()
 	}
 
 	// Block until ctx is done (signal.NotifyContext in the command),
@@ -604,11 +544,100 @@ func (d *Runtime) Run(ctx context.Context) error {
 	// Graceful: scheduler stops ticking, pool drains in-flight thoughts
 	// (park-with-checkpoint is the terminal path for interrupted runs).
 	// Store close is the caller's responsibility (Runtime.Store.Close()).
-	if d.Scheduler != nil {
-		d.Scheduler.Stop()
-	}
+	stopConnectors()
 	d.Pool.StopAndWait()
 	return nil
+}
+
+// startConnectors starts the shared connector set every run mode
+// serves (NAVI-325 one assembly): the scheduler, the metrics
+// exposition, and the portal attachment. Scrape/attach failures never
+// take the run down: listener errors are logged, not propagated (a
+// headless run without a port free still processes work).
+//
+// Returns the connector-stop closure; the caller invokes it at
+// shutdown — servers close first, then the scheduler stop, then the
+// caller's pool drain (the #280/#290 shutdown semantics preserved).
+// The closures run at STOP time, not at start-return (defers inside a
+// starter would close the servers before the run began).
+func (d *Runtime) startConnectors() (stopConnectors func()) {
+	// Start the scheduler (begins ticking against the queue).
+	if d.Scheduler != nil {
+		d.Scheduler.Start()
+	}
+
+	var shutdowns []func()
+	stopConnectors = func() {
+		for _, fn := range shutdowns {
+			fn()
+		}
+		// Connector shutdown step: the scheduler stops ticking. Pool
+		// drain remains the caller's (StopAndWait is the park path,
+		// ordered against the caller's own session teardown).
+		if d.Scheduler != nil {
+			d.Scheduler.Stop()
+		}
+	}
+
+	// Serve the Prometheus exposition when metrics are enabled
+	// (Runtime.Metrics non-nil iff MetricsAddr was set).
+	if d.Metrics != nil {
+		addr := d.Config.MetricsAddr
+		metricsSrv := &http.Server{
+			Addr:              addr,
+			Handler:           d.Metrics.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			d.Logger.Error("metrics listener failed", map[string]any{"addr": addr, "error": err.Error()})
+		} else {
+			d.Logger.Info("metrics endpoint serving", map[string]any{"addr": addr, "path": "/metrics"})
+			go func() {
+				if serr := metricsSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+					d.Logger.Error("metrics server error", map[string]any{"error": serr.Error()})
+				}
+			}()
+			shutdowns = append(shutdowns, func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = metricsSrv.Shutdown(shutdownCtx)
+			})
+		}
+	}
+
+	// Serve the portal attachment (S000407) when PortalAddr is set
+	// (Runtime.Portal non-nil iff PortalAddr was set): same listener
+	// lifecycle and graceful shutdown ordering as the metrics server.
+	// The serve shim (portal.go) is a loopback-grade JSON mapping;
+	// the real wire protocol is deferred. Control and attach fail
+	// closed until IAM lands (no authorizer wired).
+	if d.Portal != nil {
+		addr := d.Config.PortalAddr
+		portalSrv := &http.Server{
+			Addr:              addr,
+			Handler:           PortalHandler(d),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			d.Logger.Error("portal listener failed", map[string]any{"addr": addr, "error": err.Error()})
+		} else {
+			d.Logger.Info("portal attachment serving", map[string]any{"addr": addr, "path": "/portal/events"})
+			go func() {
+				if serr := portalSrv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+					d.Logger.Error("portal server error", map[string]any{"error": serr.Error()})
+				}
+			}()
+			shutdowns = append(shutdowns, func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = portalSrv.Shutdown(shutdownCtx)
+			})
+		}
+	}
+
+	return stopConnectors
 }
 
 // Shutdown is the graceful path used by signal handling: stops the
