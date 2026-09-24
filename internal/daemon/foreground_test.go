@@ -176,14 +176,17 @@ func TestBinaryRunSteeringBridgeDelivers(t *testing.T) {
 	go func() { runDone <- rt.RunForeground(ctx, sessionDone) }()
 
 	// Wait for the thought to start, then steer it through the queue.
+	// Note: status==Running (the pool's claim) precedes the runner's
+	// agent registration — under -race/lag the window is real, so the
+	// wait below polls the tracker itself (the thing the bridge needs)
+	// rather than relying on the status alone.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		got, gerr := rt.Queue.GetThought("fg-1")
-		if gerr == nil && got.Status == thought.ThoughtRunning {
+		if _, ok := rt.inflight.lookup("fg-1"); ok {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("thought never started running")
+			t.Fatal("agent never registered with the steering bridge")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

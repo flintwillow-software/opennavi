@@ -1,5 +1,6 @@
 // Command navi is the minimal CLI entry point: dispatches subcommands
-// (daemon, enqueue) or falls through to the interactive chat REPL.
+// (run, enqueue, health; daemon as a deprecated alias) or falls
+// through to the interactive chat REPL.
 package main
 
 import (
@@ -16,7 +17,11 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "daemon":
-			if err := runDaemon(os.Args[2:]); err != nil {
+			// Deprecated alias (NAVI-325): `navi daemon` == `navi run
+			// --daemon` — one assembly, headless presentation. Kept this
+			// cycle; removed next.
+			fmt.Fprintln(os.Stderr, "navi: 'daemon' is deprecated — use 'run --daemon'")
+			if err := runInteractive(append(os.Args[2:], "--daemon")); err != nil {
 				fmt.Fprintln(os.Stderr, "navi:", err)
 				os.Exit(1)
 			}
