@@ -110,6 +110,10 @@ func (t *inFlightAgents) steeringSnapshot(thoughtID string) []string {
 // The caller drives input (stdin loop in cmd/navi; tests enqueue
 // directly) through Runtime.Queue and Runtime.Queue.RouteMessage.
 func (d *Runtime) RunForeground(ctx context.Context, sessionDone <-chan struct{}) error {
+	// One assembly (NAVI-325): the connectors (scheduler, metrics,
+	// portal) start identically in every run mode via the same starters
+	// Runtime.Run uses — only the pool start is mode-common here.
+	stopConnectors := d.startConnectors()
 	if d.Pool != nil {
 		d.Pool.Start()
 	}
@@ -119,6 +123,10 @@ func (d *Runtime) RunForeground(ctx context.Context, sessionDone <-chan struct{}
 		if d.Pool != nil {
 			d.Pool.StopAndWait()
 		}
+		// Connector shutdown AFTER the drain (the scheduler may still
+		// fire during the drain; servers close last) — same ordering as
+		// Runtime.Run's graceful path.
+		stopConnectors()
 	}()
 
 	// Drained = no claimable/paused work left (pending, running, or
