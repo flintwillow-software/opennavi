@@ -774,7 +774,7 @@ THEN the system SHALL return an error to the caller immediately.
 
 ### Requirement: Binary Run Drives the Queue In-Process
 
-A navi run with only the TUI interface SHALL run the thought queue in-process with a foreground slot, rather than a separate one-off execution path.
+Every navi run mode assembles the SAME runtime — connectors (cron, metrics, portal) load whether the run presents a TUI or runs headless (`--daemon`); the modes differ only by the presentation layer (S010003, NAVI-325). A navi run with an interactive session attached runs the thought queue in-process with a foreground slot, rather than a separate one-off execution path; headless runs have no foreground thought.
 
 #### Scenario: TUI session attached to the in-process queue
 
@@ -797,4 +797,5 @@ THEN the system SHALL route them through the same queue, pool, and runner surfac
 |------|--------|---------|--------|
 | 2026-08-13 | S010100 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-23 | S010104 | 0.2.0 | Doors-not-forks: §6.1 mapping revised — no interface maps to a separate execution model; binary run uses the in-process queue with a foreground slot (thought-loop case study) |
+| 2026-09-23 | S010104 | 0.2.1 | One assembly (NAVI-325): run modes assemble the same runtime with connectors always loaded; `run --daemon` is the headless presentation; the foreground slot is reserved only when a session (TUI) is attached |
 

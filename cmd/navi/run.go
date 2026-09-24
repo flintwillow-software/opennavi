@@ -19,29 +19,33 @@ import (
 )
 
 // runInteractive is the `navi run` subcommand — the binary-run entry
-// (S010003 §06): the same thought queue, pool, and registry-governed
-// tools as `navi daemon`, driven in-process with no connectors. The
-// session's current thought occupies a foreground slot; by default the
-// Bubble Tea TUI is the front door (S000406, NAVI-319), attached
-// in-process over the portal; stdin lines enqueue durable thoughts
-// (first input) or steer the in-flight run (RouteMessage, turn-boundary
-// injection); Ctrl+C parks the foreground thought with its checkpoint
-// (never kill-and-lose); the process exits when the session ends and
-// the queue drains. --headless keeps the classic stdin loop (TUI
-// skipped) for pipes/automation.
+// (S010003 §06): ONE assembly with the daemon — the same thought
+// queue, pool, registry-governed tools, and connectors (cron, metrics,
+// portal) load in every run mode; run modes differ ONLY by the TUI
+// layer (NAVI-325). By default the Bubble Tea TUI is the front door
+// (S000406, NAVI-319), attached in-process over the portal, and the
+// session's current thought occupies a foreground slot; --daemon is
+// the headless presentation — no TUI, classic stdin loop, human-
+// readable lines kept (structured-log migration explicitly deferred),
+// and no foreground thought (the stdin loop enqueues normal work).
+// Ctrl+C parks the foreground thought with its checkpoint (never
+// kill-and-lose); the process exits when the session ends and the
+// queue drains.
 func runInteractive(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	runtimeFile := fs.String("config", "", "path to runtime config YAML (optional)")
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
 	model := fs.String("model", "", "LLM model name (required)")
-	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (default $OLLAMA_HOST)")
+	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (overrides $OLLAMA_HOST and YAML; default http://localhost:11434)")
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
 	compactBudget := fs.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
 	workers := fs.Int("workers", 2, "thought worker count")
+	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address, e.g. :9090 (default: disabled)")
+	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	logFile := fs.String("log-file", "", "log file path (default stderr)")
-	headless := fs.Bool("headless", false, "run the classic stdin loop instead of the TUI")
+	daemonMode := fs.Bool("daemon", false, "headless presentation: no TUI, stdin-loop session driver, no foreground slot (human-readable lines kept)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -71,9 +75,11 @@ func runInteractive(args []string) error {
 		WorkDir:       *workDir,
 		Logger:        logger,
 		NaviID:        *naviID,
-		Foreground:    true, // binary run: in-process queue, foreground slot
+		Foreground:    !*daemonMode, // TUI session attached → foreground slot
 		CompactBudget: *compactBudget,
 		Workers:       *workers,
+		MetricsAddr:   *metricsAddr,
+		PortalAddr:    *portalAddr,
 	})
 	if err != nil {
 		return err
@@ -86,13 +92,15 @@ func runInteractive(args []string) error {
 	go func() { runDone <- rt.RunForeground(ctx, sessionDone) }()
 
 	// Session driver: the Bubble Tea TUI is the front door (S000406,
-	// NAVI-319), attached in-process over the portal; --headless keeps
-	// the classic stdin loop for pipes/automation.
+	// NAVI-319), attached in-process over the portal; --daemon is the
+	// headless presentation — same stdin loop, human-readable lines
+	// kept, no foreground slot (work enters as normal thoughts).
 	var tuiRun error
-	if *headless {
-		go readSession(rt, logger, sessionDone)
-		fmt.Println("navi binary run — type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
+	if *daemonMode {
+		go readSession(rt, logger, sessionDone, false)
+		fmt.Println("navi run --daemon — headless; type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
 	} else {
+		go readSession(rt, logger, sessionDone, true)
 		tport, terr := tui.NewInProcess(rt.Queue)
 		if terr != nil {
 			return terr
@@ -118,12 +126,14 @@ func runInteractive(args []string) error {
 }
 
 // readSession drives the interactive session: the first stdin line
-// becomes the foreground thought (durable, same lifecycle as daemon
-// work); lines while it runs steer it at the turn boundary via
-// RouteMessage; EOF (Ctrl+D) ends the session — the run then drains
-// and exits. Exits early on ctx cancellation so Ctrl+C doesn't wait
-// on stdin.
-func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{}) {
+// becomes a durable thought (same lifecycle as daemon work); lines
+// while it runs steer it at the turn boundary via RouteMessage; EOF
+// (Ctrl+D) ends the session — the run then drains and exits. With a
+// TUI session attached (foreground), thoughts are Foreground-tagged
+// and claim the reserved foreground slot; in headless --daemon mode
+// work enters as normal thoughts (no foreground slot, NAVI-325).
+// Exits early on ctx cancellation so Ctrl+C doesn't wait on stdin.
+func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{}, foreground bool) {
 	defer close(done)
 	sc := bufio.NewScanner(os.Stdin)
 	var foregroundID string
@@ -145,15 +155,16 @@ func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{
 			continue
 		}
 		// Interactive input becomes a durable thought (S010003 §06):
-		// same lifecycle/persistence as daemon-enqueued work, claiming
-		// the foreground slot.
+		// same lifecycle/persistence as daemon-enqueued work. With a
+		// TUI session attached it claims the reserved foreground slot;
+		// headless --daemon work enters as normal thoughts (NAVI-325).
 		now := time.Now().UTC()
 		th := &thought.Thought{
 			ID:         fmt.Sprintf("fg-%d", now.UnixNano()),
 			Prompt:     line,
 			Priority:   4,
 			Status:     thought.ThoughtPending,
-			Foreground: true,
+			Foreground: foreground,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
@@ -161,7 +172,15 @@ func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{
 			logger.Error("enqueue failed", map[string]any{"error": err.Error()})
 			continue
 		}
-		foregroundID = th.ID
+		if foreground {
+			foregroundID = th.ID // claims the reserved slot; steerable
+		} else {
+			// Headless: no foreground reservation — the thought is
+			// normal work, but the session driver still tracks the
+			// latest input for steering (RouteMessage works on any
+			// running thought; no foreground slot involved).
+			foregroundID = th.ID
+		}
 	}
 	// EOF (Ctrl+D) ends the session; RunForeground drains the queue
 	// and exits.

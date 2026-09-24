@@ -29,7 +29,7 @@ The **doors** differ per run mode; the queue does not:
 | TUI (human portal) | attach/steer existing thoughts, or schedule new ones | conversational (operator decision: connector messages are thought-per-message; TUI messages attach/steer/schedule) |
 | Tools | the navi acting out through the governed tool registry | — (tool calls happen inside a running thought) |
 
-**No door bypasses the loop.** There is no execution path that drives the agent around the queue: a navi run without connectors (interactive/binary run) drives the same queue in-process with a foreground slot (S010003); daemon navis run the queue against external doors. ChatSession remains for what it actually is — council-mode and delegation coordination (short-lived multi-agent sessions) — not an alternative execution model for ordinary work.
+**No door bypasses the loop.** There is no execution path that drives the agent around the queue: every run mode assembles the SAME runtime — the queue, pool, governed tools, and connectors (cron, metrics, portal) always load (S010003, NAVI-325) — and the TUI vs `--daemon` distinction is presentation only. The interactive session's thought occupies a foreground slot (S010003) when a session (TUI) is attached; headless runs have no foreground thought. ChatSession remains for what it actually is — council-mode and delegation coordination (short-lived multi-agent sessions) — not an alternative execution model for ordinary work.
 
 ### 1.2 The Thought
 
@@ -74,7 +74,7 @@ THEN the system SHALL initialize a thought queue with priority scheduling and cr
 
 #### Scenario: Binary run uses the same queue in-process
 
-GIVEN a navi run as the plain binary with no connectors (interactive session)
+GIVEN a navi run as the plain binary (interactive session)
 WHEN the user submits work through the TUI
 THEN the system SHALL enqueue it as a durable thought in the same in-process queue (foreground slot per S010003) with identical lifecycle, persistence, park-with-checkpoint, and crash-recovery semantics as daemon work.
 
@@ -558,4 +558,5 @@ THEN the foreground session's thoughts SHALL compete for slots by the same prior
 |------|--------|---------|--------|
 | 2026-08-13 | S010000 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-23 | S010003 | 0.2.0 | House model: queue is the runtime's main loop in every run mode; §1.1 rewritten from two-execution-models to house-and-doors; binary-run (in-process queue, foreground slot) spec'd; no-door-bypasses-the-queue requirement added (thought-loop case study) |
+| 2026-09-23 | S010003 | 0.2.1 | One assembly (NAVI-325): every run mode assembles the same runtime — connectors (cron, metrics, portal) load in every mode; TUI vs `--daemon` differ by presentation only; the foreground slot is reserved only when a session (TUI) is attached — headless runs have no foreground thought |
 

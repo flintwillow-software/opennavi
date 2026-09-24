@@ -93,12 +93,14 @@ type RuntimeParams struct {
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
 	NaviID string
-	// Foreground marks a binary run (S010003 §06): in-process queue,
-	// no connectors — the interactive session's thought occupies a
-	// reserved foreground slot (Config.ForegroundSlots >= 1), the
-	// steering bridge is registered so routed messages reach the
-	// in-flight agent, and the process exits when the session ends
-	// and the queue drains (RunForeground).
+	// Foreground marks an interactive session attached to the binary
+	// run (S010003 §06): the session's thought occupies a reserved
+	// foreground slot (Config.ForegroundSlots >= 1) and the run exits
+	// when the session ends and the queue drains (RunForeground). The
+	// runtime assembles IDENTICALLY in every mode (one assembly,
+	// NAVI-325: connectors — cron, metrics, portal — always load);
+	// the foreground slot is reserved only when a session (TUI) is
+	// attached — headless `--daemon` mode has no foreground thought.
 	Foreground bool
 }
 
@@ -121,6 +123,13 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 	if params.SessionDB != "" {
 		flags.SessionDB = params.SessionDB
+	}
+	// --ollama-host is a flags-layer override (NAVI-325): the endpoint
+	// comes from the flag (top layer) over env/YAML. MergeRuntime's env
+	// fill is gated on the flag value being empty, so the precedence is
+	// flag > env > YAML by construction.
+	if params.OllamaHost != "" {
+		flags.Provider.Endpoint = params.OllamaHost
 	}
 	rc := config.MergeRuntime(fileRC, flags)
 
