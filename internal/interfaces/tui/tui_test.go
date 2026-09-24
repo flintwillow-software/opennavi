@@ -711,3 +711,80 @@ func TestLiveViewHeaderMarksLive(t *testing.T) {
 		t.Errorf("running view should be chat (live):\n%s", m.View())
 	}
 }
+
+// ── real-time overview (NAVI-335) ───────────────────────────────────────
+
+func TestHomeViewAgentPreview(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q, sessionSessions(t))
+	m := NewModel(tport)
+	_ = m.Init()
+	if err := q.Enqueue(th("run1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+
+	// Deltas stream a preview snippet onto the row in LIST mode.
+	tport.portal.ObserveAgent("run1", agent.AgentEvent{
+		Type:    agent.AgentEventContentDelta,
+		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "writing a hello world example"},
+	})
+	drain(m)
+	if m.mode != ModeList {
+		t.Fatal("test expects home view")
+	}
+	if !strings.Contains(m.View(), "writing a hello world") {
+		t.Errorf("delta preview missing from the row:\n%s", m.View())
+	}
+	// Tool activity shows on the row and in the status activity line.
+	tport.portal.ObserveAgent("run1", agent.AgentEvent{
+		Type: agent.AgentEventToolCall,
+		Tool: &agent.ToolUpdate{ToolCallID: "c1", Name: "note_write", Input: json.RawMessage(`{"title":"x"}`)},
+	})
+	drain(m)
+	if !strings.Contains(m.View(), "⚙ note_write") || !strings.Contains(m.View(), "run1 ·") {
+		t.Errorf("tool preview / activity line missing:\n%s", m.View())
+	}
+	// Completion clears the activity line.
+	if err := q.Complete("run1"); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	if strings.Contains(m.View(), "run1 ·") && m.active != "" {
+		t.Errorf("activity line not cleared after completion:\n%s", m.View())
+	}
+}
+
+func TestTickingClockWhileRunning(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q, sessionSessions(t))
+	m := NewModel(tport)
+	_ = m.Init()
+
+	// Idle: the poll cmd yields no message (no busy-loop).
+	if msg := m.poll()(); msg != nil {
+		t.Error("idle poll produced a message")
+	}
+
+	if err := q.Enqueue(th("run2", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+	if !m.anyRunning() {
+		t.Fatal("no running row after claim")
+	}
+	// Running: the poll cmd yields a tick even with zero events.
+	msg := m.poll()()
+	if msg == nil {
+		t.Fatal("poll produced nothing while running")
+	}
+	if _, ok := msg.(tickMsg); !ok {
+		t.Error("expected a tick message while running")
+	}
+}

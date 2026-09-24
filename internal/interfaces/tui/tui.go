@@ -417,10 +417,11 @@ type row struct {
 	status     string
 	priority   int
 	prompt     string
-	age        string // seconds since last activity
-	model      string // per-thought provider overrides/selected model (abbreviated)
-	checkpoint bool   // thought carries a checkpoint (parked/resumable)
-	session    string // session-log pointer
+	at         time.Time // last activity time — the render computes the age (ticking clock)
+	model      string    // per-thought provider overrides/selected model (abbreviated)
+	checkpoint bool      // thought carries a checkpoint (parked/resumable)
+	session    string    // session-log pointer
+	activity   string    // live preview: latest tool call / delta snippet (NAVI-335)
 }
 
 // feedMsg delivers a drained mailbox batch to the model.
@@ -428,6 +429,10 @@ type feedMsg struct {
 	evs  []interfaces.PortalEvent
 	lost bool
 }
+
+// tickMsg refreshes the home view (ages, activity line) when a thought
+// is running even with zero new events (NAVI-335 ticking clocks).
+type tickMsg struct{}
 
 // tuiModel is the Bubble Tea model: pure state + Init/Update/View, so
 // all of it is unit-testable without a terminal (the tea program is
@@ -449,7 +454,11 @@ type tuiModel struct {
 	liveScroll int  // 0 = tail-follow; >0 = lines scrolled back
 	replay     bool // header: chat rebuilt from the persisted transcript
 	input      string
-	inputID    string
+	// active reports the running thought's inference activity in the
+	// home view status line (NAVI-335).
+	active   string
+	activeID string
+	inputID  string
 	// enqueue input flow: when inputID is set the input line attaches a
 	// message to that thought; otherwise it walks the enqueue prompt
 	// stages (0 prompt, 1 priority, 2 defer minutes) and Enqueues.
@@ -480,11 +489,27 @@ func (m *tuiModel) poll() tea.Cmd {
 	return tea.Every(150*time.Millisecond, func(t time.Time) tea.Msg {
 		evs, next, lost := m.feed.ReadAfter(m.cursor)
 		if len(evs) == 0 && !lost {
+			// Idle: repaint only while a thought runs (ticking clocks,
+			// live preview); a quiet home re-renders nothing (NAVI-335).
+			if m.anyRunning() {
+				return tickMsg{}
+			}
 			return nil
 		}
 		m.cursor = next
 		return feedMsg{evs: evs, lost: lost}
 	})
+}
+
+// anyRunning reports whether any row is running (drives the idle-free
+// ticking refresh).
+func (m *tuiModel) anyRunning() bool {
+	for _, r := range m.rows {
+		if r.status == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 // Init seeds from the transport snapshot (S000406) and starts the
@@ -506,6 +531,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.poll()
 	case feedMsg:
 		m.applyFeed(msg)
+		return m, m.poll()
+	case tickMsg:
+		// Zero new events but work is running: repaint (ages tick).
 		return m, m.poll()
 	}
 	return m, m.poll()
@@ -532,7 +560,7 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		m.rows[i].model = model
 		m.rows[i].checkpoint = checkpoint
 		m.rows[i].session = session
-		m.rows[i].age = m.age(at)
+		m.rows[i].at = at
 		return
 	}
 	m.rows = append(m.rows, row{
@@ -543,7 +571,7 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		model:      model,
 		checkpoint: checkpoint,
 		session:    session,
-		age:        m.age(at),
+		at:         at,
 	})
 	m.byID[id] = len(m.rows) - 1
 }
@@ -592,7 +620,11 @@ func (m *tuiModel) queueEvent(ev interfaces.PortalEvent) {
 	}
 	if i, ok := m.byID[ev.ThoughtID]; ok && i < len(m.rows) {
 		m.rows[i].status = displayStatus(ev.Kind)
-		m.rows[i].age = m.age(time.Now().UTC())
+		m.rows[i].at = time.Now().UTC()
+		if ev.Kind == "completed" && m.activeID == ev.ThoughtID {
+			m.active = ""
+			m.activeID = ""
+		}
 	}
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
@@ -642,9 +674,21 @@ func (m *tuiModel) ackEvent(ev interfaces.PortalEvent) {
 }
 
 func (m *tuiModel) agentEvent(ev interfaces.PortalEvent) {
-	if m.mode != ModeLive || ev.ThoughtID != m.liveID {
+	if m.mode == ModeLive && ev.ThoughtID == m.liveID {
+		m.chatAgentEvent(ev)
 		return
 	}
+	// Home view (NAVI-335): consume agent events for RUNNING thoughts —
+	// latest tool call or delta snippet on the row, plus the status
+	// activity line.
+	if m.mode == ModeList {
+		m.homeAgentEvent(ev)
+	}
+}
+
+// chatAgentEvent feeds an agent event into the live chat window turns
+// (NAVI-330). Only called for the live view's own thought.
+func (m *tuiModel) chatAgentEvent(ev interfaces.PortalEvent) {
 	switch ev.Kind {
 	case "content_delta":
 		// Accumulate deltas into ONE assistant turn.
@@ -666,6 +710,30 @@ func (m *tuiModel) agentEvent(ev interfaces.PortalEvent) {
 	default:
 		m.addTurn(turn{role: TurnSystem, text: ev.Kind})
 	}
+}
+
+// homeAgentEvent updates the running thought's row preview + the
+// status activity line from agent events (NAVI-335).
+func (m *tuiModel) homeAgentEvent(ev interfaces.PortalEvent) {
+	preview := ""
+	switch ev.Kind {
+	case "content_delta":
+		preview = m.clip(ev.Detail, 24)
+	case "tool_call":
+		preview = "⚙ " + m.clip(ev.Detail, 20)
+	case "tool_result":
+		preview = "→ " + m.clip(ev.Detail, 20)
+	case "agent_end":
+		preview = "done"
+	default:
+		return // lifecycle-ish agent events stay off the preview
+	}
+	if i, ok := m.byID[ev.ThoughtID]; ok && i < len(m.rows) {
+		m.rows[i].activity = preview
+		m.rows[i].at = time.Now().UTC()
+	}
+	m.activeID = ev.ThoughtID
+	m.active = preview
 }
 
 // addTurn appends a chat turn, bounding the scrollback window; the
@@ -1009,6 +1077,9 @@ func (m *tuiModel) render() string {
 		out += m.renderInput()
 	}
 	out += repeat("-", 60) + "\n"
+	if m.mode == ModeList && m.active != "" {
+		out += " ▸ " + sanitizeLine(m.activeID) + " · " + sanitizeLine(m.active) + "\n"
+	}
 	out += " " + sanitizeLine(m.status) + "\n"
 	out += " q quit · j/k move · enter/i live · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
 	return out
@@ -1047,8 +1118,12 @@ func (m *tuiModel) renderList() string {
 		if r.session != "" {
 			flags += "S"
 		}
-		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s\n",
-			mark, sanitizeLine(r.thoughtID), sanitizeLine(r.status), r.priority, sanitizeLine(r.age), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30))
+		suffix := ""
+		if r.activity != "" {
+			suffix = " «" + m.clip(sanitizeLine(r.activity), 24)
+		}
+		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s%s\n",
+			mark, sanitizeLine(r.thoughtID), sanitizeLine(r.status), r.priority, m.age(r.at), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30), suffix)
 	}
 	return out
 }
