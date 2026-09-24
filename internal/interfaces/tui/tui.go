@@ -639,6 +639,23 @@ func (m *tuiModel) clip(s string, n int) string {
 	return s
 }
 
+// sanitizeLine neutralizes control characters before SINGLE-LINE
+// rendering (NAVI-333): an embedded newline/CR/tab in a prompt would
+// terminate the row early and fuse the next row onto the same
+// physical line. Rune-aware (strings.Map), so UTF-8 content is left
+// intact; render-only — the queue/persistence data never changes.
+// The live CHAT view may legitimately wrap multi-line assistant
+// content, so sanitization is scoped to single-line contexts (queue
+// rows, status/input lines, and non-assistant chat lines).
+func sanitizeLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 // key handles a key press; returns true when the user quits.
 // TurnRole renders one conversation turn in the live chat window.
 type TurnRole string
@@ -902,7 +919,7 @@ func (m *tuiModel) render() string {
 		out += m.renderInput()
 	}
 	out += repeat("-", 60) + "\n"
-	out += " " + m.status + "\n"
+	out += " " + sanitizeLine(m.status) + "\n"
 	out += " q quit · j/k move · enter/i live · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
 	return out
 }
@@ -940,23 +957,23 @@ func (m *tuiModel) renderList() string {
 		if r.session != "" {
 			flags += "S"
 		}
-		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s\\n",
-			mark, r.thoughtID, r.status, r.priority, r.age, m.clip(r.model, 10), flags, m.clip(r.prompt, 30))
+		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s\n",
+			mark, sanitizeLine(r.thoughtID), sanitizeLine(r.status), r.priority, sanitizeLine(r.age), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30))
 	}
 	return out
 }
 
 func (m *tuiModel) renderInput() string {
 	if m.inputID != "" {
-		return fmt.Sprintf(" attach to %s > %s█\n", m.inputID, m.input)
+		return fmt.Sprintf(" attach to %s > %s█\n", sanitizeLine(m.inputID), sanitizeLine(m.input))
 	}
 	switch m.stage {
 	case 0:
-		return fmt.Sprintf(" new thought prompt > %s█\n", m.input)
+		return fmt.Sprintf(" new thought prompt > %s█\n", sanitizeLine(m.input))
 	case 1:
-		return fmt.Sprintf(" priority 1-10 (default 4) > %s█\n", m.input)
+		return fmt.Sprintf(" priority 1-10 (default 4) > %s█\n", sanitizeLine(m.input))
 	case 2:
-		return fmt.Sprintf(" defer minutes (0 = now) > %s█\n", m.input)
+		return fmt.Sprintf(" defer minutes (0 = now) > %s█\n", sanitizeLine(m.input))
 	}
 	return ""
 }
@@ -983,13 +1000,15 @@ func (m *tuiModel) renderLive() string {
 
 // chatLines flattens the reconstructed turns into display lines
 // (assistant content lines are indented; tool blocks offset).
+// Non-assistant lines are sanitized — the assistant content is the
+// legitimately multi-line context (NAVI-330/333 distinction).
 func (m *tuiModel) chatLines() []string {
 	lines := []string{}
 	for _, t := range m.turns {
 		switch t.role {
 		case TurnUser:
 			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, "▸ "+l)
+				lines = append(lines, "▸ "+sanitizeLine(l))
 			}
 		case TurnAssistant:
 			for _, l := range strings.Split(t.text, "\n") {
@@ -997,16 +1016,16 @@ func (m *tuiModel) chatLines() []string {
 			}
 		case TurnTool:
 			if t.tool != "" {
-				lines = append(lines, "  ⚙ "+t.tool)
+				lines = append(lines, "  ⚙ "+sanitizeLine(t.tool))
 			}
 			if t.toolIn != "" {
-				lines = append(lines, "    in: "+t.toolIn)
+				lines = append(lines, "    in: "+sanitizeLine(t.toolIn))
 			}
 			if t.toolOut != "" {
-				lines = append(lines, "    out: "+t.toolOut)
+				lines = append(lines, "    out: "+sanitizeLine(t.toolOut))
 			}
 		case TurnSystem:
-			lines = append(lines, "  · "+t.text)
+			lines = append(lines, "  · "+sanitizeLine(t.text))
 		}
 	}
 	if len(lines) == 0 {
