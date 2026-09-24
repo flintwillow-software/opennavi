@@ -42,6 +42,15 @@ type Thought struct {
 	// timer: crash recovery preserves it.
 	DeferUntil time.Time
 
+	// Provider / Model are optional per-thought overrides (S010104):
+	// when Provider is non-empty the runner resolves THAT provider
+	// (unknown names fail the thought with a clear error — no silent
+	// fallback); Model (when set) overrides the agent model for the
+	// run. Empty = the runtime primary + fallback chain / runtime
+	// model. Both are durable (S010002).
+	Provider string
+	Model    string
+
 	Status    ThoughtStatus
 	SessionID string // associated LLM session (if running)
 

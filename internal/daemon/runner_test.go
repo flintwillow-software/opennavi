@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
@@ -183,3 +184,48 @@ type RunnerFunc func(ctx context0, t *thought.Thought) error
 func (f RunnerFunc) Run(ctx context0, t *thought.Thought) error { return f(ctx, t) }
 
 var _ thought.Runner = RunnerFunc(nil)
+
+// ── provider/model per thought (S010104) ─────────────────────────────────
+
+func TestResolvePerThoughtProviderDefaultsToRuntime(t *testing.T) {
+	chain := llm.NewMockProvider([]llm.StreamEvent{{Type: llm.StreamEventStop}})
+	r := NewAgentRunner(agentRunnerDeps{
+		chain:          chain,
+		model:          "runtime-model",
+		providerConfig: config.ProviderConfig{Primary: "ollama", Model: "runtime-model"},
+	})
+	p, m, err := r.resolvePerThoughtProvider(&thought.Thought{ID: "x", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("no-override resolution failed: %v", err)
+	}
+	if p != chain || m != "runtime-model" {
+		t.Errorf("runtime chain/model not used: %v", m)
+	}
+}
+
+func TestResolvePerThoughtProviderOverride(t *testing.T) {
+	chain := llm.NewMockProvider([]llm.StreamEvent{{Type: llm.StreamEventStop}})
+	r := NewAgentRunner(agentRunnerDeps{
+		chain:          chain,
+		model:          "runtime-model",
+		providerConfig: config.ProviderConfig{Primary: "ollama", Model: "runtime-model"},
+	})
+	p, m, err := r.resolvePerThoughtProvider(&thought.Thought{ID: "x", Prompt: "p", Provider: "mock", Model: "fast-1"})
+	if err != nil {
+		t.Fatalf("override resolution failed: %v", err)
+	}
+	if p == nil || p == chain {
+		t.Error("override provider not used")
+	}
+	if m != "fast-1" {
+		t.Errorf("model override = %q, want fast-1", m)
+	}
+}
+
+func TestResolvePerThoughtProviderUnknownFailsLoudly(t *testing.T) {
+	r := NewAgentRunner(agentRunnerDeps{providerConfig: config.ProviderConfig{Primary: "ollama"}})
+	_, _, err := r.resolvePerThoughtProvider(&thought.Thought{ID: "x", Prompt: "p", Provider: "nosuch-provider"})
+	if err == nil || !strings.Contains(err.Error(), "nosuch-provider") {
+		t.Errorf("unknown provider error must name it: %v", err)
+	}
+}

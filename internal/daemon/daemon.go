@@ -317,17 +317,18 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		}
 	}
 	runner := NewAgentRunner(agentRunnerDeps{
-		chain:         chain,
-		sessionM:      sessionM,
-		model:         rc.Provider.Model,
-		systemPrompt:  params.SystemPrompt,
-		workDir:       params.WorkDir,
-		compactBudget: params.CompactBudget,
-		registry:      reg,
-		bind:          bindOpts,
-		logger:        logger,
-		tracker:       tracker,
-		agentEvents:   agentEvents,
+		chain:          chain,
+		sessionM:       sessionM,
+		model:          rc.Provider.Model,
+		systemPrompt:   params.SystemPrompt,
+		workDir:        params.WorkDir,
+		compactBudget:  params.CompactBudget,
+		registry:       reg,
+		bind:           bindOpts,
+		logger:         logger,
+		tracker:        tracker,
+		agentEvents:    agentEvents,
+		providerConfig: rc.Provider,
 	})
 	// Steering bridge (S010312/S010310): binary runs route messages to
 	// the in-flight agent's steering queue at turn boundaries. Daemon

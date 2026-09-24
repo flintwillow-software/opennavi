@@ -224,6 +224,11 @@ var migrations = []string{
 	// timestamp on thoughts for durable deferred pickup (S010002):
 	// deferred thoughts are real queue records that survive restarts.
 	`ALTER TABLE thoughts ADD COLUMN defer_until DATETIME`,
+	// 8: per-thought provider/model overrides (S010104) — optional
+	// durable provider + model for a thought; empty keeps the runtime
+	// primary (and its fallback chain) and runtime model.
+	`ALTER TABLE thoughts ADD COLUMN provider TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN model TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

@@ -862,6 +862,40 @@ THEN the system SHALL emit a delivery-ack queue event with the thought id and in
 
 > The in-agent steering mechanics are unchanged (§05); this subfeature specifies the queue-side routing, lifecycle-dependent semantics, and observability.
 
+## 13 Provider/Model Per Thought (S010104)
+
+### Requirement: Per-Thought Provider/Model Override
+
+The system SHALL let a thought carry an optional provider + model override, resolved by the runner when it builds the per-thought agent: thought-level override → runtime primary (+ its existing fallback chain when no override is set). The runtime provider config is the fallback source, not the only source — a cheap fast model for routine thoughts, a strong model for planning.
+
+#### Scenario: Override provider
+
+- **GIVEN** a thought with a `provider` override
+- **WHEN** the runner builds the per-thought agent
+- **THEN** the system SHALL construct that provider (same construction path as the runtime primary) and use it for the run
+- **AND** a thought-level `model` override, when set, SHALL override the runtime model for that run
+
+#### Scenario: No override keeps the runtime chain
+
+- **GIVEN** a thought without provider/model overrides
+- **WHEN** the runner builds the per-thought agent
+- **THEN** the system SHALL use the runtime primary provider / fallback chain and the runtime default model — behavior unchanged
+
+#### Scenario: Unknown override provider fails loudly
+
+- **GIVEN** a thought with a `provider` name the runtime cannot construct (unknown provider, bad endpoint config)
+- **WHEN** the runner resolves it
+- **THEN** the thought SHALL fail with a clear error naming the provider
+- **AND** the system SHALL NOT silently fall back to the runtime primary for that thought (the fallback chain applies only when no override is set)
+
+#### Scenario: Override survives restart
+
+- **GIVEN** a thought with provider/model overrides
+- **WHEN** the daemon restarts and crash recovery reloads it
+- **THEN** the overrides SHALL be preserved (durable, S010002) and applied on re-acquisition
+
+> S010104 delta (provider/model per thought): thought-loop follow-up batch.
+
 
 ## Status History
 
@@ -869,3 +903,4 @@ THEN the system SHALL emit a delivery-ack queue event with the thought id and in
 |------|--------|---------|--------|
 | 2026-08-13 | S010300 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-23 | S010312 | 0.2.0 | Queue-level message routing: messages routed by thought id with lifecycle-dependent delivery (context append / steering / resume-with-message) and delivery-ack events (thought-loop case study) |
+| 2026-09-23 | S010104 | 0.2.0 | Provider/model per thought: optional durable overrides resolved by the runner (override → runtime primary/fallback); unknown override providers fail the thought with a clear error, no silent fallback (thought-loop follow-up batch) |

@@ -233,3 +233,31 @@ func TestDeferralSurvivesRestartViaSqlite(t *testing.T) {
 }
 
 func testNow() time.Time { return time.Now().UTC() }
+
+func TestThoughtStoreProviderModelRoundTrip(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	want := &thought.Thought{ID: "t-prov", Prompt: "p", Status: thought.ThoughtPending,
+		Provider: "mock", Model: "fast-1"}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-prov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Provider != "mock" || got.Model != "fast-1" {
+		t.Fatalf("provider/model round trip: %q/%q", got.Provider, got.Model)
+	}
+	// Unset stays empty.
+	plain := &thought.Thought{ID: "t-plain", Prompt: "p"}
+	if err := ts.SaveThought(plain); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ts.LoadThought("t-plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Provider != "" || p.Model != "" {
+		t.Fatalf("unset provider/model became non-empty")
+	}
+}

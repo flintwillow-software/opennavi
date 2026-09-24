@@ -522,3 +522,26 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 		t.Errorf("view lost rows: %q", m.View())
 	}
 }
+
+func TestModelShowsModelColumn(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q)
+	m := NewModel(tport)
+	_ = m.Init()
+	tagged := th("mm1", 4)
+	tagged.Model = "very-long-model-name"
+	if err := q.Enqueue(tagged); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	view := m.View()
+	// The model shows abbreviated (clipped at 10 chars).
+	if !strings.Contains(view, "very-long") {
+		t.Errorf("model column missing:\n%s", view)
+	}
+	abbrev := "very-long-"
+	if strings.Contains(view, "very-long-model-name") {
+		t.Error("model not abbreviated in the row")
+	}
+	_ = abbrev
+}

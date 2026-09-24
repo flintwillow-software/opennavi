@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 func TestRunEnqueuePromptFirst(t *testing.T) {
@@ -92,4 +94,35 @@ func TestRunEnqueueThreeCaseOllamaHost(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestRunEnqueueProviderModel(t *testing.T) {
+	dir := t.TempDir()
+	db := dir + "/t.db"
+	err := runEnqueue([]string{"-provider", "mock", "-model", "fast-1", "-db", db, "do the thing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, oerr := sqlite.Open(db, sqlite.Options{})
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	defer st.Close()
+	ts, terr := sqlite.NewThoughtStore(st.DB())
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	all, lerr := ts.LoadThoughts()
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	found := false
+	for _, th := range all {
+		if th.Prompt == "do the thing" && th.Provider == "mock" && th.Model == "fast-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("provider/model flags not persisted: %+v", all)
+	}
 }

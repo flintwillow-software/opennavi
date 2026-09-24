@@ -25,6 +25,8 @@ func runEnqueue(args []string) error {
 	fs := flag.NewFlagSet("enqueue", flag.ExitOnError)
 	priority := fs.Int("priority", 4, "thought priority 1-10 (1 = critical, 4 = normal)")
 	dbPath := fs.String("db", "", "path to the session SQLite database")
+	provider := fs.String("provider", "", "provider override for this thought (default: runtime primary; unknown names fail at run time)")
+	model := fs.String("model", "", "model override for this thought (default: runtime model)")
 
 	// Partition: flags (with values) vs prompt positionals.
 	var flags []string
@@ -36,7 +38,7 @@ func runEnqueue(args []string) error {
 			// Known value-taking flags consume the next token. Go's flag
 			// package accepts both -flag and --flag spellings.
 			switch strings.TrimLeft(arg, "-") {
-			case "priority", "db":
+			case "priority", "db", "provider", "model":
 				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 					i++
 					flags = append(flags, args[i])
@@ -83,6 +85,8 @@ func runEnqueue(args []string) error {
 		Prompt:    prompt,
 		Priority:  *priority,
 		Status:    thought.ThoughtPending,
+		Provider:  *provider,
+		Model:     *model,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
