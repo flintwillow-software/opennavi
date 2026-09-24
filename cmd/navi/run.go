@@ -252,7 +252,7 @@ func resolveLogRoute(daemonMode bool, logFile, dbPath string) logRoute {
 	return logRoute{stderr: true}
 }
 
-// defaultLogPath is the TUI-mode default: navilog under the DB's
+// defaultLogPath is the TUI-mode default: navi.log under the DB's
 // directory (the DB path's parent — the run's data dir by convention).
 func defaultLogPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "navi.log")
