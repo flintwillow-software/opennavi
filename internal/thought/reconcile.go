@@ -122,7 +122,6 @@ func (q *ThoughtQueue) reconcileOnce() {
 		}
 		switch t.Status {
 		case ThoughtPending:
-			t.Status = ThoughtPending // already pending in the store
 			q.pending = append(q.pending, t)
 			q.sortPending()
 			evts = append(evts, QueueEvent{
@@ -138,11 +137,10 @@ func (q *ThoughtQueue) reconcileOnce() {
 			q.paused = append(q.paused, t)
 			adopted++
 		case ThoughtFailed:
-			// Failed awaits Retry (S010002); keep out of pending until
-			// explicitly retried — adopting it as pending would dodge
-			// the failure record.
-			q.pending = append(q.pending, t)
-			adopted++
+			// Failed joins pending awaiting Retry (S010002 retry-in-place):
+			// the row stays Status=failed, so Dequeue's transition gate
+			// skips it — adoption just makes it visible to Retry/observers
+			// without dodging the failure record.
 		case ThoughtComplete, ThoughtCancelled:
 			q.terminal = append(q.terminal, t)
 			adopted++
