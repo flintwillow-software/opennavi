@@ -397,9 +397,14 @@ type tuiModel struct {
 	sel       int
 	mode      ModeKind
 	liveID    string
-	live      []string
-	input     string
-	inputID   string
+	// turns is the reconstructed chat for the live view (NAVI-330):
+	// prompt as the opening user turn, assistant deltas accumulated,
+	// tool blocks, lifecycle system lines, steers as user turns.
+	// Presentation-only — the stream stays the source of truth.
+	turns      []turn
+	liveScroll int // 0 = tail-follow; >0 = lines scrolled back
+	input      string
+	inputID    string
 	// enqueue input flow: when inputID is set the input line attaches a
 	// message to that thought; otherwise it walks the enqueue prompt
 	// stages (0 prompt, 1 priority, 2 defer minutes) and Enqueues.
@@ -544,6 +549,11 @@ func (m *tuiModel) queueEvent(ev interfaces.PortalEvent) {
 		m.rows[i].status = displayStatus(ev.Kind)
 		m.rows[i].age = m.age(time.Now().UTC())
 	}
+	// Lifecycle transitions render as system lines in the live chat
+	// window (NAVI-330): started/paused/resumed/completed/failed/...
+	if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Kind != "enqueued" {
+		m.addTurn(turn{role: TurnSystem, text: "· " + displayStatus(ev.Kind)})
+	}
 }
 
 // displayStatus maps queue event kinds onto friendly thought statuses
@@ -569,6 +579,13 @@ func displayStatus(kind string) string {
 
 func (m *tuiModel) ackEvent(ev interfaces.PortalEvent) {
 	if ev.Kind == "message_routed" {
+		// Steering deliveries render as user turns in the live chat
+		// window, at the point they were injected (NAVI-330):
+		// context-append and resume-with-message land a user turn; a
+		// rejected delivery stays a status/rejection line.
+		if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Delivery != "" {
+			m.addTurn(turn{role: TurnUser, text: "(steered — " + ev.Delivery + ")"})
+		}
 		if ev.Delivery == "" {
 			m.status = fmt.Sprintf("✗ %s: %s", ev.ThoughtID, ev.Detail)
 		} else {
@@ -583,13 +600,35 @@ func (m *tuiModel) agentEvent(ev interfaces.PortalEvent) {
 	if m.mode != ModeLive || ev.ThoughtID != m.liveID {
 		return
 	}
-	line := ev.Kind
-	if ev.Detail != "" {
-		line += " " + m.clip(ev.Detail, 60)
+	switch ev.Kind {
+	case "content_delta":
+		// Accumulate deltas into ONE assistant turn.
+		if n := len(m.turns); n > 0 && m.turns[n-1].role == TurnAssistant {
+			m.turns[n-1].text += ev.Detail
+		} else {
+			m.addTurn(turn{role: TurnAssistant, text: ev.Detail})
+		}
+	case "turn_start", "agent_start":
+		m.addTurn(turn{role: TurnSystem, text: ev.Kind})
+	case "tool_call":
+		m.addTurn(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), toolIn: ""})
+	case "tool_result":
+		m.addTurn(turn{role: TurnTool, tool: "result", toolOut: m.clip(ev.Detail, 60)})
+	case "agent_end":
+		m.addTurn(turn{role: TurnSystem, text: "agent ended"})
+	case "error":
+		m.addTurn(turn{role: TurnSystem, text: "error: " + m.clip(ev.Detail, 60)})
+	default:
+		m.addTurn(turn{role: TurnSystem, text: ev.Kind})
 	}
-	m.live = append(m.live, m.clip(line, 100))
-	if len(m.live) > 200 {
-		m.live = m.live[len(m.live)-180:]
+}
+
+// addTurn appends a chat turn, bounding the scrollback window; the
+// tail (scroll 0) auto-follows.
+func (m *tuiModel) addTurn(t turn) {
+	m.turns = append(m.turns, t)
+	if len(m.turns) > maxLiveTurns {
+		m.turns = m.turns[len(m.turns)-maxLiveTurns:]
 	}
 }
 
@@ -598,6 +637,58 @@ func (m *tuiModel) clip(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// key handles a key press; returns true when the user quits.
+// TurnRole renders one conversation turn in the live chat window.
+type TurnRole string
+
+const (
+	TurnUser      TurnRole = "user"
+	TurnAssistant TurnRole = "assistant"
+	TurnTool      TurnRole = "tool"
+	TurnSystem    TurnRole = "system"
+)
+
+// turn is one chat-window block (NAVI-330 presentation).
+type turn struct {
+	role    TurnRole
+	text    string // accumulated content (assistant deltas append here)
+	tool    string // tool name for tool turns
+	toolIn  string // input summary for tool turns
+	toolOut string // result for tool turns
+}
+
+// maxLiveTurns bounds the reconstructed chat (scrollback window).
+const maxLiveTurns = 80
+
+// enterLive opens the live view for thoughtID, rebuilding the chat so
+// far: the snapshot prompt as the opening user turn, appends from
+// Context as steering user turns (in-process snapshot; best-effort
+// window — a viewer attaching mid-run sees events only from attach on
+// (NAVI-330)).
+func (m *tuiModel) enterLive(thoughtID string) {
+	m.liveID = thoughtID
+	m.mode = ModeLive
+	m.liveScroll = 0
+	m.turns = []turn{}
+	if thoughts, err := m.transport.Snapshot(); err == nil {
+		for _, t := range thoughts {
+			if t.ID != thoughtID {
+				continue
+			}
+			m.turns = append(m.turns, turn{role: TurnUser, text: t.Prompt})
+			for _, line := range strings.Split(t.Context, "\n") {
+				if strings.TrimSpace(line) != "" {
+					m.turns = append(m.turns, turn{role: TurnUser, text: line})
+				}
+			}
+			break
+		}
+	}
+	if len(m.turns) == 0 {
+		m.turns = append(m.turns, turn{role: TurnUser, text: thoughtID})
+	}
 }
 
 // key handles a key press; returns true when the user quits.
@@ -614,20 +705,24 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.stage = 0
 		}
 	case "up", "k":
-		if m.mode == ModeList && m.sel > 0 {
+		if m.mode == ModeLive {
+			m.liveScroll++
+		} else if m.mode == ModeList && m.sel > 0 {
 			m.sel--
 		}
 	case "down", "j":
-		if m.mode == ModeList && m.sel < len(m.rows)-1 {
+		if m.mode == ModeLive {
+			if m.liveScroll > 0 {
+				m.liveScroll--
+			}
+		} else if m.mode == ModeList && m.sel < len(m.rows)-1 {
 			m.sel++
 		}
 	case "enter":
 		switch m.mode {
 		case ModeList:
 			if len(m.rows) > 0 {
-				m.liveID = m.rows[m.sel].thoughtID
-				m.live = []string{}
-				m.mode = ModeLive
+				m.enterLive(m.rows[m.sel].thoughtID)
 			}
 		case ModeInput:
 			if m.inputID != "" {
@@ -867,11 +962,57 @@ func (m *tuiModel) renderInput() string {
 }
 
 func (m *tuiModel) renderLive() string {
-	out := fmt.Sprintf(" live: %s (esc returns)\n", m.liveID)
-	for _, line := range m.live {
-		out += " " + line + "\n"
+	out := fmt.Sprintf(" live: %s (esc returns)", m.liveID)
+	if m.liveScroll > 0 {
+		out += fmt.Sprintf(" · scrolled −%d lines", m.liveScroll)
+	}
+	out += "\n"
+	lines := m.chatLines()
+	if m.liveScroll >= len(lines) {
+		m.liveScroll = len(lines) - 1
+	}
+	start := len(lines) - m.liveScroll - 24 // tail window (24 lines)
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(lines); i++ {
+		out += " " + lines[i] + "\n"
 	}
 	return out
+}
+
+// chatLines flattens the reconstructed turns into display lines
+// (assistant content lines are indented; tool blocks offset).
+func (m *tuiModel) chatLines() []string {
+	lines := []string{}
+	for _, t := range m.turns {
+		switch t.role {
+		case TurnUser:
+			for _, l := range strings.Split(t.text, "\n") {
+				lines = append(lines, "▸ "+l)
+			}
+		case TurnAssistant:
+			for _, l := range strings.Split(t.text, "\n") {
+				lines = append(lines, "◂ "+l)
+			}
+		case TurnTool:
+			if t.tool != "" {
+				lines = append(lines, "  ⚙ "+t.tool)
+			}
+			if t.toolIn != "" {
+				lines = append(lines, "    in: "+t.toolIn)
+			}
+			if t.toolOut != "" {
+				lines = append(lines, "    out: "+t.toolOut)
+			}
+		case TurnSystem:
+			lines = append(lines, "  · "+t.text)
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, " (no conversation yet — stream events land here)")
+	}
+	return lines
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

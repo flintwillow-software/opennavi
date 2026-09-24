@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -122,24 +123,54 @@ func TestModelLiveView(t *testing.T) {
 	if m.mode != ModeLive || m.liveID != "t3" {
 		t.Fatal("did not enter live view")
 	}
-	// Agent event for the live thought appears in the buffer (driven
-	// through the portal fan, the runner-hook path).
+	// The thought's Prompt is the opening user turn (chat-window
+	// rebuild-on-attach, NAVI-330).
+	if len(m.turns) == 0 || m.turns[0].role != TurnUser || !strings.Contains(m.turns[0].text, "task t3") {
+		t.Errorf("opening user turn missing: %+v", m.turns)
+	}
+	// Assistant deltas accumulate into ONE assistant turn.
 	tport.portal.ObserveAgent("t3", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "hello world"},
 	})
 	drain(m)
-	if len(m.live) == 0 || !strings.Contains(m.live[0], "content_delta") {
-		t.Errorf("live buffer empty: %v", m.live)
+	tport.portal.ObserveAgent("t3", agent.AgentEvent{
+		Type:    agent.AgentEventContentDelta,
+		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "!"},
+	})
+	drain(m)
+	if !strings.Contains(m.View(), "hello world!") || !strings.Contains(m.View(), "◂") {
+		t.Errorf("deltas did not accumulate into one assistant turn:\n%s", m.View())
 	}
-	// Events for OTHER thoughts do not pollute the live view.
+	// Tool calls render as indented blocks.
+	tport.portal.ObserveAgent("t3", agent.AgentEvent{
+		Type: agent.AgentEventToolCall,
+		Tool: &agent.ToolUpdate{ToolCallID: "c1", Name: "note_write", Input: json.RawMessage(`{"title":"x"}`)},
+	})
+	drain(m)
+	if !strings.Contains(m.View(), "⚙") || !strings.Contains(m.View(), "note_write") {
+		t.Errorf("tool block missing:\n%s", m.View())
+	}
+	// Lifecycle transitions land as system lines (claim it first so
+	// started/completed both fan).
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("t3 not claimable")
+	}
+	if err := q.Complete("t3"); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	if !strings.Contains(m.View(), "complete") {
+		t.Errorf("lifecycle system line missing:\n%s", m.View())
+	}
+	// Events for OTHER thoughts do not pollute the live window.
 	tport.portal.ObserveAgent("other", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "noise"},
 	})
 	drain(m)
-	if len(m.live) != 1 {
-		t.Errorf("foreign agent event leaked into live view: %v", m.live)
+	if strings.Contains(m.View(), "noise") {
+		t.Errorf("foreign agent event leaked into live view")
 	}
 }
 
