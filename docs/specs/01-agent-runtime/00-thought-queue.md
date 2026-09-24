@@ -395,6 +395,8 @@ The queue persists to disk so it survives navi restarts.
 
 **External-writer reconciliation (NAVI-336):** the store is the cross-process channel between doors and a running navi. The queue reconciles the store on a cadence (default 1s, config `reconcile_interval`; negative disables) and adopts externally-persisted rows exactly as in-process enqueues: pending thoughts join the pending list with normal slot policy and an `EventEnqueued` (Detail `external-adopted`); deferred rows honor `DeferUntil` (skipped until due); failed rows await Retry; externally-written running rows are crash artifacts for this queue and adopt as pending; terminal rows are kept for inspection. Queue-owned rows are reconciled to themselves — no duplicate adoption after restart.
 
+**Single-navi-per-DB assumption:** the thoughts table is not scoped by navi identity (id TEXT PRIMARY KEY) — a running navi adopts ALL pending rows in its DB. The supported deployment is one navi per DB path (stateful tool stores differ: their rows ARE navi-scoped). Cross-navi adoption exclusion is a future issue.
+
 #### Scenario: Second-terminal enqueue reaches a running navi
 
 GIVEN a navi is running (TUI or `--daemon`)
