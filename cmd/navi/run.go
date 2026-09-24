@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -54,22 +55,33 @@ func runInteractive(args []string) error {
 		return fmt.Errorf("run: --model is required")
 	}
 
+	// Log routing (NAVI-331): in TUI mode the Bubble Tea alt-screen
+	// owns the terminal — stderr log lines would scribble over it. When
+	// the TUI is attached (not --daemon) and no explicit --log-file is
+	// set, route logs to a file under the DB's directory
+	// (<db-dir>/navi.log, JSON per the file convention) and tell the
+	// user where they went (one-time line before the alt-screen). --daemon
+	// keeps stderr (that's its console); explicit --log-file is honored
+	// in both modes; --log-format semantics unchanged.
+	route := resolveLogRoute(*daemonMode, *logFile, *dbPath)
+	var openedLogFile string
 	var lw io.Writer = os.Stderr
-	logFileSet := *logFile != ""
-	if logFileSet {
-		f, ferr := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if route.path != "" {
+		f, ferr := os.OpenFile(route.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if ferr != nil {
-			return fmt.Errorf("run: open log file %s: %w", *logFile, ferr)
+			return fmt.Errorf("run: open log file %s: %w", route.path, ferr)
 		}
 		defer f.Close()
 		lw = f
+		openedLogFile = route.path
 	}
 	// Log-format default (NAVI-328, documented): human on an
 	// interactive stderr TTY, json otherwise — pipes/redirects and
-	// --log-file always get the structured form. Assemble overrides
+	// --log-file always get the structured form (file output stays
+	// JSON, including the TUI-mode default file). Assemble overrides
 	// with the config section / flag per the merge chain (flag wins).
 	format := logging.FormatJSON
-	if !logFileSet && stderrIsTTY() {
+	if route.stderr && stderrIsTTY() {
 		format = logging.FormatHuman
 	}
 	logger := logging.New(lw, logging.ParseLevel(*logLevel), nil)
@@ -103,6 +115,13 @@ func runInteractive(args []string) error {
 	sessionDone := make(chan struct{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- rt.RunForeground(ctx, sessionDone) }()
+
+	// One-time log-path note (NAVI-331): printed BEFORE the TUI's
+	// alt-screen engages, so users know where logs went (stderr stays
+	// untouched from here on in TUI mode).
+	if openedLogFile != "" {
+		fmt.Printf("navi: logs → %s\n", openedLogFile)
+	}
 
 	// Session driver: the Bubble Tea TUI is the front door (S000406,
 	// NAVI-319), attached in-process over the portal; --daemon is the
@@ -208,4 +227,33 @@ func stderrIsTTY() bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// logRoute is the resolved log destination for a run (NAVI-331):
+// stderr (the console) or a file path. Exactly one of them is used.
+type logRoute struct {
+	stderr bool   // render to stderr (the console)
+	path   string // file path ("" when stderr)
+}
+
+// resolveLogRoute applies the NAVI-331 routing decision:
+//   - explicit --log-file always wins (both modes) → file;
+//   - TUI mode (not --daemon) with no --log-file → default file
+//     <db-dir>/navi.log (the alt-screen owns the terminal; JSON per
+//     the file convention);
+//   - --daemon with no --log-file → stderr (that's its console).
+func resolveLogRoute(daemonMode bool, logFile, dbPath string) logRoute {
+	if logFile != "" {
+		return logRoute{path: logFile}
+	}
+	if !daemonMode {
+		return logRoute{path: defaultLogPath(dbPath)}
+	}
+	return logRoute{stderr: true}
+}
+
+// defaultLogPath is the TUI-mode default: navilog under the DB's
+// directory (the DB path's parent — the run's data dir by convention).
+func defaultLogPath(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "navi.log")
 }
