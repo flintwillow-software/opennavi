@@ -210,6 +210,154 @@ func TestActionsThroughTransport(t *testing.T) {
 	}
 }
 
+// ── enqueue action (NAVI-326) ───────────────────────────────────────────
+
+func TestEnqueueThroughTransport(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q)
+
+	// Default priority thought, due now, foreground-tagged.
+	if err := tport.Enqueue("a brand new task", 0, time.Time{}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	all := q.GetThoughts()
+	var found string
+	for _, th := range all {
+		if th.Prompt == "a brand new task" {
+			found = th.ID
+			if th.Priority != 4 {
+				t.Errorf("default priority = %d, want 4", th.Priority)
+			}
+			if !th.Foreground {
+				t.Error("session thought not foreground-tagged")
+			}
+		}
+	}
+	if found == "" {
+		t.Fatal("session thought not enqueued")
+	}
+
+	// Explicit priority + deferral.
+	due := time.Now().UTC().Add(time.Hour)
+	if err := tport.Enqueue("later task", 2, due); err != nil {
+		t.Fatalf("enqueue deferred: %v", err)
+	}
+	did := false
+	for _, th := range q.GetThoughts() {
+		if th.Prompt == "later task" {
+			did = true
+			if th.Priority != 2 {
+				t.Errorf("priority = %d, want 2", th.Priority)
+			}
+			if th.DeferUntil.Compare(due) != 0 {
+				t.Errorf("defer_until not applied")
+			}
+		}
+	}
+	if !did {
+		t.Fatal("deferred thought not enqueued")
+	}
+}
+
+func keyRunes(t *testing.T, m *tuiModel, s string) {
+	t.Helper()
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: stringToRunes(s)})
+}
+
+func stringToRunes(s string) []rune {
+	out := []rune{}
+	for i := 0; i < len(s); i++ {
+		out = append(out, rune(s[i]))
+	}
+	return out
+}
+
+func keyEnter(m *tuiModel) { _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) }
+
+func TestModelEnqueueFlow(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	// n -> prompt "say hi" -> priority (default) -> defer (none).
+	keyRunes(t, m, "n")
+	if m.mode != ModeInput || !m.enqueue || m.stage != 0 {
+		t.Fatal("n did not open the enqueue input")
+	}
+	keyRunes(t, m, "say hi")
+	keyEnter(m) // prompt done
+	if m.stage != 1 {
+		t.Errorf("stage = %d, want 1 (priority)", m.stage)
+	}
+	keyEnter(m) // default priority
+	if m.stage != 2 {
+		t.Errorf("stage = %d, want 2 (defer)", m.stage)
+	}
+	keyEnter(m) // no deferral -> enqueue
+	if m.mode != ModeList {
+		t.Errorf("mode = %q, want list after enqueue", m.mode)
+	}
+	if !strings.Contains(m.status, "enqueued at p4") {
+		t.Errorf("status = %q", m.status)
+	}
+
+	// The thought landed and shows live in the queue view (the
+	// enqueued event rides the same feed as any other transition).
+	drain(m)
+	if !strings.Contains(m.View(), "say hi") || !strings.Contains(m.View(), "pending") {
+		t.Errorf("enqueued thought missing from queue view:\n%s", m.View())
+	}
+	all := q.GetThoughts()
+	var ok bool
+	for _, th := range all {
+		if th.Prompt == "say hi" && th.Priority == 4 && th.Foreground {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Error("enqueued thought not in the queue with default priority")
+	}
+
+	// Priority + deferral from the keyboard, no pool interference: the
+	// previous thought stays pending (no pool started here).
+	keyRunes(t, m, "n")
+	keyRunes(t, m, "priority task")
+	keyEnter(m)
+	keyRunes(t, m, "2")
+	keyEnter(m)
+	keyRunes(t, m, "60")
+	keyEnter(m)
+	if !strings.Contains(m.status, "enqueued at p2") || !strings.Contains(m.status, "deferred") {
+		t.Errorf("status = %q, want enqueued at p2 (deferred)", m.status)
+	}
+	found := false
+	for _, th := range q.GetThoughts() {
+		if th.Prompt == "priority task" && th.Priority == 2 && !th.DeferUntil.IsZero() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("priority/deferred thought mis-enqueued")
+	}
+}
+
+func TestModelEnqueueRejectsEmptyPrompt(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	keyRunes(t, m, "n")
+	keyEnter(m) // empty prompt
+	if m.mode != ModeList || !strings.Contains(m.status, "prompt is required") {
+		t.Errorf("empty prompt not rejected: %q", m.status)
+	}
+	if len(q.GetThoughts()) != 0 {
+		t.Error("empty-prompt enqueue created a thought")
+	}
+}
+
 // ── remote transport (gateway attachment seam) ───────────────────────────
 
 func portalFreePort(t *testing.T) string {
@@ -293,6 +441,21 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// Remote enqueue (NAVI-326): a session thought lands in the queue
+	// and the stream shows it.
+	if err := rport.Enqueue("remote new task", 2, time.Time{}); err != nil {
+		t.Fatalf("remote enqueue: %v", err)
+	}
+	foundRemote := false
+	for _, th := range rt.Queue.GetThoughts() {
+		if th.Prompt == "remote new task" && th.Priority == 2 {
+			foundRemote = true
+		}
+	}
+	if !foundRemote {
+		t.Error("remote-enqueued thought not in the queue")
+	}
+
 	// Control against a NO-authorizer shim fails closed (403 →
 	// error): same seamlnd, no Runtime.Run involved.
 	addr2 := portalFreePort(t)
@@ -322,6 +485,9 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	}
 	if gerr := failport.Steer("x", "hi"); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
 		t.Errorf("remote control without authorizer: %v, want fail-closed", gerr)
+	}
+	if gerr := failport.Enqueue("nope", 0, time.Time{}); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
+		t.Errorf("remote enqueue without authorizer: %v, want fail-closed", gerr)
 	}
 }
 
