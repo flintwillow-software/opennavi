@@ -397,6 +397,8 @@ The queue persists to disk so it survives navi restarts.
 
 **Single-navi-per-DB assumption:** the thoughts table is not scoped by navi identity (id TEXT PRIMARY KEY) — a running navi adopts ALL pending rows in its DB. The supported deployment is one navi per DB path (stateful tool stores differ: their rows ARE navi-scoped). Cross-navi adoption exclusion is a future issue (NAVI-339).
 
+**Single-navi-per-DB assumption:** the thoughts table is not scoped by navi identity (id TEXT PRIMARY KEY) — a running navi adopts ALL pending rows in its DB. The supported deployment is one navi per DB path (stateful tool stores differ: their rows ARE navi-scoped). Cross-navi adoption exclusion is a future issue.
+
 #### Scenario: Second-terminal enqueue reaches a running navi
 
 GIVEN a navi is running (TUI or `--daemon`)

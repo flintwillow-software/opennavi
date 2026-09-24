@@ -29,6 +29,16 @@ import (
 // parked them in q.terminal for inspection). This is what makes
 // restart + reconcile idempotent: after recovery the queue knows its
 // recovered ids and adopts nothing.
+//
+// SINGLE-NAVI-PER-DB ASSUMPTION (documented, NAVI-325 review): the
+// thoughts table has NO navi_id (id TEXT PRIMARY KEY) — unlike the
+// stateful tool stores, which key (navi_id, id). Two running navis
+// pointing at one DB would BOTH adopt the same external thought and
+// race on it (a pre-existing hazard: they already recover the same
+// pending rows at startup). The supported deployment is one navi per
+// DB path (distinct DB paths per navi today); cross-navi adoption
+// exclusion (adopted-by marker) and full per-navi scoping of the
+// thoughts table are tracked as a future issue — out of scope here.
 
 // DefaultReconcileInterval is the reconcile cadence default.
 const DefaultReconcileInterval = time.Second
