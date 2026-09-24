@@ -127,17 +127,26 @@ func runInteractive(args []string) error {
 	// NAVI-319), attached in-process over the portal; --daemon is the
 	// headless presentation — same stdin loop, human-readable lines
 	// kept, no foreground slot (work enters as normal thoughts).
+	//
+	// STDIN OWNERSHIP (NAVI-332): the TUI branch must NOT spawn
+	// readSession — Bubble Tea reads os.Stdin exclusively; a competing
+	// bufio.Scanner consumes keystrokes until newline and the TUI
+	// appears frozen (renders once, no key events). Thought creation
+	// in TUI mode is the `n` action (NAVI-326), steering is `a`
+	// (NAVI-319). --daemon has no TUI, so its stdin loop is the ONLY
+	// closer of sessionDone in that mode (single-closer invariant —
+	// the TUI-quit path closes it in the other branch; two closers
+	// panic on piped-stdin EOF).
 	var tuiRun error
 	if *daemonMode {
 		go readSession(rt, logger, sessionDone, false)
 		fmt.Println("navi run --daemon — headless; type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
 	} else {
-		go readSession(rt, logger, sessionDone, true)
 		tport, terr := tui.NewInProcess(rt.Queue)
 		if terr != nil {
 			return terr
 		}
-		tuiRun = tui.Run(tport) // Bubble Tea owns the terminal; quitting ends the session
+		tuiRun = tui.Run(tport) // Bubble Tea owns the terminal AND stdin; quitting ends the session
 		close(sessionDone)      // session over — RunForeground drains remaining work
 	}
 	if tuiRun != nil {
