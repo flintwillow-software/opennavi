@@ -1,12 +1,143 @@
 package main
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/flintwillow-software/opennavi/internal/daemon"
+	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
+
+// allowAllAuth permits every portal action: the shim-attachment test
+// seam (production wires nil and fails closed until IAM).
+type allowAllAuth struct{}
+
+func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+	return nil
+}
+
+// servePortal starts a portal shim over an assembled runtime (pool
+// NOT started, so thoughts stay pending and the enqueue is
+// deterministic). allow controls whether an authorizer is wired.
+func servePortal(t *testing.T, allow bool) (string, *daemon.Runtime) {
+	t.Helper()
+	addr := ""
+	{
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		addr = ln.Addr().String()
+		ln.Close()
+	}
+	var authz interfaces.PortalAuthorizer
+	if allow {
+		authz = allowAllAuth{}
+	}
+	rt, err := daemon.Assemble(daemon.RuntimeParams{
+		SessionDB:          t.TempDir() + "/enqueue-shim.db",
+		Model:              "test-model",
+		Workers:            1,
+		PortalAddr:         addr,
+		OverrideAuthorizer: authz,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sln, slerr := net.Listen("tcp", addr)
+	if slerr != nil {
+		t.Fatal(slerr)
+	}
+	srv := &http.Server{Addr: addr, Handler: daemon.PortalHandler(rt), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(sln) }()
+	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(func() { cancel(); _ = srv.Shutdown(shutdown); rt.Store.Close() })
+	time.Sleep(150 * time.Millisecond)
+	return addr, rt
+}
+
+func dbThoughts(t *testing.T, db string) []*thought.Thought {
+	t.Helper()
+	st, oerr := sqlite.Open(db, sqlite.Options{})
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	defer st.Close()
+	ts, terr := sqlite.NewThoughtStore(st.DB())
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	all, lerr := ts.LoadThoughts()
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	return all
+}
+
+func TestEnqueueViaPortalReachable(t *testing.T) {
+	addr, rt := servePortal(t, true)
+	db := t.TempDir() + "/portal.db"
+	err := runEnqueue([]string{"-portal", "http://" + addr, "-db", db, "portal task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Landed via the control channel: in the running navi's queue.
+	found := false
+	for _, th := range rt.Queue.GetThoughts() {
+		if th.Prompt == "portal task" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("thought not delivered through the portal")
+	}
+	// The DB mailbox was NOT written on the portal path.
+	if len(dbThoughts(t, db)) != 0 {
+		t.Error("portal path also wrote the DB mailbox")
+	}
+}
+
+func TestEnqueueUnreachableFallsBackToDb(t *testing.T) {
+	db := t.TempDir() + "/fallback.db"
+	err := runEnqueue([]string{"-portal", "http://127.0.0.1:9", "-db", db, "fallback task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, th := range dbThoughts(t, db) {
+		if th.Prompt == "fallback task" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unreachable portal did not fall back to the DB mailbox")
+	}
+}
+
+func TestEnqueuePortalFailClosedFallsBack(t *testing.T) {
+	addr, _ := servePortal(t, false) // no authorizer: 403
+	db := t.TempDir() + "/failclosed.db"
+	err := runEnqueue([]string{"-portal", "http://" + addr, "-db", db, "nope task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, th := range dbThoughts(t, db) {
+		if th.Prompt == "nope task" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fail-closed portal did not fall back to the DB mailbox")
+	}
+}
 
 func TestRunEnqueuePromptFirst(t *testing.T) {
 	dir := t.TempDir()
