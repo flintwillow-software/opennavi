@@ -46,7 +46,13 @@ type Config struct {
 	// thoughts never occupy them. Same priority/preemption rules as
 	// every other slot. Disjoint from PrioritySlots.
 	ForegroundSlots int
-	SlotExhaustion  SlotExhaustionPolicy
+	// ReconcileInterval is the store-reconcile cadence (NAVI-336):
+	// the loop adopts externally-persisted thoughts (navi enqueue from
+	// another process) so external doors reach a running navi. Zero →
+	// default 1s; negative disables the loop (embedded/tested queues
+	// with no external writers).
+	ReconcileInterval time.Duration
+	SlotExhaustion    SlotExhaustionPolicy
 }
 
 // QueueEventKind enumerates queue event types (for observers/logging).
@@ -105,6 +111,11 @@ type ThoughtQueue struct {
 	// (S010312 running-path); invoked OUTSIDE q.mu — implementations
 	// must not re-enter the queue. Wired by the runtime (NAVI-320).
 	steeringRouter SteeringRouter
+
+	// reconcile loop lifecycle (NAVI-336): reconcileStop guards the
+	// single loop per queue (StartReconcile is idempotent).
+	reconcileMu   sync.Mutex
+	reconcileStop chan struct{}
 
 	eventsMu sync.Mutex
 	handlers []func(QueueEvent)

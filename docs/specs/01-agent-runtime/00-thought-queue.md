@@ -393,6 +393,14 @@ func (q *ThoughtQueue) GetThought(id string) (*Thought, error)
 
 The queue persists to disk so it survives navi restarts.
 
+**External-writer reconciliation (NAVI-336):** the store is the cross-process channel between doors and a running navi. The queue reconciles the store on a cadence (default 1s, config `reconcile_interval`; negative disables) and adopts externally-persisted rows exactly as in-process enqueues: pending thoughts join the pending list with normal slot policy and an `EventEnqueued` (Detail `external-adopted`); deferred rows honor `DeferUntil` (skipped until due); failed rows await Retry; externally-written running rows are crash artifacts for this queue and adopt as pending; terminal rows are kept for inspection. Queue-owned rows are reconciled to themselves — no duplicate adoption after restart.
+
+#### Scenario: Second-terminal enqueue reaches a running navi
+
+GIVEN a navi is running (TUI or `--daemon`)
+WHEN `navi enqueue` persists a pending thought from another process
+THEN the running queue SHALL adopt it within the reconcile cadence, emit the normal enqueue event (observers/TUI see it), and the pool SHALL process it like any other thought.
+
 ```
 ~/.opennavi/profiles/<name>/
 └── thoughts/
@@ -559,4 +567,5 @@ THEN the foreground session's thoughts SHALL compete for slots by the same prior
 | 2026-08-13 | S010000 | 0.1.0 | Migrated from docs/spec/ to spec-tree |
 | 2026-09-23 | S010003 | 0.2.0 | House model: queue is the runtime's main loop in every run mode; §1.1 rewritten from two-execution-models to house-and-doors; binary-run (in-process queue, foreground slot) spec'd; no-door-bypasses-the-queue requirement added (thought-loop case study) |
 | 2026-09-23 | S010003 | 0.2.1 | One assembly (NAVI-325): every run mode assembles the same runtime — connectors (cron, metrics, portal) load in every mode; TUI vs `--daemon` differ by presentation only; the foreground slot is reserved only when a session (TUI) is attached — headless runs have no foreground thought |
+| 2026-09-24 | S010002 | 0.2.3 | External-writer reconciliation (NAVI-336): the store is the cross-process channel — a reconcile loop adopts externally-persisted pending/failed/paused thoughts (DeferUntil honored; terminal kept for inspection; queue-owned rows reconciled to themselves); external doors reach a running navi |
 
