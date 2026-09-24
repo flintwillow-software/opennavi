@@ -45,8 +45,12 @@ type Runtime struct {
 	SessionM  *session.SessionManager
 	Provider  llm.Provider
 	Scheduler *cron.Scheduler // started by Run; ticks cron schedules
-	Logger    *logging.Logger
-	Metrics   *metrics.Collector // queue metrics; nil when disabled
+	// StopReconcile halts the queue's store-reconcile loop (NAVI-336):
+	// external-writer adoption — invoked by Run/RunForeground shutdown.
+	// nil when the loop is disabled.
+	StopReconcile func()
+	Logger        *logging.Logger
+	Metrics       *metrics.Collector // queue metrics; nil when disabled
 
 	// inflight resolves a running thought's in-flight agent for the
 	// steering bridge (S010312 running path; S010310 turn-boundary
@@ -394,21 +398,22 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	pool := thought.NewPool(q, runner, workers)
 
 	return &Runtime{
-		Config:    params,
-		Runtime:   rc,
-		Queue:     q,
-		Pool:      pool,
-		Scheduler: sched,
-		Store:     store,
-		Stateful:  stateful,
-		Registry:  reg,
-		SessionM:  sessionM,
-		Provider:  chain,
-		Logger:    logger,
-		Metrics:   collector,
-		inflight:  tracker,
-		Portal:    portal,
-		PortalBuf: portalBuf,
+		Config:        params,
+		Runtime:       rc,
+		Queue:         q,
+		Pool:          pool,
+		Scheduler:     sched,
+		Store:         store,
+		Stateful:      stateful,
+		Registry:      reg,
+		SessionM:      sessionM,
+		Provider:      chain,
+		Logger:        logger,
+		Metrics:       collector,
+		inflight:      tracker,
+		Portal:        portal,
+		PortalBuf:     portalBuf,
+		StopReconcile: q.StartReconcile(), // NAVI-336: adopt external writers' rows
 	}, nil
 }
 
@@ -578,6 +583,9 @@ func (d *Runtime) Run(ctx context.Context) error {
 	// Store close is the caller's responsibility (Runtime.Store.Close()).
 	stopConnectors()
 	d.Pool.StopAndWait()
+	if d.StopReconcile != nil {
+		d.StopReconcile()
+	}
 	return nil
 }
 
