@@ -397,6 +397,8 @@ The queue persists to disk so it survives navi restarts.
 
 **Single-navi-per-DB assumption:** the thoughts table is not scoped by navi identity (id TEXT PRIMARY KEY) — a running navi adopts ALL pending rows in its DB. The supported deployment is one navi per DB path (stateful tool stores differ: their rows ARE navi-scoped). Cross-navi adoption exclusion is a future issue (NAVI-339).
 
+**Memory-first persistence (NAVI-338):** runtime state is memory-first — the store is an EVENTUAL write. Queue mutations (enqueue, claim, resume, cancel, complete, fail, priority, preempt, retry, context append) perform ZERO synchronous disk I/O in the critical section: they mark thoughts dirty (in-memory) and a flusher persists the dirty set on a short cadence (default 250ms, `Config.FlushInterval`; negative keeps legacy write-through). **Durability-critical points stay synchronous**: park-with-checkpoint (the kill-and-lose promise — the checkpoint is on disk at park time), crash-recovery writes, adoption claims (the row IS the cross-process claim), and record removal. **Honest loss window**: a kill -9 loses at most one flush interval of non-checkpoint mutations. Flush failures surface as `EventPersistFailed` (the metrics persist-failure counter) and never block the queue — failed thoughts re-mark dirty for the next tick.
+
 **Single-navi-per-DB assumption:** the thoughts table is not scoped by navi identity (id TEXT PRIMARY KEY) — a running navi adopts ALL pending rows in its DB. The supported deployment is one navi per DB path (stateful tool stores differ: their rows ARE navi-scoped). Cross-navi adoption exclusion is a future issue.
 
 #### Scenario: Second-terminal enqueue reaches a running navi

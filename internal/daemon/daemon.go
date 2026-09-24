@@ -49,8 +49,17 @@ type Runtime struct {
 	// external-writer adoption — invoked by Run/RunForeground shutdown.
 	// nil when the loop is disabled.
 	StopReconcile func()
-	Logger        *logging.Logger
-	Metrics       *metrics.Collector // queue metrics; nil when disabled
+	// StopFlusher halts the queue's dirty-set flusher (NAVI-338
+	// memory-first persistence): the final drain persists remaining
+	// dirty thoughts. Invoked by Run/RunForeground shutdown after the
+	// pool drain. nil in synchronous (legacy) mode.
+	StopFlusher func()
+	// StopFlusher halts the queue's dirty-set flusher (NAVI-338
+	// memory-first persistence): the final drain persists remaining
+	// dirty thoughts. Invoked by Run/RunForeground shutdown after the
+	// pool drain. nil in synchronous (legacy) mode.
+	Logger  *logging.Logger
+	Metrics *metrics.Collector // queue metrics; nil when disabled
 
 	// inflight resolves a running thought's in-flight agent for the
 	// steering bridge (S010312 running path; S010310 turn-boundary
@@ -411,9 +420,10 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		Logger:        logger,
 		Metrics:       collector,
 		inflight:      tracker,
+		StopReconcile: q.StartReconcile(), // NAVI-336: adopt external writers' rows
+		StopFlusher:   q.StartFlusher(),   // NAVI-338: drain the dirty set
 		Portal:        portal,
 		PortalBuf:     portalBuf,
-		StopReconcile: q.StartReconcile(), // NAVI-336: adopt external writers' rows
 	}, nil
 }
 
@@ -585,6 +595,9 @@ func (d *Runtime) Run(ctx context.Context) error {
 	d.Pool.StopAndWait()
 	if d.StopReconcile != nil {
 		d.StopReconcile()
+	}
+	if d.StopFlusher != nil {
+		d.StopFlusher() // final dirty drain
 	}
 	return nil
 }

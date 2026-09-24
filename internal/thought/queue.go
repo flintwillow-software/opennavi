@@ -52,7 +52,15 @@ type Config struct {
 	// default 1s; negative disables the loop (embedded/tested queues
 	// with no external writers).
 	ReconcileInterval time.Duration
-	SlotExhaustion    SlotExhaustionPolicy
+	// FlushInterval is the dirty-set flusher cadence (NAVI-338
+	// memory-first persistence): mutations mark thoughts dirty
+	// in-memory; the flusher persists them on this cadence outside
+	// q.mu. Zero → default 250ms; negative keeps the legacy
+	// synchronous write-through (no flusher). Durability-critical
+	// writes (park checkpoint, adoption claims, delete) stay
+	// synchronous regardless.
+	FlushInterval  time.Duration
+	SlotExhaustion SlotExhaustionPolicy
 }
 
 // QueueEventKind enumerates queue event types (for observers/logging).
@@ -117,6 +125,15 @@ type ThoughtQueue struct {
 	reconcileMu   sync.Mutex
 	reconcileStop chan struct{}
 
+	// dirty-set flusher (NAVI-338 memory-first): mutations mark
+	// thoughts dirty under q.mu (zero I/O in the critical section);
+	// the flusher goroutine persists them outside the lock.
+	// dirty/dirtyIDs are guarded by q.mu.
+	dirty     map[string]*Thought
+	dirtyIDs  map[string]*Thought
+	flushMu   sync.Mutex
+	flushStop chan struct{}
+
 	eventsMu sync.Mutex
 	handlers []func(QueueEvent)
 }
@@ -163,7 +180,11 @@ func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
 		}
 	}
 
-	q := &ThoughtQueue{cfg: cfg, slots: slots, store: store}
+	q := &ThoughtQueue{
+		cfg: cfg, slots: slots, store: store,
+		dirty:    make(map[string]*Thought),
+		dirtyIDs: make(map[string]*Thought),
+	}
 	if err := q.recover(); err != nil {
 		return nil, err
 	}
@@ -269,13 +290,12 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 		}
 	}
 	collect(&evts, EventEnqueued, t.ID, fmt.Sprintf("priority %d", t.EffectivePriority()))
-	saveErr := q.save(t)
+	// NAVI-338 memory-first: mark dirty (in-memory, zero I/O in the
+	// critical section); the flusher persists outside the lock.
+	q.markDirty(t)
 	q.mu.Unlock()
 
 	q.emit(evts)
-	if saveErr != nil {
-		return saveErr
-	}
 	return nil
 }
 
@@ -305,7 +325,9 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 		q.pending = append(q.pending[:i], q.pending[i+1:]...)
 		q.running = append(q.running, t)
 		collect(&evts, EventStarted, t.ID, fmt.Sprintf("slot %s", slotID))
-		saveErr := q.save(t)
+		// NAVI-338 memory-first: claim state change marks dirty (the
+		// flusher persists outside the lock).
+		q.markDirty(t)
 		// Copy-in/copy-out: the worker/runner gets a Clone and owns it
 		// until the thought reaches a terminal state. Runner mutations
 		// (Checkpoint, and anything else) never race with external
@@ -318,7 +340,7 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 
 		// Emit outside q.mu — OnEvent handlers may re-enter the queue.
 		q.emit(evts)
-		_ = saveErr
+
 		return claimed, true
 	}
 	q.mu.Unlock()
@@ -336,9 +358,8 @@ func (q *ThoughtQueue) BumpPriority(id string, newPriority int) error {
 	t.Priority = newPriority
 	t.UpdatedAt = time.Now().UTC()
 	q.sortPending()
-	if err := q.save(t); err != nil {
-		return err
-	}
+	// NAVI-338: dirty mark (flusher persists outside the lock).
+	q.markDirty(t)
 	return nil
 }
 
@@ -363,7 +384,10 @@ func (q *ThoughtQueue) Pause(id string, checkpoint []byte) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.paused = append(q.paused, t)
-	if err := q.save(t); err != nil {
+	// DURABILITY-CRITICAL (NAVI-338): park-with-checkpoint is the
+	// kill-and-lose promise — the checkpoint MUST be on disk at park
+	// time. Synchronous write, then emit.
+	if err := q.syncSave(t); err != nil {
 		return err
 	}
 	q.emit([]QueueEvent{{Kind: EventPausedEv, ThoughtID: id, At: time.Now().UTC()}})
@@ -385,9 +409,8 @@ func (q *ThoughtQueue) Resume(id string) error {
 	q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 	q.pending = append(q.pending, t)
 	q.sortPending()
-	if err := q.save(t); err != nil {
-		return err
-	}
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
 	q.emit([]QueueEvent{{Kind: EventResumed, ThoughtID: id, At: time.Now().UTC()}})
 	return nil
 }
@@ -408,7 +431,9 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
 		q.running = append(q.running, t) // terminal: kept for inspection
 		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
-		return q.save(t)
+		// NAVI-338: dirty mark.
+		q.markDirty(t)
+		return nil
 	}
 	if t, idx := q.findIn(q.paused, id); t != nil {
 		if err := t.Transition(ThoughtCancelled); err != nil {
@@ -417,7 +442,9 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.running = append(q.running, t)
 		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
-		return q.save(t)
+		// NAVI-338: dirty mark.
+		q.markDirty(t)
+		return nil
 	}
 	return fmt.Errorf("thought: %s: %w", id, ErrThoughtNotFound)
 }
@@ -440,7 +467,9 @@ func (q *ThoughtQueue) Complete(id string) error {
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.terminal = append(q.terminal, t)
 	q.emit([]QueueEvent{{Kind: EventCompleted, ThoughtID: id, At: time.Now().UTC()}})
-	return q.save(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	return nil
 }
 
 // Fail marks a running thought failed (called by the worker on error).
@@ -461,7 +490,9 @@ func (q *ThoughtQueue) Fail(id string, detail string) error {
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.pending = append(q.pending, t) // failed awaits Retry
 	q.emit([]QueueEvent{{Kind: EventFailed, ThoughtID: id, Detail: detail, At: time.Now().UTC()}})
-	return q.save(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	return nil
 }
 
 // GetThoughts returns all known thoughts.
@@ -587,7 +618,8 @@ func (q *ThoughtQueue) preempt(victimID string, by *Thought, evts *[]QueueEvent)
 		return
 	}
 	t.PreemptRequested = true
-	_ = q.save(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
 	collect(evts, EventPreempted, victimID, fmt.Sprintf("by %s (priority %d)", by.ID, by.EffectivePriority()))
 }
 
@@ -686,7 +718,9 @@ func (q *ThoughtQueue) Retry(id string) error {
 		}
 		q.sortPending()
 		q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
-		return q.save(t)
+		// NAVI-338: dirty mark.
+		q.markDirty(t)
+		return nil
 	}
 
 	// Coming from elsewhere (e.g. the terminal list): re-queue.
@@ -703,7 +737,9 @@ func (q *ThoughtQueue) Retry(id string) error {
 	}
 	q.sortPending()
 	q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
-	return q.save(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	return nil
 }
 
 // collect appends an event to the pending list (call under q.mu).
@@ -747,7 +783,11 @@ func (q *ThoughtQueue) AppendContext(id, msg string) error {
 		return err
 	}
 	t.AppendMessage(msg)
-	return q.save(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	return nil
 }
 
 // Delete removes a thought record entirely from the queue and its
