@@ -576,3 +576,45 @@ func TestModelShowsModelColumn(t *testing.T) {
 	}
 	_ = abbrev
 }
+
+func TestSanitizeRowNewlines(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := NewInProcess(q)
+	m := NewModel(tport)
+	_ = m.Init()
+	weird := th("n1", 4)
+	weird.Prompt = "hello\nworld check\tthis\rnice"
+	if err := q.Enqueue(weird); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Enqueue(th("n2", 4)); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	view := m.View()
+
+	// The two thoughts render as two SEPARATE row lines (the embedded
+	// newline must not fuse them, NAVI-333).
+	lines := strings.Split(view, "\n")
+	nrows := 0
+	for _, l := range lines {
+		if strings.Contains(l, "n1") || strings.Contains(l, "n2") {
+			nrows++
+		}
+	}
+	if nrows != 2 {
+		t.Errorf("rows fused/merged: %d row lines for 2 thoughts:\n%s", nrows, view)
+	}
+	// The newline became a space; no literal \n inside the row.
+	if !strings.Contains(view, "hello world check this nice") {
+		t.Errorf("control chars not neutralized to spaces:\n%s", view)
+	}
+	if strings.Contains(view, "hello\nworld") {
+		t.Error("literal newline leaked into a row")
+	}
+	// Data untouched: the persisted prompt keeps its newline.
+	got, gerr := q.GetThought("n1")
+	if gerr != nil || !strings.Contains(got.Prompt, "\n") {
+		t.Error("render sanitization leaked into the data")
+	}
+}
