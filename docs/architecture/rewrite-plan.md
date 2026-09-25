@@ -29,16 +29,16 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 
 ## Milestones
 
-| ID | Goal | Depends on | Verification gate |
-|---|---|---|---|
-| **M0** | Freeze design + decisions | — | ADRs accepted |
-| **M1** | Create leaf contract packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types |
-| **M2** | Build the `navi` composition root: `New`, `With*` options, collections, `Add` validation, freeze-on-`Run`, cross-cutting validation | M1 | Run a mock-provider navi end-to-end in a test |
-| **M3** | Promote `internal/thought` → public `thought/`; split `internal/interfaces` into `connector`/`portal`; keep queue semantics | M1 | Existing queue/routing/recovery tests green |
-| **M4** | Port the catalog to the collection model: builtin tools, todo/note/time/http/thoughts tools, skills, providers, cron connector, TUI/gateway portals | M2, M3 | Catalog parity with today's tool set and active-set behavior |
-| **M5** | Rebuild `cmd/navi` as a reference navi; convert `templates/navi-code` and `templates/navi-daemon` to real navi modules on the new surface | M4 | Template builds; `cmd/navi` runs the same flows |
-| **M6** | Retire `sdk/` (`NaviDef`/`Build`); add synthetic out-of-repo CI modules (external navi + external component) | M5 | Guardrail + external-consumer CI green |
-| **M7** | Reconcile remaining docs and remove dead references | M6 | `grep` clean; docs consistent with code |
+| ID | Goal | Depends on | Verification gate | Huly |
+|---|---|---|---|---|
+| **M0** | Freeze design + decisions | — | ADRs accepted | NAVI-344 |
+| **M1** | Create leaf contract packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
+| **M2** | Build the `navi` composition root: `New`, `With*` options, collections, `Add` validation, freeze-on-`Run`, cross-cutting validation | M1 | Run a mock-provider navi end-to-end in a test | NAVI-343 |
+| **M3** | Promote `internal/thought` → public `thought/`; split `internal/interfaces` into `connector`/`portal`; keep queue semantics | M1 | Existing queue/routing/recovery tests green | NAVI-348 |
+| **M4** | Port the catalog to the collection model: builtin tools, todo/note/time/http/thoughts tools, skills, providers, cron connector, TUI/gateway portals | M2, M3 | Catalog parity with today's tool set and active-set behavior | NAVI-342 |
+| **M5** | Rebuild `cmd/navi` as a reference navi; convert `templates/navi-code` and `templates/navi-daemon` to real navi modules on the new surface | M4 | Template builds; `cmd/navi` runs the same flows | NAVI-347 |
+| **M6** | Retire `sdk/` (`NaviDef`/`Build`); add synthetic out-of-repo CI modules (external navi + external component) | M5 | Guardrail + external-consumer CI green | NAVI-346 |
+| **M7** | Reconcile remaining docs and remove dead references | M6 | `grep` clean; docs consistent with code | NAVI-349 |
 
 ## Notes per milestone
 
@@ -89,9 +89,10 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 
 ## Tracking
 
-Each milestone is a Huly epic under the "OpenNAVI SDK composition" initiative.
-Issue bodies link back to the relevant architecture doc and ADR. Status,
-assignee, and blockers are maintained in Huly only.
+Huly epic **NAVI-341** ("OpenNAVI SDK composition rewrite"); milestones M0–M7
+are sub-issues (table above) wired with blocked-by relations. Issue bodies link
+back to the architecture docs and ADRs. Status, assignee, and blockers are
+maintained in Huly only.
 
 ## Related
 
