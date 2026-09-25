@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-09-24'
 supersedes: []
 spec-refs: [000200, 130400]

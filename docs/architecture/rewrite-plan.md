@@ -31,7 +31,7 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 
 | ID | Goal | Depends on | Verification gate | Huly |
 |---|---|---|---|---|
-| **M0** | Freeze design + decisions | — | ADRs accepted | NAVI-344 |
+| **M0** | Freeze design + decisions | — | ADRs accepted ✅ (2026-09-24) | NAVI-344 |
 | **M1** | Create leaf contract packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
 | **M2** | Build the `navi` composition root: `New`, `With*` options, collections, `Add` validation, freeze-on-`Run`, cross-cutting validation | M1 | Run a mock-provider navi end-to-end in a test | NAVI-343 |
 | **M3** | Promote `internal/thought` → public `thought/`; split `internal/interfaces` into `connector`/`portal`; keep queue semantics | M1 | Existing queue/routing/recovery tests green | NAVI-348 |
@@ -41,6 +41,14 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 | **M7** | Reconcile remaining docs and remove dead references | M6 | `grep` clean; docs consistent with code | NAVI-349 |
 
 ## Notes per milestone
+
+### M0 — design frozen (2026-09-24)
+
+All ADRs (0001–0010) are **accepted**; the design in this directory is frozen
+for M1. Three implementation-level refinements were settled with acceptance:
+the composition-root package is named `navi`; connectors/portals receive a
+per-domain `Deps` struct and never import `navi`; and egress tools are added
+explicitly via `connector.SendTool()` (no auto-registration).
 
 ### M1 — contract packages
 
