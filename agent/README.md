@@ -1,10 +1,11 @@
 # internal/agent — layout map
 
-This package implements the agent runtime (`docs/specs/01-agent-runtime/03-agent-runtime.md`).
-The spec's §09 file structure is the original sketch; the layout below is the
+This package implements the agent runtime (see
+[`docs/architecture/runtime.md`](../docs/architecture/runtime.md)). The original
+§09 file-structure sketch predates the implementation; the layout below is the
 actual one, which diverged during implementation (#148, PR #217). The review
-concluded the actual layout is better kept — this document maps the two so
-the spec stays honest without renaming working code.
+concluded the actual layout is better kept — this document maps the two for
+historical reference without renaming working code.
 
 ## Spec §09 → actual files
 
@@ -25,7 +26,7 @@ the spec stays honest without renaming working code.
 |---|---|
 | `executor.go` | `ToolExecutor` — tool-call dispatch with parallel/sequential modes and a parallelism limit. Split out of `tools.go` because dispatch semantics (mode, maxParallel, hooks) are independent of which tools exist |
 | `tools.go` | Built-in tool implementations (`file_read`, `shell_exec`) with byte caps, plus `RegisterBuiltinTools` binding them to a working directory |
-| `compaction.go` | Context-window compaction (`docs/specs/03-session-context/02-context-window-management.md` §3.3): LLM summaries replace older messages near the token budget, with a tool-call-integrity-preserving cut point |
+| `compaction.go` | Context-window compaction: LLM summaries replace older messages near the token budget, with a tool-call-integrity-preserving cut point |
 | `provider.go` | Adapter seam between the agent's Message/Event types and the concrete LLM provider layer (`internal/llm`, #187). The run loop is untouched by provider changes — only this file moves |
 
 ## Rationale for the deviations

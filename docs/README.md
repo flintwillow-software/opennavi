@@ -1,70 +1,49 @@
-# OpenNavi Documentation
+# OpenNAVI Documentation
 
-Design and architecture documentation for OpenNavi — an SDK for creating network assistants and virtual interfaces (NAVIS).
+Design and architecture documentation for OpenNAVI — an SDK for building
+**navis**, self-contained AI agent binaries.
 
-## Core Agent Specs
+## Where things live
 
-The following spec components define the core OpenNavi agent platform — the agent runtime, LLM provider abstraction, session/context management, config/persona, memory, and operations infrastructure that every navi depends on:
+| Question | Where |
+|---|---|
+| What is the architecture, and why is it shaped this way? | [`architecture/`](./architecture/) |
+| Why did we make a specific tradeoff? | [`adr/`](./adr/) — numbered, immutable decisions |
+| What's next, who owns it, what's blocked? | **Huly** (tracker) |
+| What does the public API look like? | `go doc` / pkgsite (generated from source) |
+| What does the system do? | Code and tests (tests are the executable specification) |
+| What changed in a release? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
-| Component | Description |
-|-----------|-------------|
-| [00-navi-core/](./specs/00-navi-core/README.md) | Platform foundation: vision, definition format, builder, interfaces, trust, extensions |
-| [01-agent-runtime/](./specs/01-agent-runtime/README.md) | Core execution: agent loop, thought queue, tool execution, error recovery |
-| [02-agent-config/](./specs/02-agent-config/README.md) | Skills and persona system (baked in at build time) |
-| [03-session-context/](./specs/03-session-context/README.md) | Session persistence, context window management, webhook schemas |
-| [06-memory/](./specs/06-memory/README.md) | Four-tier memory architecture with recall |
-| [07-llm-provider/](./specs/07-llm-provider/README.md) | LLM abstraction with streaming, token counting, provider registry |
-| [08-operations/](./specs/08-operations/README.md) | Cross-cutting concerns: logging, metrics, health, retry, circuit breaker, rate limiting, API versioning |
-| [13-tool-catalog/](./specs/13-tool-catalog/README.md) | Built-in tool set: file ops, shell, git, search, test runner, code intel |
+Durable design lives in this repository. Work state lives in Huly. See
+[ADR 0001](./adr/0001-documentation-model.md) for the rationale.
 
-## Autonomous Agent Specs
+## Architecture
 
-The following documents describe the autonomous agent platform capabilities beyond the core coding agent, including the multi-agent team model for autonomous SDLC and operations:
+| Document | Covers |
+|---|---|
+| [overview.md](./architecture/overview.md) | What a navi is, C4 context, package layout, boundaries |
+| [runtime.md](./architecture/runtime.md) | The navi object, collections, thought system, modes, providers, lifecycle |
+| [security.md](./architecture/security.md) | Permission ceiling, compile-time omission, secrets, trust |
+| [extension-model.md](./architecture/extension-model.md) | Out-of-repo tools/skills/models/connectors/portals and navis |
+| [rewrite-plan.md](./architecture/rewrite-plan.md) | Migration milestones (M0–M7) |
 
-| Document | Description |
-|----------|-------------|
-| [04-multi-agent/](./specs/04-multi-agent/README.md) | Council, sub-agents, P2P chat, presence, idle scheduling, team-of-teams |
-| [05-messaging/](./specs/05-messaging/README.md) | Gateway, platform adapters, unified message protocol, hooks, cron |
-| [14-agent-roles/](./specs/14-agent-roles/README.md) | Role-based agent definitions (PM, Support, Lead, Backend, Frontend, DevOps, SRE, QA, Reviewer) |
-| [Case Study](../../docs/case-study/autonomous-saas-product-lifecycle/README.md) | Autonomous navi team managing SDLC and operations |
+## Decision records
 
-## Architecture Specs
+| ADR | Decision |
+|---|---|
+| [0001](./adr/0001-documentation-model.md) | Documentation model: docs-as-code + ADRs + Huly |
+| [0002](./adr/0002-navi-is-a-composition-root.md) | The navi is a composition root with typed collections |
+| [0003](./adr/0003-thought-system-first-class.md) | The thought system is first-class and public |
+| [0004](./adr/0004-contract-packages-public-implementations-private.md) | Contract packages public; implementations private |
+| [0005](./adr/0005-build-time-modules-are-the-extension-path.md) | Build-time modules are the extension path |
+| [0006](./adr/0006-compile-time-omission-plus-runtime-ceiling.md) | Compile-time omission + runtime ceiling security model |
+| [0007](./adr/0007-thought-modes.md) | Thought modes |
+| [0008](./adr/0008-secrets-interpolated-never-literal.md) | Secrets interpolated at runtime, never literals |
+| [0009](./adr/0009-providers-set-with-per-thought-selection.md) | Providers are a set; thoughts select per run |
 
-The `specs/` directory contains the full OpenNavi architecture specifications, organized into numbered feature components:
+## Conventions
 
-| Group | Description |
-|-------|-------------|
-| [00-navi-core/](./specs/00-navi-core/README.md) | Platform foundation: vision, definition format, builder, interfaces, trust, extensions |
-| [01-agent-runtime/](./specs/01-agent-runtime/README.md) | Core execution: agent loop, thought process, tool error recovery |
-| [02-agent-config/](./specs/02-agent-config/README.md) | Skills and persona (baked in at build time) |
-| [03-session-context/](./specs/03-session-context/README.md) | Session persistence, context window, webhook schemas |
-| [04-multi-agent/](./specs/04-multi-agent/README.md) | Council, sub-agents, P2P chat, presence, idle scheduling |
-| [05-messaging/](./specs/05-messaging/README.md) | Gateway, platform adapters, unified message protocol |
-| [06-memory/](./specs/06-memory/README.md) | Four-tier memory architecture |
-| [07-llm-provider/](./specs/07-llm-provider/README.md) | LLM abstraction, streaming, token counting |
-| [08-operations/](./specs/08-operations/README.md) | Cross-cutting concerns, deployment, autonomous mode, API versioning |
-
-## Case Study
-
-| Document | Description |
-|----------|-------------|
-| [Autonomous SaaS Product Lifecycle](./case-study/autonomous-saas-product-lifecycle/README.md) | Autonomous navi team managing SDLC and operations |
-
-## Reading Order
-
-For a new contributor, read in this order to build up the mental model incrementally:
-
-1. Start with **[00-navi-core/00-overview.md](./specs/00-navi-core/00-overview.md)** for the big picture
-2. Then follow: **navi-core → agent-runtime → session-context** (definition → execution → persistence)
-3. Read **llm-provider** and **tool-catalog** for the provider and tool layers
-4. Read **memory** and **operations** for cross-cutting capabilities
-5. Read **agent-roles** and **multi-agent** for autonomous team architecture
-6. Read **spec/README.md** for the full spec index
-
-## Key Conventions
-
-- **Config directory:** `~/.opennavi/` (not `~/.pi/`)
-- **Project config:** `.opennavi/` (not `.pi/`)
-- **Binary name:** `opennavi`
-- **TUI:** Built from scratch (no framework), differential rendering
-- **Providers (Phase 1):** Anthropic, OpenRouter, LM Studio
+- Architecture docs are updated in the same PR as the code they describe.
+- ADRs are immutable: to change a decision, add a new ADR that supersedes the
+  old one.
+- Work items are created and tracked in Huly, not in repository documents.
