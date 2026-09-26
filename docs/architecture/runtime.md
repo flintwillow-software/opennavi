@@ -66,16 +66,26 @@ thoughts is a separate concern; see [memory.md](./memory.md).
 ```go
 type Thought struct {
     ID, Prompt, Context string
+    Metadata     map[string]string
     Priority     int
+    Status       string      // pending | running | paused | complete | failed | cancelled
+    Provider, Model string   // per-thought overrides (ADR 0009)
+    Mode         string      // capability profile (ADR 0007)
     DeferUntil   time.Time   // durable not-before schedule
-    Provider, Model string  // per-thought overrides
-    Mode         string
-    Status       ThoughtStatus
+    SessionID    string      // persisted transcript, when one exists
     Foreground   bool
-    Checkpoint   []byte
+    CreatedAt, UpdatedAt time.Time
     // ...
 }
 ```
+
+The public value carries what a *component* acts on. Scheduler
+bookkeeping — slot and worker assignment, preemption requests, the park
+checkpoint, log paths — stays inside the runtime and is not part of this
+contract. `Mode` is declared here but is not yet persisted or consumed by
+the runtime queue; per-thought mode selection reaches the runner in a
+later milestone, and until then reading `Mode` back out of the queue will
+not return it.
 
 Handle API exposed as `n.Thoughts`:
 

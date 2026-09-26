@@ -29,6 +29,20 @@ type Deps struct {
 	Log *slog.Logger
 }
 
+// Addressed is an OPTIONAL capability a portal may implement: a portal
+// that serves on a network address reports it, so the composition root
+// can detect port conflicts between portals at Run (cross-cutting
+// validation). Portals that serve no address — a terminal UI, an
+// in-process surface — simply do not implement it, and declaring every
+// portal addressless would be worse than declaring nothing.
+//
+// Return the listen address as it would be passed to net.Listen
+// ("host:port", ":8090"). An empty string means "no address", and is
+// treated as not implementing the capability.
+type Addressed interface {
+	Addr() string
+}
+
 // Portal is the human-facing control surface over a thought system:
 // a serve lifecycle, attach (authorize an identity), the
 // lifecycle/steering control actions, and scheduling. Observation
