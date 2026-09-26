@@ -4,3 +4,5 @@
 /go.work.sum
 /templates/navi-code/navi-code
 /templates/navi-daemon/navi-daemon
+/cmd/navi/navi.db
+/cmd/navi/navi.log

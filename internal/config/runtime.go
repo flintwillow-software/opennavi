@@ -150,12 +150,12 @@ func MergeRuntime(file RuntimeConfig, flags RuntimeConfig) RuntimeConfig {
 	// gating on the merged value would let a file-layer key block the
 	// env fill, inverting the chain.
 	if strings.HasPrefix(out.Provider.Primary, "ollama") && flags.Provider.Endpoint == "" {
-		if v := os.Getenv("OLLAMA_HOST"); v != "" {
+		if v := os.Getenv(EnvOllamaHost); v != "" {
 			out.Provider.Endpoint = v
 		}
 	}
 	if out.Provider.Primary == "openrouter" && flags.Provider.APIKey == "" {
-		if v := os.Getenv("OPENROUTER_API_KEY"); v != "" {
+		if v := os.Getenv(EnvOpenRouterKey); v != "" {
 			out.Provider.APIKey = v
 		}
 	}
@@ -246,16 +246,35 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	}
 }
 
+// Runtime environment variable names (layer 3 of the merge chain).
+// Exported so other layers — notably the navi's default-model
+// resolution, which reads the same variables with a different
+// precedence against the compiled default — cannot drift from these.
+const (
+	EnvSessionDB     = "NAVI_SESSION_DB"
+	EnvModel         = "NAVI_MODEL"
+	EnvProvider      = "NAVI_PROVIDER"
+	EnvOllamaHost    = "OLLAMA_HOST"
+	EnvOpenRouterKey = "OPENROUTER_API_KEY"
+)
+
 // applyEnv applies environment overrides (layer 3). Known variables:
 // OLLAMA_HOST, OPENROUTER_API_KEY (post-merge), NAVI_SESSION_DB,
-// NAVI_MODEL. NAVI_SESSION_KEY is consumed by the cipher seam
-// (sqlite.CipherFromEnv), not by this package.
+// NAVI_MODEL, NAVI_PROVIDER. NAVI_SESSION_KEY is consumed by the cipher
+// seam (sqlite.CipherFromEnv), not by this package.
 func applyEnv(rc *RuntimeConfig) {
-	if v := os.Getenv("NAVI_SESSION_DB"); v != "" {
+	if v := os.Getenv(EnvSessionDB); v != "" {
 		rc.SessionDB = v
 	}
-	if v := os.Getenv("NAVI_MODEL"); v != "" {
+	if v := os.Getenv(EnvModel); v != "" {
 		rc.Provider.Model = v
+	}
+	// NAVI_PROVIDER mirrors NAVI_MODEL one layer up: NAVI_MODEL picks a
+	// model within the selected provider, NAVI_PROVIDER picks the
+	// provider itself. Together they let an operator retarget a built
+	// navi at runtime without a rebuild.
+	if v := os.Getenv(EnvProvider); v != "" {
+		rc.Provider.Primary = v
 	}
 }
 
