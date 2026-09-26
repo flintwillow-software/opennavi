@@ -23,6 +23,7 @@ Durable design lives in this repository. Work state lives in Huly. See
 |---|---|
 | [overview.md](./architecture/overview.md) | What a navi is, C4 context, package layout, boundaries |
 | [runtime.md](./architecture/runtime.md) | The navi object, collections, thought system, modes, providers, lifecycle |
+| [memory.md](./architecture/memory.md) | Two-tier memory model: short-term (always in context) versus long-term (searched) |
 | [security.md](./architecture/security.md) | Permission ceiling, compile-time omission, secrets, trust |
 | [extension-model.md](./architecture/extension-model.md) | Out-of-repo tools/skills/models/connectors/portals and navis |
 | [rewrite-plan.md](./architecture/rewrite-plan.md) | Migration milestones (M0–M7) |
