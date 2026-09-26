@@ -7,6 +7,7 @@
 package portal
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/flintwillow-software/opennavi/model"
@@ -28,12 +29,37 @@ type Deps struct {
 	Log *slog.Logger
 }
 
+// Addressed is an OPTIONAL capability a portal may implement: a portal
+// that serves on a network address reports it, so the composition root
+// can detect port conflicts between portals at Run (cross-cutting
+// validation). Portals that serve no address — a terminal UI, an
+// in-process surface — simply do not implement it, and declaring every
+// portal addressless would be worse than declaring nothing.
+//
+// Return the listen address as it would be passed to net.Listen
+// ("host:port", ":8090"). An empty string means "no address", and is
+// treated as not implementing the capability.
+type Addressed interface {
+	Addr() string
+}
+
 // Portal is the human-facing control surface over a thought system:
-// attach (authorize an identity), the lifecycle/steering control
-// actions, and scheduling. Observation arrives through
-// Deps.ThoughtSystem.OnEvent — the portal subscribes to the queue
-// event stream; the contract stays control-only here.
+// a serve lifecycle, attach (authorize an identity), the
+// lifecycle/steering control actions, and scheduling. Observation
+// arrives through Deps.ThoughtSystem.OnEvent — the portal subscribes to
+// the queue event stream; the methods below are the write path.
 type Portal interface {
+	// Start begins serving with the handles the navi supplies; ctx
+	// cancellation requests shutdown. Deps arrives here rather than at
+	// construction for the same reason as connector.Connector.Start: the
+	// composition root only assembles it in Run, and passing it through
+	// the lifecycle call keeps constructors config-only (ADR 0002) and
+	// this package free of any navi import (ADR 0004 rule 1). A portal
+	// without this call has no way to obtain the ThoughtSystem it is
+	// meant to observe.
+	Start(ctx context.Context, deps Deps) error
+	// Stop shuts the portal down.
+	Stop() error
 	// Attach authorizes an identity for control (fail-closed until
 	// authorization is granted).
 	Attach(identity string) error

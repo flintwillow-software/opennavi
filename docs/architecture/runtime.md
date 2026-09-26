@@ -51,8 +51,8 @@ if err := n.Run(ctx); err != nil { ... }
 | `Skills` | added | compiled-in skill content | Baked into the system prompt at build time |
 | `Tools` | added | agent-callable actions | Registered with full metadata; the active set is derived |
 | `Models` | added | provider + model + version | One marked default; config may override the default |
-| `Connectors` | added | inbound transport doors | Receive thought/model handles via `Deps` |
-| `Portals` | added | human observe/control surfaces | Receive `Deps`; list/schedule/steer thoughts |
+| `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
+| `Portals` | added | human observe/control surfaces | Receive `Deps` at `Start`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
 | `Permissions` | core/added | compiled policy ceiling | Runtime may only tighten |
 | `Extensions` | added | runtime plugin allow-list | Deferred (ADR 0005) |
@@ -66,16 +66,26 @@ thoughts is a separate concern; see [memory.md](./memory.md).
 ```go
 type Thought struct {
     ID, Prompt, Context string
+    Metadata     map[string]string
     Priority     int
+    Status       string      // pending | running | paused | complete | failed | cancelled
+    Provider, Model string   // per-thought overrides (ADR 0009)
+    Mode         string      // capability profile (ADR 0007)
     DeferUntil   time.Time   // durable not-before schedule
-    Provider, Model string  // per-thought overrides
-    Mode         string
-    Status       ThoughtStatus
+    SessionID    string      // persisted transcript, when one exists
     Foreground   bool
-    Checkpoint   []byte
+    CreatedAt, UpdatedAt time.Time
     // ...
 }
 ```
+
+The public value carries what a *component* acts on. Scheduler
+bookkeeping — slot and worker assignment, preemption requests, the park
+checkpoint, log paths — stays inside the runtime and is not part of this
+contract. `Mode` is declared here but is not yet persisted or consumed by
+the runtime queue; per-thought mode selection reaches the runner in a
+later milestone, and until then reading `Mode` back out of the queue will
+not return it.
 
 Handle API exposed as `n.Thoughts`:
 
@@ -132,17 +142,33 @@ Both are lifecycle components attached to a navi with a dependency contract:
 
 ```go
 type Connector interface {
-    Name() string
-    Run(ctx context.Context, deps Deps) error
-    Stop(ctx context.Context) error
+    Start(ctx context.Context, deps Deps) error
+    Stop() error
+}
+
+type Portal interface {
+    Start(ctx context.Context, deps Deps) error
+    Stop() error
+    Attach(identity string) error
+    Steer(identity, thoughtID, message string) error
+    // ... Pause / Resume / Cancel / Enqueue
 }
 
 type Deps struct {
-    Thoughts thought.ThoughtSystem
-    Models   model.Registry
-    Log      *slog.Logger
+    ThoughtSystem thought.ThoughtSystem
+    Model         model.Registry
+    Log           *slog.Logger
 }
 ```
+
+`Deps` is a **lifecycle argument, not a constructor input**. The composition
+root cannot supply it any earlier: a navi declares its collections first and
+only assembles them in `Run`, so a component constructed before `Run` has
+nothing to receive. Threading it through `Start` keeps constructors config-only
+(`connector.Discord(connector.Config{...})`) and keeps these packages free of
+any `navi` import (ADR 0004 rule 1). A portal needs the handle for the same
+reason a connector does — observation happens through
+`Deps.ThoughtSystem.OnEvent`.
 
 - **Connectors** bring work in and manage thought lifecycles (spawn/attach/
   route). Egress tools (`discord_send`, `websocket_send`) close over the

@@ -41,13 +41,26 @@ type Deps struct {
 }
 
 // Connector is the transport integration contract: Start begins
-// ingestion (messages arrive with ctx cancellation as the stop
-// signal); Stop shuts the connector down. Implementations receive
-// Deps at construction time.
+// ingestion and receives the navi's Deps at that point; ctx
+// cancellation requests shutdown. Stop shuts the connector down.
+//
+// Start/Stop convention: if Start returns an error the connector is NOT
+// considered started, and Stop will not be called — Start must release
+// anything it acquired before failing. Conversely Stop is called only
+// for connectors whose Start succeeded, so it can assume initialisation
+// completed.
+//
+// Deps is a lifecycle ARGUMENT rather than a constructor input. The
+// composition root cannot supply it earlier: a navi declares its
+// collections first and only assembles them in Run, so a connector
+// constructed before Run has nothing to receive. Threading it through
+// Start keeps constructors config-only (ADR 0002 —
+// `connector.Discord(connector.Config{...})`) and keeps this package
+// free of any navi import (ADR 0004 rule 1).
 type Connector interface {
-	// Start begins the connector's inbound loop; ctx cancellation
-	// requests shutdown.
-	Start(ctx context.Context) error
+	// Start begins the connector's inbound loop with the handles the
+	// navi supplies; ctx cancellation requests shutdown.
+	Start(ctx context.Context, deps Deps) error
 	// Stop shuts the connector down.
 	Stop() error
 }

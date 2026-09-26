@@ -34,6 +34,10 @@ type Thought struct {
 	// default; ADR 0009).
 	Provider string
 	Model    string
+	// Mode names the capability profile this thought runs under
+	// (empty = the navi's default; ADR 0007). The composition root
+	// validates it against the declared Modes at Run.
+	Mode string
 	// DeferUntil makes the thought unclaimable before this time
 	// (zero = claimable now); durable.
 	DeferUntil time.Time
