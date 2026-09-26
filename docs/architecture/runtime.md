@@ -146,12 +146,14 @@ type Deps struct {
 
 - **Connectors** bring work in and manage thought lifecycles (spawn/attach/
   route). Egress tools (`discord_send`, `websocket_send`) close over the
-  connector's live client and are added by the author via `connector.SendTool()`
-  or auto-registered on `Run`.
+  connector's live client and are added **explicitly** by the author via
+  `connector.SendTool()` — never auto-registered, so the capability surface
+  stays visible in `main.go`.
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
   same queue/agent events a connector can observe.
 
-Neither imports `navi`; both depend only on the contract packages.
+The composition root package is named `navi`; connectors and portals never
+import it — they depend only on the contract packages.
 
 ## Agent and tools
 

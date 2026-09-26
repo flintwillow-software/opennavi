@@ -29,17 +29,21 @@ Durable design lives in this repository. Work state lives in Huly. See
 
 ## Decision records
 
-| ADR | Decision |
-|---|---|
-| [0001](./adr/0001-documentation-model.md) | Documentation model: docs-as-code + ADRs + Huly |
-| [0002](./adr/0002-navi-is-a-composition-root.md) | The navi is a composition root with typed collections |
-| [0003](./adr/0003-thought-system-first-class.md) | The thought system is first-class and public |
-| [0004](./adr/0004-contract-packages-public-implementations-private.md) | Contract packages public; implementations private |
-| [0005](./adr/0005-build-time-modules-are-the-extension-path.md) | Build-time modules are the extension path |
-| [0006](./adr/0006-compile-time-omission-plus-runtime-ceiling.md) | Compile-time omission + runtime ceiling security model |
-| [0007](./adr/0007-thought-modes.md) | Thought modes |
-| [0008](./adr/0008-secrets-interpolated-never-literal.md) | Secrets interpolated at runtime, never literals |
-| [0009](./adr/0009-providers-set-with-per-thought-selection.md) | Providers are a set; thoughts select per run |
+All records below are **accepted**. ADRs are immutable: to change a decision,
+add a new ADR that supersedes the old one.
+
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](./adr/0001-documentation-model.md) | Documentation model: docs-as-code + ADRs + Huly | accepted |
+| [0002](./adr/0002-navi-is-a-composition-root.md) | The navi is a composition root with typed collections | accepted |
+| [0003](./adr/0003-thought-system-first-class.md) | The thought system is first-class and public | accepted |
+| [0004](./adr/0004-contract-packages-public-implementations-private.md) | Contract packages public; implementations private | accepted |
+| [0005](./adr/0005-build-time-modules-are-the-extension-path.md) | Build-time modules are the extension path | accepted |
+| [0006](./adr/0006-compile-time-omission-plus-runtime-ceiling.md) | Compile-time omission + runtime ceiling security model | accepted |
+| [0007](./adr/0007-thought-modes.md) | Thought modes | accepted |
+| [0008](./adr/0008-secrets-interpolated-never-literal.md) | Secrets interpolated at runtime, never literals | accepted |
+| [0009](./adr/0009-providers-set-with-per-thought-selection.md) | Providers are a set; thoughts select per run | accepted |
+| [0010](./adr/0010-three-capability-layers.md) | Three capability layers: tools, connectors, portals | accepted |
 
 ## Conventions
 
