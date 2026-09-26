@@ -91,7 +91,7 @@ written in their own modules without pulling in the runtime:
 ```
 tool/          public  Tool, Def, Handler, Schema, Access, provenance
 thought/       public  Thought, thought-system handle, events
-connector/     public  Connector interface + Deps (thought/memory/model handles)
+connector/     public  Connector interface + Deps (thought/model handles)
 portal/        public  Portal interface + Deps
 model/         public  Model + provider descriptor
 skill/         public  Skill value (embedded content)
