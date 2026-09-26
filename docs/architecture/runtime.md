@@ -59,8 +59,9 @@ if err := n.Run(ctx); err != nil { ... }
 
 ## Thought system
 
-The thought system is the navi's main loop and short-term memory. It is
-public (`thought/`) and owned by the navi.
+The thought system is the navi's main loop — the queue of pending work. It is
+public (`thought/`) and owned by the navi. Knowledge a navi carries across
+thoughts is a separate concern; see [memory.md](./memory.md).
 
 ```go
 type Thought struct {

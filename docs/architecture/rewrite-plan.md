@@ -53,11 +53,17 @@ explicitly via `connector.SendTool()` (no auto-registration).
 ### M1 — contract packages
 
 - Define types by *consumption*: `connector.Deps` and `portal.Deps` expose
-  `thought.ThoughtSystem`, `memory.API`, `model.Registry`, `*slog.Logger`.
+  `thought.ThoughtSystem`, `model.Registry`, `*slog.Logger`.
 - Keep `tool` aligned with the existing `tools/registry` descriptor so the
   catalog port is mechanical.
 - Contract packages must not import `store/sqlite`, `llm/*` adapters, or
   `internal/*`.
+- Memory is deliberately **not** part of M1. Short-term memory is
+  navi-internal — the navi's own working state rather than an extension-surface
+  concern — so it is absent from `Deps`; and long-term memory is a tool that
+  arrives with the catalog. The model is documented in
+  [memory.md](./memory.md) and tracked as NAVI-350 (long-term) and NAVI-351
+  (short-term).
 
 ### M2 — composition root
 
@@ -92,7 +98,9 @@ explicitly via `connector.SendTool()` (no auto-registration).
 
 - Runtime plugins (S000600) — deferred (ADR 0005).
 - Cloud platform / marketplace components (S000900).
-- Memory subsystem rewrite; this plan moves visibility, not semantics.
+- Memory subsystem rewrite; this plan moves visibility, not semantics. The
+  *model* is still documented in [memory.md](./memory.md), and delivery is
+  NAVI-350 (long-term) and NAVI-351 (short-term).
 - Removing the workspace `d3-*` skills; other repos may still use a spec tree.
 
 ## Backlog disposition
