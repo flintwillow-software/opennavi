@@ -46,6 +46,15 @@ func WithRuntimeConfig(path string) Option {
 // decided it. Zero before Run has assembled the navi.
 func (n *Navi) Default() DefaultSelection { return n.selection }
 
+// WithProvider replaces provider resolution with a single provider —
+// the same seam RuntimeParams.OverrideProvider gives the daemon path. It
+// bypasses the declared set and credential resolution entirely, so it is
+// for tests and embedding, not for production wiring; a production navi
+// declares providers and lets the host resolve them.
+func WithProvider(p llm.Provider) Option {
+	return func(n *Navi) { n.override = p }
+}
+
 // assemble resolves the runtime layers into an effective default and
 // builds the provider set. It runs after validation and before freezing,
 // because resolution can fail — and a navi whose default provider cannot
@@ -70,6 +79,13 @@ func (n *Navi) assemble() error {
 	n.selection = sel
 
 	set := provider.New(n.Models.All(), nil)
+	if n.override != nil {
+		// An overridden provider needs no credential and no declared set;
+		// the default is still resolved so the selection remains
+		// reportable.
+		n.providers = set
+		return nil
+	}
 	if sel.Provider != "" {
 		if _, err := set.For(sel.Provider); err != nil {
 			return fmt.Errorf("navi: default provider: %w", err)
@@ -139,6 +155,13 @@ func (n *Navi) buildTimeDefault() (string, DefaultSource, error) {
 // is an error rather than a silent fallback — routing work to a different
 // model than the caller asked for is worse than failing.
 func (n *Navi) resolveFor(pt *thought.Thought) (llm.Provider, string, error) {
+	if n.override != nil {
+		modelName := pt.Model
+		if modelName == "" {
+			modelName = n.selection.Model
+		}
+		return n.override, modelName, nil
+	}
 	if n.providers == nil {
 		return nil, "", fmt.Errorf("navi: resolve provider before serving")
 	}

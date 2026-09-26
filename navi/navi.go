@@ -26,9 +26,11 @@ import (
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	ithought "github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/skill"
+	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/tool"
 )
 
@@ -68,6 +70,14 @@ type Navi struct {
 	// Resolved by assemble, before serving starts.
 	selection DefaultSelection
 	providers *provider.Set
+	// override replaces provider resolution entirely (test/embedding seam).
+	override llm.Provider
+
+	// Execution.
+	runner   Runner
+	sessions store.Store
+	workers  int
+	dispatch *dispatch
 
 	mu      sync.Mutex
 	serving bool
@@ -147,6 +157,22 @@ func New(name string, opts ...Option) *Navi {
 		n.initErr = fmt.Errorf("navi: thought queue: %w", err)
 	} else {
 		n.Thoughts = newThoughts(q)
+	}
+
+	// Execution defaults. The runner is built after options so it logs
+	// through the logger the author chose.
+	if n.sessions == nil {
+		n.sessions = store.NewMemoryStore()
+	}
+	if n.workers == 0 {
+		n.workers = 2
+	}
+	n.dispatch = newDispatch()
+	if n.runner == nil {
+		n.runner = &CompletionRunner{navi: n, log: n.log}
+	}
+	if n.Thoughts != nil {
+		n.watchForWork()
 	}
 	return n
 }
@@ -406,8 +432,15 @@ func (n *Navi) serve(ctx context.Context) error {
 		})
 	}
 
+	workers := n.startWorkers(ctx)
+
 	<-ctx.Done()
+
+	// Stop the doors first, then let in-flight executions finish: a
+	// worker whose runner returns on cancellation parks its thought
+	// rather than failing it.
 	stopAll()
+	workers.Wait()
 	n.Thoughts.Close()
 	return nil
 }

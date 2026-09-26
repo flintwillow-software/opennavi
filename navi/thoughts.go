@@ -139,6 +139,30 @@ func (t *Thoughts) OnEvent(fn func(thought.Event)) {
 // stop closures will be drained.
 func (t *Thoughts) Close() {}
 
+// dequeue claims the next claimable thought, as a copy the caller owns.
+// Internal on purpose: Dequeue is scheduler mechanics, and the public
+// ThoughtSystem contract is about control and observation — exposing
+// "take the next thought" there would let any component become a worker.
+func (t *Thoughts) dequeue() (*thought.Thought, bool) {
+	it, ok := t.q.Dequeue()
+	if !ok {
+		return nil, false
+	}
+	return toPublic(it), true
+}
+
+// complete marks a thought terminal-success.
+func (t *Thoughts) complete(id string) error { return t.q.Complete(id) }
+
+// fail marks a thought failed with a detail message.
+func (t *Thoughts) fail(id, detail string) error { return t.q.Fail(id, detail) }
+
+// watchForWork wakes the execution pool whenever the thought system
+// reports activity — enqueue, resume, retry, or a freed slot.
+func (n *Navi) watchForWork() {
+	n.Thoughts.OnEvent(func(thought.Event) { n.dispatch.signal() })
+}
+
 // toRuntime converts a public thought into the runtime's type. Status is
 // left for Enqueue to default.
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,15 +41,29 @@ type fakePortal struct {
 	addr    string
 	started chan struct{}
 	stopped chan struct{}
-	seen    []thought.Event
+
+	// seen is appended from the queue's emit goroutine and read from the
+	// test goroutine: it must be guarded, which the race detector caught
+	// as soon as workers made those two genuinely concurrent.
+	mu   sync.Mutex
+	seen []thought.Event
 }
 
 func (p *fakePortal) Start(ctx context.Context, deps portal.Deps) error {
 	deps.ThoughtSystem.OnEvent(func(ev thought.Event) {
+		p.mu.Lock()
 		p.seen = append(p.seen, ev)
+		p.mu.Unlock()
 	})
 	close(p.started)
 	return nil
+}
+
+// events returns a copy of what the portal has observed.
+func (p *fakePortal) events() []thought.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]thought.Event(nil), p.seen...)
 }
 
 func (p *fakePortal) Stop() error                            { close(p.stopped); return nil }
@@ -377,7 +392,7 @@ func waitForEvent(t *testing.T, p *fakePortal, kind thought.EventKind) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, ev := range p.seen {
+		for _, ev := range p.events() {
 			if ev.Kind == kind {
 				return
 			}
