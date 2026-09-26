@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/internal/provider"
 	ithought "github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
@@ -60,6 +61,13 @@ type Navi struct {
 	Thoughts *Thoughts
 
 	log *slog.Logger
+
+	// runtimeFile is the runtime config path (WithRuntimeConfig).
+	runtimeFile string
+
+	// Resolved by assemble, before serving starts.
+	selection DefaultSelection
+	providers *provider.Set
 
 	mu      sync.Mutex
 	serving bool
@@ -178,6 +186,9 @@ func (n *Navi) Run(ctx context.Context) error {
 	if err := n.validate(); err != nil {
 		return err
 	}
+	if err := n.assemble(); err != nil {
+		return err
+	}
 	n.freeze()
 	return n.serve(ctx)
 }
@@ -274,8 +285,11 @@ func (n *Navi) validatePorts() error {
 	return nil
 }
 
-// validateDefaultModel enforces ADR 0009: a declared set has exactly one
-// default, and the name must refer to a declared provider.
+// validateDefaultModel enforces ADR 0009 at build time: a declared set
+// has exactly one designated default, so the binary is self-describing.
+// Runtime layers may later *override* which provider is used (env >
+// config, see resolveDefault) — but the compiled artifact must always
+// say what it does by default.
 func (n *Navi) validateDefaultModel() error {
 	if n.Models.Len() == 0 {
 		if n.defaultProvider != "" {
@@ -284,13 +298,40 @@ func (n *Navi) validateDefaultModel() error {
 		}
 		return nil
 	}
-	if n.defaultProvider == "" {
-		return fmt.Errorf("%w: %d models declared but none marked default (use WithDefaultModel)",
-			ErrInvalid, n.Models.Len())
+
+	marked := 0
+	for _, p := range n.Models.All() {
+		if p.Default {
+			marked++
+		}
 	}
-	if !n.hasModel(n.defaultProvider) {
-		return fmt.Errorf("%w: default model %q is not a declared provider",
-			ErrInvalid, n.defaultProvider)
+	if marked > 1 {
+		return fmt.Errorf("%w: %d providers marked default; exactly one is allowed",
+			ErrInvalid, marked)
+	}
+
+	// An explicit WithDefaultModel is the more specific statement, but
+	// disagreeing with a descriptor marker is an ambiguity, not a
+	// precedence puzzle — refuse to guess.
+	if n.defaultProvider != "" {
+		if !n.hasModel(n.defaultProvider) {
+			return fmt.Errorf("%w: default model %q is not a declared provider",
+				ErrInvalid, n.defaultProvider)
+		}
+		for _, p := range n.Models.All() {
+			if p.Default && !strings.EqualFold(p.Name, n.defaultProvider) {
+				return fmt.Errorf(
+					"%w: WithDefaultModel(%q) conflicts with the provider marked default (%q); declare one",
+					ErrInvalid, n.defaultProvider, p.Name)
+			}
+		}
+		return nil
+	}
+
+	if marked == 0 {
+		return fmt.Errorf(
+			"%w: %d models declared but none marked default (use model.Default() or WithDefaultModel)",
+			ErrInvalid, n.Models.Len())
 	}
 	return nil
 }

@@ -1,0 +1,2 @@
+{"db":"./navi.db","level":"info","model":"mock","msg":"binary run started","time":"2026-09-26T19:22:01.477735116Z"}
+{"level":"info","msg":"binary run complete — session ended, queue drained","time":"2026-09-26T19:22:01.477918533Z"}
