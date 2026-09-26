@@ -45,16 +45,16 @@ func (ts *ThoughtStore) SaveThought(t *thought.Thought) error {
 		deferUntil = formatTime(t.DeferUntil)
 	}
 	_, err := ts.db.Exec(`INSERT INTO thoughts
-		(id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, result, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			prompt=excluded.prompt, context=excluded.context, metadata=excluded.metadata,
 			priority=excluded.priority, status=excluded.status, session_id=excluded.session_id,
 			slot_id=excluded.slot_id, worker_id=excluded.worker_id, log_path=excluded.log_path,
-			checkpoint=excluded.checkpoint, defer_until=excluded.defer_until, provider=excluded.provider, model=excluded.model, updated_at=excluded.updated_at`,
+			checkpoint=excluded.checkpoint, defer_until=excluded.defer_until, provider=excluded.provider, model=excluded.model, result=excluded.result, updated_at=excluded.updated_at`,
 		t.ID, t.Prompt, t.Context, metadata, t.EffectivePriority(), string(t.Status),
 		t.SessionID, t.SlotID, t.WorkerID, t.LogPath, checkpoint, deferUntil,
-		t.Provider, t.Model, formatTime(t.CreatedAt), formatTime(t.UpdatedAt))
+		t.Provider, t.Model, t.Result, formatTime(t.CreatedAt), formatTime(t.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("sqlite: upsert thought %s: %w", t.ID, err)
 	}
@@ -63,7 +63,7 @@ func (ts *ThoughtStore) SaveThought(t *thought.Thought) error {
 
 // LoadThoughts returns all persisted thoughts.
 func (ts *ThoughtStore) LoadThoughts() ([]*thought.Thought, error) {
-	rows, err := ts.db.Query(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, created_at, updated_at
+	rows, err := ts.db.Query(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, result, created_at, updated_at
 		FROM thoughts ORDER BY priority, updated_at`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: load thoughts: %w", err)
@@ -83,7 +83,7 @@ func (ts *ThoughtStore) LoadThoughts() ([]*thought.Thought, error) {
 
 // LoadThought returns one thought by ID.
 func (ts *ThoughtStore) LoadThought(id string) (*thought.Thought, error) {
-	row := ts.db.QueryRow(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, created_at, updated_at
+	row := ts.db.QueryRow(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, result, created_at, updated_at
 		FROM thoughts WHERE id = ?`, id)
 	t, err := scanThought(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -117,11 +117,11 @@ func scanThought(row rowScanner) (*thought.Thought, error) {
 	t := &thought.Thought{}
 	var status, createdAt, updatedAt string
 	var contextStr, metadata, sessionID, slotID, workerID, logPath, deferUntil sql.NullString
-	var providerStr, modelStr sql.NullString
+	var providerStr, modelStr, resultStr sql.NullString
 	var checkpoint []byte
 	if err := row.Scan(&t.ID, &t.Prompt, &contextStr, &metadata, &t.Priority, &status,
 		&sessionID, &slotID, &workerID, &logPath, &checkpoint, &deferUntil,
-		&providerStr, &modelStr, &createdAt, &updatedAt); err != nil {
+		&providerStr, &modelStr, &resultStr, &createdAt, &updatedAt); err != nil {
 		return nil, fmt.Errorf("sqlite: scan thought: %w", err)
 	}
 	t.Context = contextStr.String
@@ -138,6 +138,7 @@ func scanThought(row rowScanner) (*thought.Thought, error) {
 	t.Checkpoint = checkpoint
 	t.Provider = providerStr.String
 	t.Model = modelStr.String
+	t.Result = resultStr.String
 	if deferUntil.Valid && deferUntil.String != "" {
 		var derr error
 		if t.DeferUntil, derr = parseTime(deferUntil.String); derr != nil {

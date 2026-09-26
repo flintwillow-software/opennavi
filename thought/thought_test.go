@@ -40,6 +40,8 @@ func (s *stubTS) Resume(id string) error                 { return nil }
 func (s *stubTS) Cancel(id string) error                 { return nil }
 func (s *stubTS) BumpPriority(id string, prio int) error { return nil }
 func (s *stubTS) Retry(id string) error                  { return nil }
+func (s *stubTS) Complete(id, result string) error       { return nil }
+func (s *stubTS) Fail(id, detail string) error           { return nil }
 func (s *stubTS) GetThought(id string) (*Thought, error) { return nil, ErrThoughtNotFound }
 func (s *stubTS) GetThoughts() []*Thought                { return s.queued }
 func (s *stubTS) OnEvent(fn func(Event))                 {}

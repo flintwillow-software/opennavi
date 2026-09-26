@@ -151,8 +151,13 @@ func (t *Thoughts) dequeue() (*thought.Thought, bool) {
 	return toPublic(it), true
 }
 
-// complete marks a thought terminal-success.
-func (t *Thoughts) complete(id string) error { return t.q.Complete(id) }
+// complete marks a thought terminal-success, recording its completion
+// message.
+// Complete reports a thought's outcome, recording its completion message.
+func (t *Thoughts) Complete(id, result string) error { return t.q.Complete(id, result) }
+
+// Fail reports a thought's failure with a detail message.
+func (t *Thoughts) Fail(id, detail string) error { return t.q.Fail(id, detail) }
 
 // fail marks a thought failed with a detail message.
 func (t *Thoughts) fail(id, detail string) error { return t.q.Fail(id, detail) }
@@ -178,6 +183,7 @@ func toRuntime(pt *thought.Thought) *ithought.Thought {
 		UpdatedAt:  pt.UpdatedAt,
 		Prompt:     pt.Prompt,
 		Context:    pt.Context,
+		Result:     pt.Result,
 		Metadata:   copyMeta(pt.Metadata),
 		Priority:   pt.Priority,
 		DeferUntil: pt.DeferUntil,
@@ -200,6 +206,7 @@ func toPublic(it *ithought.Thought) *thought.Thought {
 		ID:         it.ID,
 		Prompt:     it.Prompt,
 		Context:    it.Context,
+		Result:     it.Result,
 		Metadata:   copyMeta(it.Metadata),
 		Priority:   it.Priority,
 		Status:     string(it.Status),

@@ -60,6 +60,14 @@ type Thought struct {
 	LogPath    string
 	Checkpoint []byte // last checkpoint state (for resume)
 
+	// Result is the outcome a runner reports when the thought completes:
+	// the completion message. It is deliberately a plain string for now —
+	// a real agent produces tool calls and multi-turn state, not one line,
+	// so expect this to be reshaped when the agent runner lands. Keeping
+	// it here means "what did this thought produce?" is answerable without
+	// hunting through a transcript.
+	Result string
+
 	// Foreground marks this thought as the binary run's interactive
 	// work (S010003): it may claim the queue's reserved foreground
 	// slots (Config.ForegroundSlots) and competes by the same

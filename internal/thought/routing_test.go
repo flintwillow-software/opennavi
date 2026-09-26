@@ -170,7 +170,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Enqueue(&Thought{ID: "t2", Prompt: "x", Priority: 4, Status: ThoughtPending}); err != nil {
@@ -254,7 +254,7 @@ func TestEveryRoutedAttemptEmitsAck(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok { // claims t1
 		t.Fatal("claim failed")
 	}
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	rec := watchRouted(q)

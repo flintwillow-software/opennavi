@@ -450,7 +450,11 @@ func (q *ThoughtQueue) Cancel(id string) error {
 }
 
 // Complete marks a running thought complete (called by the worker).
-func (q *ThoughtQueue) Complete(id string) error {
+// Complete marks a running thought complete and records its completion
+// message. result is the runner's reported outcome; it is persisted so a
+// thought's output is readable from the queue itself rather than only
+// from its session transcript.
+func (q *ThoughtQueue) Complete(id string, result string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
@@ -460,6 +464,7 @@ func (q *ThoughtQueue) Complete(id string) error {
 	if err := t.Transition(ThoughtComplete); err != nil {
 		return err
 	}
+	t.Result = result
 	q.freeSlot(id)
 	t.SlotID = ""
 	t.WorkerID = ""

@@ -89,7 +89,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	}
 
 	// Complete it: the lifecycle transition lands within one drain.
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
@@ -164,7 +164,7 @@ func TestModelLiveView(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("t3 not claimable")
 	}
-	if err := q.Complete("t3"); err != nil {
+	if err := q.Complete("t3", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
@@ -749,7 +749,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 		t.Errorf("tool preview / activity line missing:\n%s", m.View())
 	}
 	// Completion clears the activity line.
-	if err := q.Complete("run1"); err != nil {
+	if err := q.Complete("run1", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)

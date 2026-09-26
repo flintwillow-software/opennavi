@@ -23,6 +23,12 @@ type Thought struct {
 	Prompt string
 	// Context is supporting context (steers append here).
 	Context string
+	// Result is the completion message: the outcome reported when the
+	// thought reaches "complete" (empty until then, and legitimately
+	// empty for a thought that produced no visible content). Deliberately
+	// a plain string for now — a real agent produces tool calls and
+	// multi-turn state, not one line, so expect this to be reshaped.
+	Result string
 	// Metadata is arbitrary key-value metadata (origin tagging, ...).
 	Metadata map[string]string
 	// Priority ranges 1..10 (1 = highest).
@@ -111,6 +117,13 @@ type ThoughtSystem interface {
 	BumpPriority(id string, prio int) error
 	// Retry re-queues a failed thought.
 	Retry(id string) error
+	// Complete reports a thought's outcome: it moves a running thought to
+	// "complete" and records result as its completion message. Reporting
+	// is not claiming — a component cannot take work off the queue with
+	// this, only close out a thought it already has the id for.
+	Complete(id string, result string) error
+	// Fail reports a thought's failure, with a detail message.
+	Fail(id string, detail string) error
 	// GetThought returns a copy of one thought.
 	GetThought(id string) (*Thought, error)
 	// GetThoughts returns the full queue snapshot (copies).

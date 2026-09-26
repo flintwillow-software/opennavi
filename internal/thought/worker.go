@@ -178,7 +178,7 @@ func (p *Pool) worker(n int) {
 				}
 			}
 		} else {
-			if cerr := p.queue.Complete(t.ID); cerr != nil {
+			if cerr := p.queue.Complete(t.ID, t.Result); cerr != nil {
 				p.emitPersistError(t.ID, cerr)
 			}
 		}
