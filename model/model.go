@@ -18,8 +18,20 @@ type Provider struct {
 	Name string
 	// Model is the default model the provider serves.
 	Model string
-	// Endpoint is the provider base endpoint (URL or host:port).
+	// Endpoint is the provider base endpoint (URL or host:port). Empty
+	// means the compiled default for the named provider.
 	Endpoint string
+	// Credential names where this provider's secret lives — an
+	// environment variable or a file path, NEVER the value (ADR 0008).
+	// Descriptors get logged, printed in tool output, and committed, so
+	// a literal key must never reach one. Empty = needs no credential.
+	Credential CredentialRef
+	// Mode is "local" or "cloud". Informational, but it tells a reader
+	// whether the provider leaves the machine.
+	Mode string
+	// Default marks the provider a thought uses when it names none
+	// (ADR 0009). A navi declares a set and exactly one default.
+	Default bool
 }
 
 // Model is the model descriptor exposed to components: the model name
@@ -34,6 +46,87 @@ type Model struct {
 	// characteristics/tradeoffs.
 	Description string
 }
+
+// CredentialRef names where a provider's secret lives: an environment
+// variable (or file path) holding it. It is a REFERENCE, never the value.
+type CredentialRef string
+
+// Compiled endpoint defaults (ADR 0008 permits these in the binary; the
+// operator overrides them at runtime).
+const (
+	DefaultOllamaEndpoint     = "http://localhost:11434"
+	DefaultOpenRouterEndpoint = "https://openrouter.ai/api/v1"
+)
+
+// DefaultOpenRouterCredential is the conventional environment variable
+// holding an OpenRouter key, used unless a constructor is told otherwise.
+const DefaultOpenRouterCredential CredentialRef = "OPENROUTER_API_KEY"
+
+// Provider modes.
+const (
+	ModeLocal = "local"
+	ModeCloud = "cloud"
+)
+
+// Option adjusts a provider descriptor at construction.
+type Option func(*Provider)
+
+// WithEndpoint overrides the compiled endpoint default.
+func WithEndpoint(endpoint string) Option {
+	return func(p *Provider) { p.Endpoint = endpoint }
+}
+
+// WithCredential names where the provider's secret lives (ADR 0008).
+func WithCredential(ref CredentialRef) Option {
+	return func(p *Provider) { p.Credential = ref }
+}
+
+// Default marks this provider as the one a thought uses when it names no
+// provider or model (ADR 0009). Exactly one declared provider may be
+// default; Run rejects a set with none or with several.
+func Default() Option {
+	return func(p *Provider) { p.Default = true }
+}
+
+// Ollama describes a local Ollama provider serving model. Ollama takes
+// no credential, which makes it the first provider a navi can actually
+// run against.
+func Ollama(model string, opts ...Option) Provider {
+	p := Provider{
+		Name:     "ollama",
+		Model:    model,
+		Endpoint: DefaultOllamaEndpoint,
+		Mode:     ModeLocal,
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(&p)
+		}
+	}
+	return p
+}
+
+// OpenRouter describes a cloud OpenRouter provider serving model. It
+// requires a credential; the default reference is
+// DefaultOpenRouterCredential.
+func OpenRouter(model string, opts ...Option) Provider {
+	p := Provider{
+		Name:       "openrouter",
+		Model:      model,
+		Endpoint:   DefaultOpenRouterEndpoint,
+		Credential: DefaultOpenRouterCredential,
+		Mode:       ModeCloud,
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(&p)
+		}
+	}
+	return p
+}
+
+// RequiresCredential reports whether this descriptor names a secret.
+func (p Provider) RequiresCredential() bool { return p.Credential != "" }
 
 // ErrUnknownProvider is returned when a registry lookup fails.
 var ErrUnknownProvider = errors.New("model: unknown provider")
