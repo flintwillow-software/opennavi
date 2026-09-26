@@ -51,8 +51,8 @@ if err := n.Run(ctx); err != nil { ... }
 | `Skills` | added | compiled-in skill content | Baked into the system prompt at build time |
 | `Tools` | added | agent-callable actions | Registered with full metadata; the active set is derived |
 | `Models` | added | provider + model + version | One marked default; config may override the default |
-| `Connectors` | added | inbound transport doors | Receive thought/model handles via `Deps` |
-| `Portals` | added | human observe/control surfaces | Receive `Deps`; list/schedule/steer thoughts |
+| `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
+| `Portals` | added | human observe/control surfaces | Receive `Deps` at `Start`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
 | `Permissions` | core/added | compiled policy ceiling | Runtime may only tighten |
 | `Extensions` | added | runtime plugin allow-list | Deferred (ADR 0005) |
@@ -132,17 +132,33 @@ Both are lifecycle components attached to a navi with a dependency contract:
 
 ```go
 type Connector interface {
-    Name() string
-    Run(ctx context.Context, deps Deps) error
-    Stop(ctx context.Context) error
+    Start(ctx context.Context, deps Deps) error
+    Stop() error
+}
+
+type Portal interface {
+    Start(ctx context.Context, deps Deps) error
+    Stop() error
+    Attach(identity string) error
+    Steer(identity, thoughtID, message string) error
+    // ... Pause / Resume / Cancel / Enqueue
 }
 
 type Deps struct {
-    Thoughts thought.ThoughtSystem
-    Models   model.Registry
-    Log      *slog.Logger
+    ThoughtSystem thought.ThoughtSystem
+    Model         model.Registry
+    Log           *slog.Logger
 }
 ```
+
+`Deps` is a **lifecycle argument, not a constructor input**. The composition
+root cannot supply it any earlier: a navi declares its collections first and
+only assembles them in `Run`, so a component constructed before `Run` has
+nothing to receive. Threading it through `Start` keeps constructors config-only
+(`connector.Discord(connector.Config{...})`) and keeps these packages free of
+any `navi` import (ADR 0004 rule 1). A portal needs the handle for the same
+reason a connector does — observation happens through
+`Deps.ThoughtSystem.OnEvent`.
 
 - **Connectors** bring work in and manage thought lifecycles (spawn/attach/
   route). Egress tools (`discord_send`, `websocket_send`) close over the

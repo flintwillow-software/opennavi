@@ -27,26 +27,55 @@ func (s *stubTS) GetThought(id string) (*thought.Thought, error) {
 func (s *stubTS) GetThoughts() []*thought.Thought { return s.queued }
 func (s *stubTS) OnEvent(fn func(thought.Event))  {}
 
+// stubConnector records what it is handed at Start. That is the point:
+// a connector cannot receive Deps at construction, because nothing has
+// assembled it that early — the composition root only builds Deps in
+// Run, after every collection is declared.
 type stubConnector struct {
-	deps Deps
+	got     Deps
+	stopped bool
 }
 
-func (c *stubConnector) Start(ctx context.Context) error { return nil }
-func (c *stubConnector) Stop() error                     { return nil }
+func (c *stubConnector) Start(ctx context.Context, deps Deps) error {
+	c.got = deps
+	return nil
+}
 
-func TestConnectorDeps(t *testing.T) {
-	deps := Deps{
-		ThoughtSystem: &stubTS{},
-		Model:         model.NewRegistry(),
-	}
-	c := &stubConnector{deps: deps}
-	if deps.ThoughtSystem == nil || deps.Model == nil {
-		t.Fatal("deps handles not assignable")
-	}
-	if err := c.Start(context.Background()); err != nil {
+func (c *stubConnector) Stop() error {
+	c.stopped = true
+	return nil
+}
+
+func TestConnectorDepsAtStart(t *testing.T) {
+	ts := &stubTS{}
+	deps := Deps{ThoughtSystem: ts, Model: model.NewRegistry()}
+
+	var c Connector = &stubConnector{}
+	if err := c.Start(context.Background(), deps); err != nil {
 		t.Fatal(err)
 	}
+
+	sc, ok := c.(*stubConnector)
+	if !ok {
+		t.Fatal("unexpected connector type")
+	}
+	if sc.got.ThoughtSystem == nil || sc.got.Model == nil {
+		t.Fatal("connector did not receive Deps at Start")
+	}
+
+	// The handles must be usable, not merely non-nil: a connector does
+	// its job by driving the thought system through Deps.
+	if err := sc.got.ThoughtSystem.Enqueue(&thought.Thought{ID: "t1", Prompt: "inbound work"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ts.queued) != 1 {
+		t.Fatalf("connector enqueue through Deps: want 1 thought, got %d", len(ts.queued))
+	}
+
 	if err := c.Stop(); err != nil {
 		t.Fatal(err)
+	}
+	if !sc.stopped {
+		t.Fatal("Stop did not reach the connector")
 	}
 }
