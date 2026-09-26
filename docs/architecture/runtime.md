@@ -51,7 +51,7 @@ if err := n.Run(ctx); err != nil { ... }
 | `Skills` | added | compiled-in skill content | Baked into the system prompt at build time |
 | `Tools` | added | agent-callable actions | Registered with full metadata; the active set is derived |
 | `Models` | added | provider + model + version | One marked default; config may override the default |
-| `Connectors` | added | inbound transport doors | Receive thought/memory/model handles via `Deps` |
+| `Connectors` | added | inbound transport doors | Receive thought/model handles via `Deps` |
 | `Portals` | added | human observe/control surfaces | Receive `Deps`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
 | `Permissions` | core/added | compiled policy ceiling | Runtime may only tighten |
@@ -138,7 +138,6 @@ type Connector interface {
 
 type Deps struct {
     Thoughts thought.ThoughtSystem
-    Memory   memory.API
     Models   model.Registry
     Log      *slog.Logger
 }

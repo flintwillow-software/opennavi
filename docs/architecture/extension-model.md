@@ -79,7 +79,7 @@ func IssueRead(c Config) tool.Tool {
 | Tool | `func Foo(cfg) tool.Tool` | Full metadata descriptor |
 | Skill | `//go:embed *.md` + accessor | Content travels with the module, compiles in |
 | Model | `func Foo(...) model.Model` | Provider descriptor; key resolved at runtime |
-| Connector | implements `connector.Connector` | Receives thought/memory/model handles via `Deps` |
+| Connector | implements `connector.Connector` | Receives thought/model handles via `Deps` |
 | Portal | implements `portal.Portal` | List/schedule/steer thoughts via `Deps` |
 
 A shared internal kit (`acme/navi-kit`) can expose common skills, tools,
