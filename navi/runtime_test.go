@@ -13,6 +13,33 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
+// clearProviderEnv makes a test independent of the developer's
+// environment. A test that reads an ambient credential is testing
+// something different on a laptop than on CI — which is precisely how
+// these tests first passed locally (where OPENROUTER_API_KEY happened to
+// be set) and failed on the runner. Every test in this file states its
+// environment rather than inheriting one.
+func clearProviderEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		config.EnvProvider,
+		config.EnvModel,
+		string(model.DefaultOpenRouterCredential),
+		"OLLAMA_HOST",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+// withFakeOpenRouterCredential satisfies the fail-closed check so that a
+// test about *selection* does not also become a test about credential
+// resolution. The value is deliberately not a real key: nothing here
+// reaches the network.
+func withFakeOpenRouterCredential(t *testing.T) {
+	t.Helper()
+	t.Setenv(string(model.DefaultOpenRouterCredential), "test-key-not-a-secret")
+}
+
 // writeConfig drops a runtime config YAML in a temp dir and returns its
 // path — the file layer of the override chain.
 func writeConfig(t *testing.T, body string) string {
@@ -41,6 +68,8 @@ func testNavi(t *testing.T, opts ...Option) *Navi {
 // --- the override chain: env > config > build-time --------------------
 
 func TestDefaultFromBuildTime(t *testing.T) {
+	clearProviderEnv(t)
+
 	n := testNavi(t)
 	if err := n.assemble(); err != nil {
 		t.Fatal(err)
@@ -55,8 +84,8 @@ func TestDefaultFromBuildTime(t *testing.T) {
 }
 
 func TestConfigOverridesBuildTime(t *testing.T) {
-	t.Setenv(config.EnvProvider, "")
-	t.Setenv(config.EnvModel, "")
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
 	path := writeConfig(t, "provider:\n  primary: openrouter\n  model: anthropic/claude-sonnet-4\n")
 
 	n := testNavi(t, WithRuntimeConfig(path))
@@ -73,6 +102,8 @@ func TestConfigOverridesBuildTime(t *testing.T) {
 }
 
 func TestEnvOverridesConfigAndBuildTime(t *testing.T) {
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
 	path := writeConfig(t, "provider:\n  primary: ollama\n  model: from-config\n")
 	t.Setenv(config.EnvProvider, "openrouter")
 	t.Setenv(config.EnvModel, "from-env")
@@ -95,8 +126,9 @@ func TestEnvOverridesConfigAndBuildTime(t *testing.T) {
 // model, not the compiled default's model, which belongs to a different
 // backend entirely.
 func TestRetargetingProviderDoesNotDragTheOldModel(t *testing.T) {
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
 	t.Setenv(config.EnvProvider, "openrouter")
-	t.Setenv(config.EnvModel, "")
 
 	n := testNavi(t)
 	if err := n.assemble(); err != nil {
@@ -112,6 +144,7 @@ func TestRetargetingProviderDoesNotDragTheOldModel(t *testing.T) {
 }
 
 func TestBlankEnvIsNotAnOverride(t *testing.T) {
+	clearProviderEnv(t)
 	t.Setenv(config.EnvProvider, "   ")
 	t.Setenv(config.EnvModel, "   ")
 
@@ -130,6 +163,8 @@ func TestBlankEnvIsNotAnOverride(t *testing.T) {
 // provider carries the descriptor marker is an ambiguity, not a
 // precedence puzzle: refuse to guess.
 func TestConflictingBuildTimeDefaultsRejected(t *testing.T) {
+	clearProviderEnv(t)
+
 	n := New("t", WithDefaultModel("openrouter"))
 	if err := n.Models.Add(model.Ollama("qwen3.8:27b", model.Default())); err != nil {
 		t.Fatal(err)
@@ -144,6 +179,8 @@ func TestConflictingBuildTimeDefaultsRejected(t *testing.T) {
 }
 
 func TestTwoMarkersRejected(t *testing.T) {
+	clearProviderEnv(t)
+
 	n := New("t")
 	_ = n.Models.Add(model.Ollama("a", model.Default()))
 	_ = n.Models.Add(model.OpenRouter("b", model.Default()))
@@ -158,7 +195,7 @@ func TestTwoMarkersRejected(t *testing.T) {
 // --- fail-closed behaviour -------------------------------------------
 
 func TestRunFailsWhenTheDefaultProvidersCredentialIsMissing(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "")
+	clearProviderEnv(t)
 	t.Setenv(config.EnvProvider, "openrouter")
 
 	n := testNavi(t)
@@ -172,6 +209,7 @@ func TestRunFailsWhenTheDefaultProvidersCredentialIsMissing(t *testing.T) {
 }
 
 func TestRunFailsOnUnknownProviderFromEnv(t *testing.T) {
+	clearProviderEnv(t)
 	t.Setenv(config.EnvProvider, "gpt-5")
 
 	n := testNavi(t)
@@ -184,7 +222,8 @@ func TestRunFailsOnUnknownProviderFromEnv(t *testing.T) {
 // --- per-thought selection (ADR 0009) --------------------------------
 
 func TestResolveForPrefersTheThoughtsOverride(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "k")
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
 
 	n := testNavi(t)
 	if err := n.assemble(); err != nil {
@@ -213,6 +252,8 @@ func TestResolveForPrefersTheThoughtsOverride(t *testing.T) {
 }
 
 func TestResolveForIsLoudOnAnUnknownThoughtProvider(t *testing.T) {
+	clearProviderEnv(t)
+
 	n := testNavi(t)
 	if err := n.assemble(); err != nil {
 		t.Fatal(err)
