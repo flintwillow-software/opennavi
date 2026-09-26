@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAuth is an authorizer that permits every action.
@@ -27,7 +27,7 @@ func (a denyAuth) Authorize(action PortalAction, identity string) error {
 }
 
 // newQueue builds a queue over an in-memory store for contract tests.
-func newQueue(t *testing.T) *thought.ThoughtQueue {
+func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
 	if err != nil {
@@ -136,7 +136,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 	}
 	// RouteMessage on a pending thought takes the context-append path
 	// (S010312) and emits the delivery-ack event.
-	path, err := q.RouteMessage("t2", "hello")
+	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil {
 		t.Fatalf("RouteMessage: %v", err)
 	}

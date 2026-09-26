@@ -1,21 +1,42 @@
-// Package thought is the public thought contract (ADR 0003: the
-// thought system is first-class; ADR 0004: contract packages are
-// public and dependency-light). This package defines the Thought
-// value, the ThoughtSystem handle components operate through, and the
-// event stream they observe — interfaces only, stdlib-only. M3
-// promotes internal/thought onto this contract; until then the two
-// coexist and nothing may import this package from the runtime. The
-// Thought value mirrors the runtime thought's consumer-relevant
-// fields so the promotion is mechanical.
+// Package thought is the public thought system (ADR 0003: the thought
+// system is first-class; ADR 0004: contract packages are public and
+// dependency-light).
+//
+// It holds three things, deliberately together: the Thought value and its
+// lifecycle, the ThoughtSystem handle components operate through, and the
+// priority Queue that runs them.
+//
+// The first two are the component contract. The Queue is the *runtime*
+// handle: the composition root and its workers hold the concrete type,
+// while components receive only ThoughtSystem through Deps — so a
+// component cannot take work off the queue, and slot accounting stays out
+// of the component surface even though the scheduler lives here.
 package thought
 
 import (
 	"errors"
+	"fmt"
 	"time"
+)
+
+// ThoughtStatus is the lifecycle state of a thought (spec §2.1).
+type ThoughtStatus string
+
+const (
+	ThoughtPending   ThoughtStatus = "pending"
+	ThoughtRunning   ThoughtStatus = "running"
+	ThoughtPaused    ThoughtStatus = "paused"
+	ThoughtComplete  ThoughtStatus = "complete"
+	ThoughtFailed    ThoughtStatus = "failed"
+	ThoughtCancelled ThoughtStatus = "cancelled"
 )
 
 // Thought is one piece of the navi's reasoning queue: a discrete task
 // with a lifecycle, durable overrides, and metadata.
+//
+// The first group of fields is what a *component* acts on — connectors
+// and portals read and set these. The second group is runtime-managed:
+// the scheduler owns it, and a component has no business writing it.
 type Thought struct {
 	// ID is stable per thought.
 	ID string
@@ -33,32 +54,136 @@ type Thought struct {
 	Metadata map[string]string
 	// Priority ranges 1..10 (1 = highest).
 	Priority int
-	// Status is the lifecycle state ("pending" | "running" |
-	// "paused" | "complete" | "failed" | "cancelled").
-	Status string
-	// Provider / Model are per-thought overrides (empty = runtime
+	// Status is the lifecycle state.
+	Status ThoughtStatus
+	// Provider / Model are per-thought overrides (empty = the navi
 	// default; ADR 0009).
 	Provider string
 	Model    string
-	// Mode names the capability profile this thought runs under
-	// (empty = the navi's default; ADR 0007). The composition root
-	// validates it against the declared Modes at Run.
+	// Mode names the capability profile this thought runs under (empty =
+	// the navi's default; ADR 0007).
 	Mode string
-	// DeferUntil makes the thought unclaimable before this time
-	// (zero = claimable now); durable.
+	// DeferUntil is the not-before timestamp (S130600 §02): the thought
+	// is queued — and persisted — immediately but is not claimable until
+	// this time passes. Zero = claimable now. Durability is real state
+	// (S010002), not an in-memory timer: crash recovery preserves it.
 	DeferUntil time.Time
-	// SessionID links the thought to its persisted session transcript
-	// (when one exists).
+	// SessionID links the thought to its persisted transcript, when one
+	// exists.
 	SessionID string
-	// Foreground marks session-created thoughts that claim the
-	// reserved foreground slot.
+	// Foreground marks this thought as the binary run's interactive work
+	// (S010003): it may claim the queue's reserved foreground slots and
+	// competes by the same priority/preemption rules as everything else.
 	Foreground bool
 	// CreatedAt / UpdatedAt are store-managed timestamps.
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// SlotID / WorkerID record the capacity slot and worker holding this
+	// thought while it runs. Runtime-managed.
+	SlotID   string
+	WorkerID string
+	// LogPath is where this thought's run log lives, when one is kept.
+	LogPath string
+	// Checkpoint is the last parked state, written on
+	// running→paused so a resumed thought continues rather than restarts
+	// (NAVI-338's durability promise: the checkpoint is on disk at park
+	// time).
+	Checkpoint []byte
+	// PreemptRequested is set by the queue when a higher-priority thought
+	// needs this running thought's slot. The runner honours it via ctx
+	// cancellation: snapshot progress into Checkpoint and return; the
+	// worker then parks the thought (running → paused).
+	PreemptRequested bool
 }
 
-// EffectivePriority clamps Priority to 1..10.
+// OriginSelf / OriginTool tag thoughts the navi scheduled for itself
+// (S130600 §1.2 "origin tagging"): self-directed work is distinguishable
+// from connector-sourced work in dashboards, and the queue clamps its
+// priority to the conservative band. The spec uses `origin: self`; the
+// thought-tool layers tag `origin: tool` — both spellings count as
+// self-scheduled.
+const OriginSelf = "self"
+const OriginTool = "tool"
+
+// SelfScheduledHighBound is the default priority floor for self-scheduled
+// thoughts (S130600 §1.2 "priority clamp"): any priority above it
+// (numerically lower) is clamped down, so self-directed work can never
+// preempt external work (preemption needs priority ≤
+// HighPriorityThreshold) or squat the reserved slots unless runtime
+// config grants it.
+const SelfScheduledHighBound = 5
+
+// Sentinel lifecycle errors.
+var (
+	// ErrInvalidTransition is returned by Transition for a move the
+	// lifecycle state machine forbids.
+	ErrInvalidTransition = errors.New("invalid thought transition")
+	// ErrThoughtNotFound is returned when a thought id does not exist.
+	ErrThoughtNotFound = errors.New("thought not found")
+	// ErrThoughtProtected wraps delete rejections for thoughts whose
+	// lifecycle forbids removal (running, terminal). Check errors.Is.
+	ErrThoughtProtected = errors.New("thought protected from deletion")
+)
+
+// validTransitions is the lifecycle state machine (spec §2.2).
+var validTransitions = map[ThoughtStatus][]ThoughtStatus{
+	ThoughtPending:   {ThoughtRunning, ThoughtCancelled},
+	ThoughtRunning:   {ThoughtComplete, ThoughtPaused, ThoughtFailed},
+	ThoughtPaused:    {ThoughtRunning, ThoughtPending, ThoughtCancelled},
+	ThoughtFailed:    {ThoughtPending}, // retry
+	ThoughtComplete:  {},
+	ThoughtCancelled: {},
+}
+
+// Note on paused → pending: resume re-queues a paused thought; the
+// pending → running transition happens when a worker claims it and a
+// slot is allocated (spec §2.2 "resume requested, slot available").
+
+// Transition validates and applies a status change.
+func (t *Thought) Transition(to ThoughtStatus) error {
+	for _, allowed := range validTransitions[t.Status] {
+		if allowed == to {
+			t.Status = to
+			t.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: thought %s: %s -> %s", ErrInvalidTransition, t.ID, t.Status, to)
+}
+
+// CanRetry reports whether a failed thought may be re-queued.
+func (t *Thought) CanRetry() bool { return t.Status == ThoughtFailed }
+
+// Retry returns a failed thought to pending for re-acquisition.
+func (t *Thought) Retry() error {
+	if !t.CanRetry() {
+		return fmt.Errorf("%w: thought %s: %s -> pending (only failed thoughts retry)", ErrInvalidTransition, t.ID, t.Status)
+	}
+	t.Status = ThoughtPending
+	t.SlotID = ""
+	t.WorkerID = ""
+	t.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// Clone returns a deep copy — safe to hand to callers while the queue
+// keeps mutating the original (GetThought/GetThoughts use this).
+func (t *Thought) Clone() *Thought {
+	out := *t
+	if t.Metadata != nil {
+		out.Metadata = make(map[string]string, len(t.Metadata))
+		for k, v := range t.Metadata {
+			out.Metadata[k] = v
+		}
+	}
+	if t.Checkpoint != nil {
+		out.Checkpoint = append([]byte(nil), t.Checkpoint...)
+	}
+	return &out
+}
+
+// EffectivePriority returns the priority clamped to the 1-10 range.
 func (t *Thought) EffectivePriority() int {
 	if t.Priority < 1 {
 		return 1
@@ -67,6 +192,28 @@ func (t *Thought) EffectivePriority() int {
 		return 10
 	}
 	return t.Priority
+}
+
+// EffectiveSelfPriority clamps a self-scheduled thought's priority to the
+// conservative band (S130600 §1.2): the navi cannot schedule itself ahead
+// of external work by default. The queue applies this inside Enqueue for
+// origin-tagged thoughts; the tool layer may also pre-clamp before
+// enqueue.
+func (t *Thought) EffectiveSelfPriority() int {
+	p := t.EffectivePriority()
+	if p < SelfScheduledHighBound {
+		return SelfScheduledHighBound
+	}
+	return p
+}
+
+// Due reports whether the thought is claimable by the pool at time now:
+// no deferral, or the not-before time has passed (S130600 §02).
+func (t *Thought) Due(now time.Time) bool {
+	if t.DeferUntil.IsZero() {
+		return true
+	}
+	return !t.DeferUntil.After(now)
 }
 
 // EventKind enumerates thought-system events.
@@ -84,6 +231,16 @@ const (
 	// EventMessageRouted is the routing delivery ack (S010312),
 	// carrying the injection path in Delivery.
 	EventMessageRouted EventKind = "message_routed"
+	// EventDeleted fires when a thought record is removed entirely
+	// (Queue.Delete, S130600 §04) — distinct from EventCancelled:
+	// removal is not cancellation, and the audit/ack trail
+	// distinguishes them. Detail carries the PRIOR status so metrics
+	// observers (which only see events) can decrement the right
+	// by_status gauge.
+	EventDeleted EventKind = "deleted"
+	// EventPersistFailed fires when a worker cannot persist a thought
+	// transition — in-memory and stored state may have diverged.
+	EventPersistFailed EventKind = "persist_failed"
 )
 
 // Event is one observation on the thought-system stream.
@@ -91,19 +248,22 @@ type Event struct {
 	Kind      EventKind
 	ThoughtID string
 	Detail    string
-	// Delivery is the routing path for message_routed acks; empty
-	// otherwise.
+	// Delivery is the routing path for message_routed acks (S010312:
+	// "context-append" | "steering" | "resume-with-message" | "").
+	// Empty on lifecycle events.
 	Delivery string
 	At       time.Time
 }
 
-// ErrThoughtNotFound is returned when a thought id does not exist.
-var ErrThoughtNotFound = errors.New("thought not found")
-
-// ThoughtSystem is the handle components (connectors, portals)
-// operate through: scheduling, steering, lifecycle controls, and
-// observation. A navi satisfies it structurally (ADR 0004 rule 2);
-// the contract never names the composition root.
+// ThoughtSystem is the handle components (connectors, portals) operate
+// through: scheduling, steering, lifecycle controls, and observation. A
+// navi satisfies it structurally (ADR 0004 rule 2); the contract never
+// names the composition root.
+//
+// Everything here is *control* or *reporting*. Nothing here claims work:
+// taking the next claimable thought is deliberately absent, because a
+// component that can take work off the queue has become a worker. That
+// lives on the concrete Queue, which only the runtime holds.
 type ThoughtSystem interface {
 	// Enqueue schedules a thought (deferral rides the Thought).
 	Enqueue(t *Thought) error
@@ -120,7 +280,7 @@ type ThoughtSystem interface {
 	// Complete reports a thought's outcome: it moves a running thought to
 	// "complete" and records result as its completion message. Reporting
 	// is not claiming — a component cannot take work off the queue with
-	// this, only close out a thought it already has the id for.
+	// this, only close out a thought it already holds the id for.
 	Complete(id string, result string) error
 	// Fail reports a thought's failure, with a detail message.
 	Fail(id string, detail string) error

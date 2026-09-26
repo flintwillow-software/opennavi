@@ -4,7 +4,7 @@
 // (repo convention; the text format is hand-rolled at this scale).
 //
 // The collector rides the existing event seam
-// (thought.ThoughtQueue.OnEvent — the same fanout WireLogging and
+// (thought.Queue.OnEvent — the same fanout WireLogging and
 // WireCron use): counters advance on enqueue/park/resume/persist-
 // failure, the in-queue gauge and per-status gauges follow the
 // lifecycle by deltas, and processing duration lands in a histogram
@@ -33,7 +33,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // Buckets are the thought-processing histogram buckets (seconds).
@@ -106,14 +106,14 @@ func New() *Collector {
 // immediately, before any event fires. The seed reads the queue
 // outside any event emission; event handlers themselves never re-enter
 // the queue (several queue emits hold q.mu).
-func (c *Collector) WireQueue(q *thought.ThoughtQueue) {
+func (c *Collector) WireQueue(q *thought.Queue) {
 	c.seed(q)
 	q.OnEvent(c.observeEvent)
 }
 
 // seed takes a one-time snapshot and sets the gauge families to the
 // queue's current distribution.
-func (c *Collector) seed(q *thought.ThoughtQueue) {
+func (c *Collector) seed(q *thought.Queue) {
 	if q == nil {
 		return
 	}
@@ -144,7 +144,7 @@ func (c *Collector) seed(q *thought.ThoughtQueue) {
 
 // observeEvent applies one queue event to the gauges and counters.
 // Never calls back into the queue.
-func (c *Collector) observeEvent(ev thought.QueueEvent) {
+func (c *Collector) observeEvent(ev thought.Event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -174,7 +174,7 @@ func (c *Collector) observeEvent(ev thought.QueueEvent) {
 			c.evictStartedLocked()
 		}
 		delete(c.pausedSet, ev.ThoughtID)
-	case thought.EventPausedEv:
+	case thought.EventPaused:
 		c.status.running--
 		c.status.paused++
 		c.pausedSet[ev.ThoughtID] = true

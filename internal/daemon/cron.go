@@ -6,7 +6,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // WireCron applies the #242 documented seam: MigrateState (tick-state
@@ -17,7 +17,7 @@ import (
 //
 // Returns the (unstarted) scheduler — the caller starts it and calls
 // Stop on shutdown.
-func WireCron(db *sql.DB, cc *config.CronConfig, q *thought.ThoughtQueue) (*cron.Scheduler, error) {
+func WireCron(db *sql.DB, cc *config.CronConfig, q *thought.Queue) (*cron.Scheduler, error) {
 	if err := cron.MigrateState(db); err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func WireCron(db *sql.DB, cc *config.CronConfig, q *thought.ThoughtQueue) (*cron
 	// thought.Metadata["schedule"] (set at fire time by the cron
 	// scheduler) — keying by thought ID never meets MissedTick, which
 	// reads LastFired(schedule-name).
-	q.OnEvent(func(ev thought.QueueEvent) {
+	q.OnEvent(func(ev thought.Event) {
 		if ev.Kind != thought.EventStarted {
 			return
 		}

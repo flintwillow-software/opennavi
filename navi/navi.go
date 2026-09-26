@@ -25,12 +25,12 @@ import (
 
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/internal/provider"
-	ithought "github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/skill"
 	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 )
 
@@ -60,7 +60,7 @@ type Navi struct {
 	Permissions PermissionPolicy
 
 	// Thoughts is the thought system. It is core, not added (ADR 0003).
-	Thoughts *Thoughts
+	Thoughts *thought.Queue
 
 	log *slog.Logger
 
@@ -147,16 +147,19 @@ func New(name string, opts ...Option) *Navi {
 	// loops (dirty-set flusher, store reconcile) stay off until a
 	// durable store is wired — with the in-memory store they would
 	// guard nothing.
-	q, err := ithought.NewQueue(ithought.Config{
+	// The queue is the runtime handle: the navi and its workers hold the
+	// concrete type, while components receive it narrowed to
+	// thought.ThoughtSystem through Deps.
+	q, err := thought.NewQueue(thought.Config{
 		MaxConcurrent:     2,
 		ReconcileInterval: -1,
 		FlushInterval:     -1,
-		SlotExhaustion:    ithought.PolicyQueue,
-	}, ithought.NewMemoryStore())
+		SlotExhaustion:    thought.PolicyQueue,
+	}, thought.NewMemoryStore())
 	if err != nil {
 		n.initErr = fmt.Errorf("navi: thought queue: %w", err)
 	} else {
-		n.Thoughts = newThoughts(q)
+		n.Thoughts = q
 	}
 
 	// Execution defaults. The runner is built after options so it logs
@@ -441,7 +444,6 @@ func (n *Navi) serve(ctx context.Context) error {
 	// rather than failing it.
 	stopAll()
 	workers.Wait()
-	n.Thoughts.Close()
 	return nil
 }
 

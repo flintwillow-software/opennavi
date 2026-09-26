@@ -61,7 +61,7 @@ func (s *flushStore) writeCount() int {
 	return s.writes
 }
 
-func flusherQueue(t *testing.T, interval time.Duration) (*ThoughtQueue, *flushStore) {
+func flusherQueue(t *testing.T, interval time.Duration) (*Queue, *flushStore) {
 	t.Helper()
 	st := newFlushStore()
 	q, err := NewQueue(Config{MaxConcurrent: 2, FlushInterval: interval}, st)
@@ -128,7 +128,7 @@ func TestSyncPointsFlushImmediately(t *testing.T) {
 	}
 
 	// Park (Pause with checkpoint) — SYNCHRONOUS: on disk at call time.
-	if err := q.Pause("pk", []byte("checkpoint")); err != nil {
+	if err := q.PauseWithCheckpoint("pk", []byte("checkpoint")); err != nil {
 		t.Fatal(err)
 	}
 	if st.writeCount() <= writesAtEnqueue {
@@ -150,9 +150,9 @@ func TestFlushFailureSurfacesWithoutBlocking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var failed []QueueEvent
+	var failed []Event
 	done := make(chan struct{})
-	q.OnEvent(func(ev QueueEvent) {
+	q.OnEvent(func(ev Event) {
 		if ev.Kind == EventPersistFailed {
 			failed = append(failed, ev)
 			select {

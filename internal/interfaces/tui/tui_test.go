@@ -16,7 +16,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth permits every portal action: the shim-attachment test
@@ -35,7 +35,7 @@ func sessionSessions(t *testing.T) *session.SessionManager {
 	return session.NewSessionManager(session.NewMemoryStore())
 }
 
-func newQueue(t *testing.T) *thought.ThoughtQueue {
+func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
 	if err != nil {
@@ -106,7 +106,7 @@ func TestModelAckDisplay(t *testing.T) {
 	if err := q.Enqueue(th("t2", 4)); err != nil {
 		t.Fatal(err)
 	}
-	path, err := q.RouteMessage("t2", "hello")
+	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil || path != thought.PathContextAppend {
 		t.Fatalf("RouteMessage: %v", err)
 	}

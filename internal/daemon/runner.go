@@ -12,8 +12,8 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )

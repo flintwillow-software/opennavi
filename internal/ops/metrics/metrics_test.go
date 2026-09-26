@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // send feeds one event to the collector (bypassing the queue).
-func send(c *Collector, kind thought.QueueEventKind, id, detail string) {
-	c.observeEvent(thought.QueueEvent{Kind: kind, ThoughtID: id, Detail: detail})
+func send(c *Collector, kind thought.EventKind, id, detail string) {
+	c.observeEvent(thought.Event{Kind: kind, ThoughtID: id, Detail: detail})
 }
 
 func findLine(body, name string) string {
@@ -79,7 +79,7 @@ func TestLifecycleAccountingBalances(t *testing.T) {
 	// Park → resume → re-claim → complete. The 500ms partial run is
 	// intentionally not observed (park drops the start entry — the
 	// histogram measures terminal runs); the terminal run is 2s.
-	send(c, thought.EventPausedEv, "a", "")
+	send(c, thought.EventPaused, "a", "")
 	if got := valueOf(t, c.Render(), "opennavi_thoughts_in_queue"); got != 3 {
 		t.Fatalf("in_queue after park = %v, want 3 (parked work is queued work)", got)
 	}
@@ -156,7 +156,7 @@ func TestCancelledFromPendingAndPaused(t *testing.T) {
 	// Cancel from paused.
 	send(c, thought.EventEnqueued, "b", "")
 	send(c, thought.EventStarted, "b", "")
-	send(c, thought.EventPausedEv, "b", "")
+	send(c, thought.EventPaused, "b", "")
 	send(c, thought.EventCancelled, "b", "")
 
 	body := c.Render()
@@ -441,7 +441,7 @@ func TestDeletedEventAccounting(t *testing.T) {
 	// Paused delete: pausedSet disambiguation (paused work is in_queue).
 	send(c, thought.EventEnqueued, "p2", "")
 	send(c, thought.EventStarted, "p2", "")
-	send(c, thought.EventPausedEv, "p2", "")
+	send(c, thought.EventPaused, "p2", "")
 	send(c, thought.EventDeleted, "p2", string(thought.ThoughtPaused))
 	body = c.Render()
 	if got := valueOf(t, body, "opennavi_thoughts_in_queue"); got != 0 {
@@ -481,7 +481,7 @@ func TestDeletedCounterIncrements(t *testing.T) {
 	send(c, thought.EventDeleted, "p1", string(thought.ThoughtPending))
 	send(c, thought.EventEnqueued, "p2", "")
 	send(c, thought.EventStarted, "p2", "")
-	send(c, thought.EventPausedEv, "p2", "")
+	send(c, thought.EventPaused, "p2", "")
 	send(c, thought.EventDeleted, "p2", string(thought.ThoughtPaused))
 	body := c.Render()
 	if got := valueOf(t, body, "opennavi_thoughts_deleted_total"); got != 2 {

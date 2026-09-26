@@ -16,7 +16,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/interfaces/tui"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // runInteractive is the `navi run` subcommand — the binary-run entry
@@ -189,7 +189,7 @@ func readSession(rt *daemon.Runtime, logger *logging.Logger, done chan<- struct{
 			// the agent's steering queue). Rejections (finished, no
 			// in-flight agent, unknown id) surface in the ack event and
 			// the error — print the reason for the session.
-			if _, err := rt.Queue.RouteMessage(foregroundID, line); err != nil {
+			if _, err := rt.Queue.RouteMessageWithPath(foregroundID, line); err != nil {
 				logger.Warn("message not delivered", map[string]any{"thought": foregroundID, "error": err.Error()})
 				fmt.Printf("message not delivered: %v\n", err)
 			}

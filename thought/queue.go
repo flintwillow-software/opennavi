@@ -36,7 +36,7 @@ type Slot struct {
 // number or lower) may use reserved slots and preempt running thoughts.
 const HighPriorityThreshold = 3
 
-// Config configures a ThoughtQueue (spec §3.2).
+// Config configures a Queue (spec §3.2).
 type Config struct {
 	MaxConcurrent int
 	PrioritySlots int
@@ -63,47 +63,10 @@ type Config struct {
 	SlotExhaustion SlotExhaustionPolicy
 }
 
-// QueueEventKind enumerates queue event types (for observers/logging).
-type QueueEventKind string
-
-const (
-	EventEnqueued  QueueEventKind = "enqueued"
-	EventStarted   QueueEventKind = "started"
-	EventPausedEv  QueueEventKind = "paused"
-	EventResumed   QueueEventKind = "resumed"
-	EventCompleted QueueEventKind = "completed"
-	EventFailed    QueueEventKind = "failed"
-	EventCancelled QueueEventKind = "cancelled"
-	EventPreempted QueueEventKind = "preempted"
-	// EventDeleted fires when a thought record is removed entirely
-	// (Queue.Delete, S130600 §04) — distinct from EventCancelled:
-	// removal is not cancellation, and the audit/ack trail
-	// distinguishes them. Detail carries the PRIOR status so metrics
-	// observers (which only see events) can decrement the right
-	// by_status gauge.
-	EventDeleted QueueEventKind = "deleted"
-	// EventPersistFailed fires when a worker cannot persist a thought
-	// transition (Complete/Fail/Pause) — in-memory and stored state may
-	// have diverged.
-	EventPersistFailed QueueEventKind = "persist_failed"
-)
-
-// QueueEvent is emitted on notable queue transitions.
-type QueueEvent struct {
-	Kind      QueueEventKind
-	ThoughtID string
-	Detail    string
-	At        time.Time
-	// Delivery is the routing path for EventMessageRouted acks
-	// (S010312: "context-append" | "steering" | "resume-with-message"
-	// | ""). Empty on lifecycle events.
-	Delivery string
-}
-
-// ThoughtQueue is a priority queue with bounded capacity (spec §3.1).
+// Queue is a priority queue with bounded capacity (spec §3.1).
 // Persistent state lives in a Store; the queue itself is the in-memory
 // scheduler over it.
-type ThoughtQueue struct {
+type Queue struct {
 	cfg Config
 	mu  sync.Mutex
 
@@ -135,7 +98,7 @@ type ThoughtQueue struct {
 	flushStop chan struct{}
 
 	eventsMu sync.Mutex
-	handlers []func(QueueEvent)
+	handlers []func(Event)
 }
 
 // Store persists queue state (spec §3.4). The SQLite implementation
@@ -152,7 +115,7 @@ type Store interface {
 // NewQueue builds a queue with the given config and persistence, and
 // performs crash recovery (spec §3.5): previously-running thoughts
 // return to pending for re-acquisition.
-func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
+func NewQueue(cfg Config, store Store) (*Queue, error) {
 	if cfg.MaxConcurrent <= 0 {
 		return nil, fmt.Errorf("thought: max_concurrent must be > 0")
 	}
@@ -180,7 +143,7 @@ func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
 		}
 	}
 
-	q := &ThoughtQueue{
+	q := &Queue{
 		cfg: cfg, slots: slots, store: store,
 		dirty:    make(map[string]*Thought),
 		dirtyIDs: make(map[string]*Thought),
@@ -193,7 +156,7 @@ func NewQueue(cfg Config, store Store) (*ThoughtQueue, error) {
 
 // recover implements crash recovery (spec §3.5): persisted thoughts are
 // reloaded; running ones return to pending (they need re-acquisition).
-func (q *ThoughtQueue) recover() error {
+func (q *Queue) recover() error {
 	if q.store == nil {
 		return nil
 	}
@@ -220,7 +183,7 @@ func (q *ThoughtQueue) recover() error {
 	return nil
 }
 
-func (q *ThoughtQueue) sortPending() {
+func (q *Queue) sortPending() {
 	sort.SliceStable(q.pending, func(i, j int) bool {
 		return q.pending[i].EffectivePriority() < q.pending[j].EffectivePriority()
 	})
@@ -229,7 +192,7 @@ func (q *ThoughtQueue) sortPending() {
 // ── events ───────────────────────────────────────────────────────────────
 
 // OnEvent registers an observer for queue events.
-func (q *ThoughtQueue) OnEvent(fn func(QueueEvent)) {
+func (q *Queue) OnEvent(fn func(Event)) {
 	q.eventsMu.Lock()
 	defer q.eventsMu.Unlock()
 	q.handlers = append(q.handlers, fn)
@@ -248,9 +211,17 @@ func (q *ThoughtQueue) OnEvent(fn func(QueueEvent)) {
 // (Metadata origin `self`/`tool`) have their priority clamped to the
 // conservative band (§1.2) — a navi cannot enqueue its own work ahead
 // of external work by default.
-func (q *ThoughtQueue) Enqueue(t *Thought) error {
+func (q *Queue) Enqueue(t *Thought) error {
 	if t.ID == "" {
 		return fmt.Errorf("thought: enqueue requires an ID")
+	}
+	// A zero status means "a new thought": the caller is constructing
+	// work to schedule, not asserting a lifecycle state, and making them
+	// restate the queue's entry condition is a trap rather than a check.
+	// Anything else must be pending — enqueueing a running or completed
+	// thought is still an invalid transition.
+	if t.Status == "" {
+		t.Status = ThoughtPending
 	}
 	if t.Status != ThoughtPending {
 		return fmt.Errorf("%w: enqueue requires pending status, got %s", ErrInvalidTransition, t.Status)
@@ -263,7 +234,7 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 	// handlers may re-enter the queue (e.g. the daemon's RecordFire
 	// wiring calls GetThought), which would deadlock if emit ran under
 	// q.mu.
-	var evts []QueueEvent
+	var evts []Event
 
 	q.mu.Lock()
 	if _, exists := q.findByID(t.ID); exists {
@@ -305,8 +276,8 @@ func (q *ThoughtQueue) Enqueue(t *Thought) error {
 // skipped until their not-before time passes — a deferred entry never
 // blocks a due thought of any priority. Returns ok=false when nothing
 // is claimable.
-func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
-	var evts []QueueEvent
+func (q *Queue) Dequeue() (*Thought, bool) {
+	var evts []Event
 	now := time.Now().UTC()
 
 	q.mu.Lock()
@@ -348,7 +319,7 @@ func (q *ThoughtQueue) Dequeue() (*Thought, bool) {
 }
 
 // BumpPriority changes a thought's priority and re-sorts the queue.
-func (q *ThoughtQueue) BumpPriority(id string, newPriority int) error {
+func (q *Queue) BumpPriority(id string, newPriority int) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, err := q.lookup(id)
@@ -367,7 +338,18 @@ func (q *ThoughtQueue) BumpPriority(id string, newPriority int) error {
 // checkpoint passed here (typically the runner's snapshot) is stored
 // on the thought for resume. Workers also use Pause to honour a
 // preemption request — it clears the PreemptRequested flag.
-func (q *ThoughtQueue) Pause(id string, checkpoint []byte) error {
+// Pause parks a thought, recording no checkpoint.
+//
+// This is the form components get through ThoughtSystem: parking is a
+// control action, and a connector has no business constructing the
+// agent's serialized state. The checkpointed variant lives on the
+// concrete type, where only the runtime can reach it.
+func (q *Queue) Pause(id string) error { return q.PauseWithCheckpoint(id, nil) }
+
+// PauseWithCheckpoint parks a thought and records the checkpoint the
+// runner snapshotted, so a resumed thought continues rather than
+// restarts (NAVI-338: the checkpoint is on disk at park time).
+func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
@@ -390,13 +372,13 @@ func (q *ThoughtQueue) Pause(id string, checkpoint []byte) error {
 	if err := q.syncSave(t); err != nil {
 		return err
 	}
-	q.emit([]QueueEvent{{Kind: EventPausedEv, ThoughtID: id, At: time.Now().UTC()}})
+	q.emit([]Event{{Kind: EventPaused, ThoughtID: id, At: time.Now().UTC()}})
 	return nil
 }
 
 // Resume moves a paused thought back to pending (it re-acquires a slot
 // via the normal scheduling path).
-func (q *ThoughtQueue) Resume(id string) error {
+func (q *Queue) Resume(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, idx := q.findIn(q.paused, id)
@@ -411,13 +393,13 @@ func (q *ThoughtQueue) Resume(id string) error {
 	q.sortPending()
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
-	q.emit([]QueueEvent{{Kind: EventResumed, ThoughtID: id, At: time.Now().UTC()}})
+	q.emit([]Event{{Kind: EventResumed, ThoughtID: id, At: time.Now().UTC()}})
 	return nil
 }
 
 // Cancel a pending or paused thought (spec §2.2: running thoughts must
 // be paused/failed first).
-func (q *ThoughtQueue) Cancel(id string) error {
+func (q *Queue) Cancel(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if t, idx := q.findRunning(id); t != nil {
@@ -430,7 +412,7 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		}
 		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
 		q.running = append(q.running, t) // terminal: kept for inspection
-		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
+		q.emit([]Event{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
 		return nil
@@ -441,7 +423,7 @@ func (q *ThoughtQueue) Cancel(id string) error {
 		}
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.running = append(q.running, t)
-		q.emit([]QueueEvent{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
+		q.emit([]Event{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
 		return nil
@@ -454,7 +436,7 @@ func (q *ThoughtQueue) Cancel(id string) error {
 // message. result is the runner's reported outcome; it is persisted so a
 // thought's output is readable from the queue itself rather than only
 // from its session transcript.
-func (q *ThoughtQueue) Complete(id string, result string) error {
+func (q *Queue) Complete(id string, result string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
@@ -471,14 +453,14 @@ func (q *ThoughtQueue) Complete(id string, result string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.terminal = append(q.terminal, t)
-	q.emit([]QueueEvent{{Kind: EventCompleted, ThoughtID: id, At: time.Now().UTC()}})
+	q.emit([]Event{{Kind: EventCompleted, ThoughtID: id, At: time.Now().UTC()}})
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	return nil
 }
 
 // Fail marks a running thought failed (called by the worker on error).
-func (q *ThoughtQueue) Fail(id string, detail string) error {
+func (q *Queue) Fail(id string, detail string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
@@ -494,14 +476,14 @@ func (q *ThoughtQueue) Fail(id string, detail string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.pending = append(q.pending, t) // failed awaits Retry
-	q.emit([]QueueEvent{{Kind: EventFailed, ThoughtID: id, Detail: detail, At: time.Now().UTC()}})
+	q.emit([]Event{{Kind: EventFailed, ThoughtID: id, Detail: detail, At: time.Now().UTC()}})
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	return nil
 }
 
 // GetThoughts returns all known thoughts.
-func (q *ThoughtQueue) GetThoughts() []*Thought {
+func (q *Queue) GetThoughts() []*Thought {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	all := make([]*Thought, 0, len(q.pending)+len(q.running)+len(q.paused)+len(q.terminal))
@@ -518,7 +500,7 @@ func (q *ThoughtQueue) GetThoughts() []*Thought {
 
 // GetThought returns a copy of a thought by ID. If the thought has
 // already left memory (terminal), it is loaded from the store.
-func (q *ThoughtQueue) GetThought(id string) (*Thought, error) {
+func (q *Queue) GetThought(id string) (*Thought, error) {
 	q.mu.Lock()
 	t, ok := q.findByID(id)
 	if ok {
@@ -539,7 +521,7 @@ func (q *ThoughtQueue) GetThought(id string) (*Thought, error) {
 // findSlotFor returns a free slot ID for the thought, preferring
 // reserved slots for high-priority thoughts and never giving a reserved
 // slot to a low-priority thought while a normal one might free up.
-func (q *ThoughtQueue) findSlotFor(t *Thought) string {
+func (q *Queue) findSlotFor(t *Thought) string {
 	high := t.EffectivePriority() <= HighPriorityThreshold
 	var normalFree, foregroundFree string
 	for _, s := range q.slots {
@@ -587,7 +569,7 @@ func (q *ThoughtQueue) findSlotFor(t *Thought) string {
 // carry their claim); foreground-slot victims are preemptable only by
 // foreground preemptors, normal-slot victims by anyone meeting the
 // priority rule (same priority/preemption rules as everything else).
-func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
+func (q *Queue) preemptCandidate(t *Thought) string {
 	if t.EffectivePriority() > HighPriorityThreshold {
 		return ""
 	}
@@ -611,7 +593,7 @@ func (q *ThoughtQueue) preemptCandidate(t *Thought) string {
 // preempt pauses the victim running thought (freeing its slot, spec
 // §2.2 running → paused) and parks it as paused for later resume;
 // the caller's thought then starts on the freed slot.
-func (q *ThoughtQueue) preempt(victimID string, by *Thought, evts *[]QueueEvent) {
+func (q *Queue) preempt(victimID string, by *Thought, evts *[]Event) {
 	// Cooperative preemption (caller holds q.mu): mark the victim — it
 	// keeps running until its runner honours the ctx cancellation the
 	// pool sends on this event, snapshots its checkpoint, and returns;
@@ -629,7 +611,7 @@ func (q *ThoughtQueue) preempt(victimID string, by *Thought, evts *[]QueueEvent)
 }
 
 // claimSlot moves a thought to running on the given slot. Caller holds mu.
-func (q *ThoughtQueue) claimSlot(t *Thought, slotID string) {
+func (q *Queue) claimSlot(t *Thought, slotID string) {
 	for i, s := range q.slots {
 		if s.ID == slotID && s.ThoughtID == "" {
 			q.slots[i].ThoughtID = t.ID
@@ -642,7 +624,7 @@ func (q *ThoughtQueue) claimSlot(t *Thought, slotID string) {
 }
 
 // freeSlot releases the slot held by a thought.
-func (q *ThoughtQueue) freeSlot(thoughtID string) {
+func (q *Queue) freeSlot(thoughtID string) {
 	for i, s := range q.slots {
 		if s.ThoughtID == thoughtID {
 			q.slots[i].ThoughtID = ""
@@ -652,7 +634,7 @@ func (q *ThoughtQueue) freeSlot(thoughtID string) {
 	}
 }
 
-func (q *ThoughtQueue) findByID(id string) (*Thought, bool) {
+func (q *Queue) findByID(id string) (*Thought, bool) {
 	if t, _ := q.findIn(q.pending, id); t != nil {
 		return t, true
 	}
@@ -668,14 +650,14 @@ func (q *ThoughtQueue) findByID(id string) (*Thought, bool) {
 	return nil, false
 }
 
-func (q *ThoughtQueue) lookup(id string) (*Thought, error) {
+func (q *Queue) lookup(id string) (*Thought, error) {
 	if t, ok := q.findByID(id); ok {
 		return t, nil
 	}
 	return nil, fmt.Errorf("thought: %s: %w", id, ErrThoughtNotFound)
 }
 
-func (q *ThoughtQueue) findRunning(id string) (*Thought, int) {
+func (q *Queue) findRunning(id string) (*Thought, int) {
 	for i, t := range q.running {
 		if t.ID == id && t.Status == ThoughtRunning {
 			return t, i
@@ -684,7 +666,7 @@ func (q *ThoughtQueue) findRunning(id string) (*Thought, int) {
 	return nil, -1
 }
 
-func (q *ThoughtQueue) findIn(list []*Thought, id string) (*Thought, int) {
+func (q *Queue) findIn(list []*Thought, id string) (*Thought, int) {
 	for i, t := range list {
 		if t.ID == id {
 			return t, i
@@ -695,11 +677,11 @@ func (q *ThoughtQueue) findIn(list []*Thought, id string) (*Thought, int) {
 
 // slotAvailableFor reports whether any slot could serve the thought
 // right now.
-func (q *ThoughtQueue) slotAvailableFor(t *Thought) bool {
+func (q *Queue) slotAvailableFor(t *Thought) bool {
 	return q.findSlotFor(t) != ""
 }
 
-func (q *ThoughtQueue) save(t *Thought) error {
+func (q *Queue) save(t *Thought) error {
 	if q.store == nil {
 		return nil
 	}
@@ -708,7 +690,7 @@ func (q *ThoughtQueue) save(t *Thought) error {
 
 // Retry returns a failed thought to the pending queue for
 // re-acquisition (spec §2.2: failed → pending).
-func (q *ThoughtQueue) Retry(id string) error {
+func (q *Queue) Retry(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -722,7 +704,7 @@ func (q *ThoughtQueue) Retry(id string) error {
 			return err
 		}
 		q.sortPending()
-		q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
+		q.emit([]Event{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
 		return nil
@@ -741,22 +723,22 @@ func (q *ThoughtQueue) Retry(id string) error {
 		q.terminal = append(q.terminal[:idx], q.terminal[idx+1:]...)
 	}
 	q.sortPending()
-	q.emit([]QueueEvent{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
+	q.emit([]Event{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	return nil
 }
 
 // collect appends an event to the pending list (call under q.mu).
-func collect(evts *[]QueueEvent, kind QueueEventKind, thoughtID, detail string) {
-	*evts = append(*evts, QueueEvent{Kind: kind, ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC()})
+func collect(evts *[]Event, kind EventKind, thoughtID, detail string) {
+	*evts = append(*evts, Event{Kind: kind, ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC()})
 }
 
 // emit fans events out to registered observers. MUST be called without
 // q.mu held — handlers may re-enter the queue.
-func (q *ThoughtQueue) emit(evts []QueueEvent) {
+func (q *Queue) emit(evts []Event) {
 	q.eventsMu.Lock()
-	handlers := append([]func(QueueEvent){}, q.handlers...)
+	handlers := append([]func(Event){}, q.handlers...)
 	q.eventsMu.Unlock()
 	for _, fn := range handlers {
 		for _, ev := range evts {
@@ -768,7 +750,7 @@ func (q *ThoughtQueue) emit(evts []QueueEvent) {
 // Slots returns a snapshot of the queue's slots — diagnostic seam
 // (foreground-reservation visibility for the binary-run entry and the
 // health view).
-func (q *ThoughtQueue) Slots() []Slot {
+func (q *Queue) Slots() []Slot {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]Slot, len(q.slots))
@@ -780,7 +762,7 @@ func (q *ThoughtQueue) Slots() []Slot {
 // context append): the queue owns the record — callers mutate through
 // this method, never through GetThought clones (which the queue no
 // longer controls). Persisted with the change.
-func (q *ThoughtQueue) AppendContext(id, msg string) error {
+func (q *Queue) AppendContext(id, msg string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	t, err := q.lookup(id)
@@ -801,8 +783,8 @@ func (q *ThoughtQueue) AppendContext(id, msg string) error {
 // (the error names the constraint); terminal thoughts (complete/
 // cancelled) stay queued for inspection rather than deleted here.
 // Pending (including deferred) and paused thoughts are removable.
-func (q *ThoughtQueue) Delete(id string) error {
-	var evts []QueueEvent
+func (q *Queue) Delete(id string) error {
+	var evts []Event
 
 	q.mu.Lock()
 	t, _, idx, ok := q.locate(id)
@@ -828,7 +810,7 @@ func (q *ThoughtQueue) Delete(id string) error {
 	// Ack event with the PRIOR status (S010312-style accounting:
 	// metrics observers only see events — Detail names the gauge to
 	// decrement). Deferred collect/emit: event leaves q.mu's scope.
-	evts = append(evts, QueueEvent{
+	evts = append(evts, Event{
 		Kind:      EventDeleted,
 		ThoughtID: id,
 		Detail:    string(t.Status),
@@ -844,3 +826,7 @@ func (q *ThoughtQueue) Delete(id string) error {
 	q.emit(evts)
 	return nil
 }
+
+// The concrete runtime handle must satisfy the component contract, since
+// components receive it narrowed to ThoughtSystem through Deps.
+var _ ThoughtSystem = (*Queue)(nil)

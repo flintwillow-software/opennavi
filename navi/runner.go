@@ -143,7 +143,7 @@ func (n *Navi) workLoop(ctx context.Context) {
 		// cover several thoughts, and Dequeue returns false both for
 		// "empty" and "no slot free".
 		for {
-			t, ok := n.Thoughts.dequeue()
+			t, ok := n.Thoughts.Dequeue()
 			if !ok {
 				break
 			}
@@ -231,3 +231,9 @@ func (n *Navi) sessionFor(t *thought.Thought) (*store.Session, error) {
 
 // SessionStore returns the store backing thought transcripts.
 func (n *Navi) SessionStore() store.Store { return n.sessions }
+
+// watchForWork wakes the execution pool whenever the thought system
+// reports activity — enqueue, resume, retry, or a freed slot.
+func (n *Navi) watchForWork() {
+	n.Thoughts.OnEvent(func(thought.Event) { n.dispatch.signal() })
+}

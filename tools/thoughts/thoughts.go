@@ -31,7 +31,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -47,7 +47,7 @@ func Definitions() []registry.ToolDefinition {
 
 // Register registers all four tools on reg, bound to the queue the
 // navi runs on (S130600 §00 queue-attached registration).
-func Register(reg *registry.Registry, q *thought.ThoughtQueue) error {
+func Register(reg *registry.Registry, q *thought.Queue) error {
 	if reg == nil {
 		return errors.New("thoughts: registry is required")
 	}
@@ -328,7 +328,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle thought.Queue
 			// checkpoint is supplied by the runner's cooperative
 			// park path. Only running thoughts pause — the queue
 			// rejects others with the lifecycle error.
-			if err := q.Pause(id, nil); err != nil {
+			if err := q.PauseWithCheckpoint(id, nil); err != nil {
 				return "", fmt.Errorf("thoughts_update: pause: %w", err)
 			}
 		case "resume":

@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // healthResult is the JSON summary printed by `navi health`.

@@ -22,11 +22,11 @@ type Runner interface {
 	Run(ctx context.Context, t *Thought) error
 }
 
-// Pool is a bounded worker pool over a ThoughtQueue (spec: one worker
+// Pool is a bounded worker pool over a Queue (spec: one worker
 // per thought, isolated processing). Workers claim thoughts via
 // Dequeue and run them through the Runner.
 type Pool struct {
-	queue   *ThoughtQueue
+	queue   *Queue
 	runner  Runner
 	workers int
 
@@ -43,7 +43,7 @@ type Pool struct {
 
 // NewPool creates a worker pool with the given number of workers. The
 // pool's concurrency is also capped by the queue's MaxConcurrent slots.
-func NewPool(q *ThoughtQueue, runner Runner, workers int) *Pool {
+func NewPool(q *Queue, runner Runner, workers int) *Pool {
 	if workers <= 0 {
 		workers = 1
 	}
@@ -70,7 +70,7 @@ func (p *Pool) Start() {
 	p.started = true
 	p.mu.Unlock()
 
-	p.queue.OnEvent(func(ev QueueEvent) {
+	p.queue.OnEvent(func(ev Event) {
 		switch ev.Kind {
 		case EventEnqueued, EventResumed:
 			p.wakeWorker()
@@ -169,7 +169,7 @@ func (p *Pool) worker(n int) {
 			if cancelled {
 				// Cancelled (preemption or Pool.Cancel): park the
 				// thought with the runner's checkpoint for resume.
-				if perr := p.queue.Pause(t.ID, t.Checkpoint); perr != nil {
+				if perr := p.queue.PauseWithCheckpoint(t.ID, t.Checkpoint); perr != nil {
 					p.emitPersistError(t.ID, perr)
 				}
 			} else {
@@ -191,5 +191,5 @@ func (p *Pool) worker(n int) {
 // emitPersistError surfaces persistence failures that would otherwise
 // be swallowed (the thought's in-memory and stored state can diverge).
 func (p *Pool) emitPersistError(thoughtID string, err error) {
-	p.queue.emit([]QueueEvent{{Kind: EventPersistFailed, ThoughtID: thoughtID, Detail: err.Error(), At: time.Now().UTC()}})
+	p.queue.emit([]Event{{Kind: EventPersistFailed, ThoughtID: thoughtID, Detail: err.Error(), At: time.Now().UTC()}})
 }

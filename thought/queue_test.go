@@ -330,7 +330,7 @@ func TestQueuePreemption(t *testing.T) {
 
 	// The worker honours the request: Pause with the runner's snapshot
 	// frees the slot, and high becomes claimable.
-	if err := q.Pause("low", []byte("low-checkpoint")); err != nil {
+	if err := q.PauseWithCheckpoint("low", []byte("low-checkpoint")); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := q.Dequeue()
@@ -383,7 +383,7 @@ func TestQueuePauseResume(t *testing.T) {
 		t.Fatal("a should be claimable")
 	}
 
-	if err := q.Pause("a", []byte("checkpoint-data")); err != nil {
+	if err := q.PauseWithCheckpoint("a", []byte("checkpoint-data")); err != nil {
 		t.Fatal(err)
 	}
 	// Slot freed: a new thought can now be claimed.
@@ -433,7 +433,7 @@ func TestQueueCancelLifecycle(t *testing.T) {
 	if err := q.Cancel("r"); err == nil {
 		t.Fatal("cancel of running thought should fail")
 	}
-	if err := q.Pause("r", nil); err != nil {
+	if err := q.PauseWithCheckpoint("r", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Cancel("r"); err != nil {

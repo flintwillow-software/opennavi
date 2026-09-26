@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // InterfaceConfig is the generic per-interface configuration block
@@ -235,7 +235,7 @@ func (m *PortalMailbox) Close() {
 // hook (ObserveAgent). Control actions arc through the public queue
 // API, so they emit the corresponding events back on the same stream.
 type Portal struct {
-	queue *thought.ThoughtQueue
+	queue *thought.Queue
 	auth  PortalAuthorizer
 	mu    sync.Mutex
 	subs  []*PortalMailbox
@@ -244,10 +244,10 @@ type Portal struct {
 // NewPortal builds the portal over the navi's queue and subscribes it
 // to the queue's OnEvent fanout. auth is the authorizer (nil fails
 // closed; S040200).
-func NewPortal(q *thought.ThoughtQueue, auth PortalAuthorizer) *Portal {
+func NewPortal(q *thought.Queue, auth PortalAuthorizer) *Portal {
 	p := &Portal{queue: q, auth: auth}
 	if q != nil {
-		q.OnEvent(func(ev thought.QueueEvent) {
+		q.OnEvent(func(ev thought.Event) {
 			p.fan(PortalEvent{
 				Category:  queueCategory(ev.Kind),
 				Kind:      string(ev.Kind),
@@ -263,7 +263,7 @@ func NewPortal(q *thought.ThoughtQueue, auth PortalAuthorizer) *Portal {
 
 // queueCategory buckets a queue event: delivery acks (S010312) are
 // PortalAck, everything else is a lifecycle PortalQueue event.
-func queueCategory(kind thought.QueueEventKind) PortalCategory {
+func queueCategory(kind thought.EventKind) PortalCategory {
 	if kind == thought.EventMessageRouted {
 		return PortalAck
 	}
@@ -369,7 +369,7 @@ func (p *Portal) Steer(identity, thoughtID, text string) error {
 	if p.queue == nil {
 		return fmt.Errorf("portal: no queue bound")
 	}
-	if _, err := p.queue.RouteMessage(thoughtID, text); err != nil {
+	if _, err := p.queue.RouteMessageWithPath(thoughtID, text); err != nil {
 		return err
 	}
 	return nil
@@ -384,7 +384,7 @@ func (p *Portal) Pause(identity, thoughtID string) error {
 	if p.queue == nil {
 		return fmt.Errorf("portal: no queue bound")
 	}
-	return p.queue.Pause(thoughtID, nil)
+	return p.queue.PauseWithCheckpoint(thoughtID, nil)
 }
 
 // Resume re-queues a paused thought; the resumed event comes back.
@@ -450,6 +450,6 @@ func (p *Portal) Retry(identity, thoughtID string) error {
 
 // Queue returns the bound queue (serve paths use it to seed tests /
 // enqueue external work).
-func (p *Portal) Queue() *thought.ThoughtQueue {
+func (p *Portal) Queue() *thought.Queue {
 	return p.queue
 }

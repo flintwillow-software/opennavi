@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 func openThoughtStore(t *testing.T) (*Store, *ThoughtStore) {

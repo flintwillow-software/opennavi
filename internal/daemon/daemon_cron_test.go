@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/internal/config"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 func TestWireCronRecordFire(t *testing.T) {

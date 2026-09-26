@@ -59,8 +59,8 @@ func waitStatusWithin(t *testing.T, n *Navi, id, want string, budget time.Durati
 	last := "<unreadable>"
 	for time.Now().Before(deadline) {
 		if got, err := n.Thoughts.GetThought(id); err == nil {
-			last = got.Status
-			if got.Status == want {
+			last = string(got.Status)
+			if string(got.Status) == want {
 				return got
 			}
 		}

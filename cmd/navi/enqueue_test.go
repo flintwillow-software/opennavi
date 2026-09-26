@@ -11,8 +11,8 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth permits every portal action: the shim-attachment test

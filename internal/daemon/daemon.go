@@ -20,9 +20,9 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/builtin"
 	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
@@ -37,7 +37,7 @@ import (
 type Runtime struct {
 	Config    RuntimeParams
 	Runtime   config.RuntimeConfig
-	Queue     *thought.ThoughtQueue
+	Queue     *thought.Queue
 	Pool      *thought.Pool
 	Store     *sqlite.Store
 	Stateful  *sqlite.StatefulStore

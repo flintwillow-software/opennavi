@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth is an authorizer that permits every identity/action:

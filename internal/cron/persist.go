@@ -4,7 +4,7 @@ import (
 	"database/sql"
 
 	"fmt"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 	"time"
 )
 

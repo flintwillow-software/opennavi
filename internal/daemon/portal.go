@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // DefaultPortalMailboxCap bounds the served portal stream: a client

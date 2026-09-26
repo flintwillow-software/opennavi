@@ -62,7 +62,7 @@ func (c Config) reconcileInterval() time.Duration {
 // runtime calls it on shutdown) or when the cadence is disabled.
 // Reconcile ticks never block the queue: LoadThoughts and emit run
 // outside q.mu per the discipline.
-func (q *ThoughtQueue) StartReconcile() func() {
+func (q *Queue) StartReconcile() func() {
 	interval := q.cfg.reconcileInterval()
 	if interval <= 0 {
 		return func() {}
@@ -107,14 +107,14 @@ func (q *ThoughtQueue) StartReconcile() func() {
 // under q.mu; LoadThoughts and emit run outside it (the store may
 // take its own locks; emit fanout handlers must never find q.mu held
 // by an event source).
-func (q *ThoughtQueue) reconcileOnce() {
+func (q *Queue) reconcileOnce() {
 	loaded, err := q.store.LoadThoughts()
 	if err != nil {
 		return // transient store error — next tick retries
 	}
 
 	q.mu.Lock()
-	var evts []QueueEvent
+	var evts []Event
 	adopted := 0
 	for _, t := range loaded {
 		if _, known := q.findByID(t.ID); known {
@@ -124,7 +124,7 @@ func (q *ThoughtQueue) reconcileOnce() {
 		case ThoughtPending:
 			q.pending = append(q.pending, t)
 			q.sortPending()
-			evts = append(evts, QueueEvent{
+			evts = append(evts, Event{
 				Kind:      EventEnqueued,
 				ThoughtID: t.ID,
 				Detail:    "external-adopted",
@@ -155,7 +155,7 @@ func (q *ThoughtQueue) reconcileOnce() {
 			t.WorkerID = ""
 			q.pending = append(q.pending, t)
 			q.sortPending()
-			evts = append(evts, QueueEvent{
+			evts = append(evts, Event{
 				Kind:      EventEnqueued,
 				ThoughtID: t.ID,
 				Detail:    "external-adopted",

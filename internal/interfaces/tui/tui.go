@@ -28,7 +28,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // LocalIdentity is the identity the in-process front door presents.
@@ -96,7 +96,7 @@ type inProcessTransport struct {
 // NewInProcess builds the in-process transport over the navi's queue.
 // sessions (the runtime's SessionManager) enables transcript replay;
 // pass nil to disable.
-func NewInProcess(q *thought.ThoughtQueue, sessions *session.SessionManager) (*inProcessTransport, error) {
+func NewInProcess(q *thought.Queue, sessions *session.SessionManager) (*inProcessTransport, error) {
 	if q == nil {
 		return nil, errors.New("tui: in-process transport requires a queue")
 	}

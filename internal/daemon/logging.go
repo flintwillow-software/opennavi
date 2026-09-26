@@ -3,14 +3,14 @@ package daemon
 import (
 	"github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // WireLogging connects the structured logger to the thought queue and
 // cron scheduler event fanouts (per-thought claim/complete/error/park
 // lines, scheduler debug at debug level, shutdown info).
-func WireLogging(logger *logging.Logger, q *thought.ThoughtQueue, sched *cron.Scheduler) {
-	q.OnEvent(func(ev thought.QueueEvent) {
+func WireLogging(logger *logging.Logger, q *thought.Queue, sched *cron.Scheduler) {
+	q.OnEvent(func(ev thought.Event) {
 		enrich := func(extra map[string]any) map[string]any {
 			m := map[string]any{"thought": ev.ThoughtID}
 			for k, v := range extra {
@@ -25,7 +25,7 @@ func WireLogging(logger *logging.Logger, q *thought.ThoughtQueue, sched *cron.Sc
 			logger.Info("thought complete", enrich(nil))
 		case thought.EventFailed:
 			logger.Error("thought failed", enrich(map[string]any{"error": ev.Detail}))
-		case thought.EventPausedEv:
+		case thought.EventPaused:
 			logger.Info("thought parked", enrich(nil))
 		case thought.EventResumed:
 			logger.Info("thought resumed", enrich(nil))

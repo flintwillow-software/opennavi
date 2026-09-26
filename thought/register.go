@@ -27,7 +27,7 @@ import (
 // handlers: the navi's own queue, bound at registration time.
 type QueueHandle struct {
 	// Queue is the thought queue this registration's tools operate on.
-	Queue *ThoughtQueue
+	Queue *Queue
 }
 
 // QueueHandler executes a queue-attached tool call. Args arrive
