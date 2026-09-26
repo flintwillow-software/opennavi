@@ -44,6 +44,12 @@ type Deps struct {
 // ingestion and receives the navi's Deps at that point; ctx
 // cancellation requests shutdown. Stop shuts the connector down.
 //
+// Start/Stop convention: if Start returns an error the connector is NOT
+// considered started, and Stop will not be called — Start must release
+// anything it acquired before failing. Conversely Stop is called only
+// for connectors whose Start succeeded, so it can assume initialisation
+// completed.
+//
 // Deps is a lifecycle ARGUMENT rather than a constructor input. The
 // composition root cannot supply it earlier: a navi declares its
 // collections first and only assembles them in Run, so a connector
