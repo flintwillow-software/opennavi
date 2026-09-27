@@ -20,7 +20,6 @@ package portal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -29,11 +28,9 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// ErrPortalUnauthorized is returned when an attach/control action is
-// refused: either no authorizer is wired (fail-closed — the default,
-// S040200) or the caller's identity is not permitted. Unauthorized
-// control attempts are NEVER defaulted open.
-var ErrPortalUnauthorized = errors.New("portal: unauthorized")
+// ErrPortalUnauthorized is the internal alias of the public sentinel
+// (NAVI-352): a refused attach/control action, never defaulted open.
+var ErrPortalUnauthorized = pubportal.ErrUnauthorized
 
 // Compatibility aliases: the observation types now live on the public
 // contract (NAVI-352). Internal consumers keep their existing names.

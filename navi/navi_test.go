@@ -73,6 +73,8 @@ func (p *fakePortal) Steer(a, b, c string) error             { return nil }
 func (p *fakePortal) Pause(a, b string) error                { return nil }
 func (p *fakePortal) Resume(a, b string) error               { return nil }
 func (p *fakePortal) Cancel(a, b string) error               { return nil }
+func (p *fakePortal) BumpPriority(a, b string, c int) error  { return nil }
+func (p *fakePortal) Retry(a, b string) error                { return nil }
 func (p *fakePortal) Enqueue(string, *thought.Thought) error { return nil }
 
 func newFakeConnector() *fakeConnector {

@@ -184,6 +184,13 @@ slowing the queue.
   same queue and running-agent events a connector can observe — through
   `Deps.Observation`, whose bounded mailboxes keep a slow front-end from
   stalling the queue (NAVI-352).
+- The SDK ships an HTTP **`portal/gateway`** component: a `portal.Portal`
+  that frames the bounded observation stream and control channel over HTTP
+  and delegates authorization to the control portal (the `Hub`), so there is
+  one authorization path and a remote front-end attaches through the same
+  contract as every other portal. The TUI is likewise available as a
+  `portal.Portal` component built from `Deps`; the reference binary still
+  drives its richer in-process path until M5.
 
 The composition root package is named `navi`; connectors and portals never
 import it — they depend only on the contract packages.

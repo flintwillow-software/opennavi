@@ -39,12 +39,16 @@ func (p *stubPortal) Start(ctx context.Context, deps Deps) error {
 	return nil
 }
 
-func (p *stubPortal) Stop() error                                       { return nil }
-func (p *stubPortal) Attach(identity string) error                      { return nil }
-func (p *stubPortal) Steer(identity, thoughtID, message string) error   { return nil }
-func (p *stubPortal) Pause(identity, thoughtID string) error            { return nil }
-func (p *stubPortal) Resume(identity, thoughtID string) error           { return nil }
-func (p *stubPortal) Cancel(identity, thoughtID string) error           { return nil }
+func (p *stubPortal) Stop() error                                     { return nil }
+func (p *stubPortal) Attach(identity string) error                    { return nil }
+func (p *stubPortal) Steer(identity, thoughtID, message string) error { return nil }
+func (p *stubPortal) Pause(identity, thoughtID string) error          { return nil }
+func (p *stubPortal) Resume(identity, thoughtID string) error         { return nil }
+func (p *stubPortal) Cancel(identity, thoughtID string) error         { return nil }
+func (p *stubPortal) BumpPriority(identity, thoughtID string, prio int) error {
+	return nil
+}
+func (p *stubPortal) Retry(identity, thoughtID string) error            { return nil }
 func (p *stubPortal) Enqueue(identity string, t *thought.Thought) error { return nil }
 
 func TestPortalDepsAtStartAndConformance(t *testing.T) {
