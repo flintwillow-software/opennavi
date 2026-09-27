@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -39,6 +40,31 @@ func Register(reg *registry.Registry, workDir string) error {
 		}
 	}
 	return nil
+}
+
+// Tools returns file_read and shell_exec as public contract tools bound
+// to workDir — the collection form of Register for the navi composition
+// root.
+func Tools(workDir string) ([]tool.Tool, error) {
+	var out []tool.Tool
+	for _, bt := range agent.BuiltinTools(workDir) {
+		def, err := definition(bt.Tool)
+		if err != nil {
+			return nil, err
+		}
+		contract, err := registry.ToDef(def)
+		if err != nil {
+			return nil, fmt.Errorf("builtin: %w", err)
+		}
+		run := bt.Run
+		out = append(out, tool.Tool{
+			Def: contract,
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return run(args)
+			},
+		})
+	}
+	return out, nil
 }
 
 // definition renders a builtin's executor descriptor as a complete

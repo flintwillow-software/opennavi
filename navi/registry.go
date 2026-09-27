@@ -19,7 +19,18 @@ import (
 // bind time (ADR 0007) — it can never widen it (ADR 0006).
 func (n *Navi) buildRegistry() (*registry.Registry, error) {
 	reg := registry.New()
-	for _, t := range n.Tools.All() {
+	tools := n.Tools.All()
+	// model_list is a core discovery tool (ADR 0009), not a catalog entry:
+	// it is registered automatically whenever the navi declares models,
+	// and is absent when there is no set to discover.
+	if n.Models.Len() > 0 {
+		ml, err := n.modelListTool()
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, ml)
+	}
+	for _, t := range tools {
 		def, err := toRegistryDefinition(t.Def)
 		if err != nil {
 			return nil, fmt.Errorf("navi: tool %q: %w", t.Def.Name, err)

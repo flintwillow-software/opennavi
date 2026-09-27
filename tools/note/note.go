@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -103,16 +104,27 @@ func Register(reg *registry.Registry, naviID string, state store.StatefulToolSto
 	}
 	o := mergeOptions(opts...)
 
+	readDef, writeDef, err := definitions()
+	if err != nil {
+		return err
+	}
+	if err := reg.RegisterStateful(readDef, naviID, state, noteReadHandler(o.MaxBodyBytes)); err != nil {
+		return err
+	}
+	return reg.RegisterStateful(writeDef, naviID, state, noteWriteHandler(o.MaxBodyBytes, o.MaxNaviBytes))
+}
+
+// definitions builds the note_read and note_write descriptors.
+func definitions() (registry.ToolDefinition, registry.ToolDefinition, error) {
 	readSchema, err := registry.ParseSchema(ReadSchemaJSON)
 	if err != nil {
-		return fmt.Errorf("note register: note_read schema: %w", err)
+		return registry.ToolDefinition{}, registry.ToolDefinition{}, fmt.Errorf("note: note_read schema: %w", err)
 	}
 	writeSchema, err := registry.ParseSchema(WriteSchemaJSON)
 	if err != nil {
-		return fmt.Errorf("note register: note_write schema: %w", err)
+		return registry.ToolDefinition{}, registry.ToolDefinition{}, fmt.Errorf("note: note_write schema: %w", err)
 	}
-
-	err = reg.RegisterStateful(registry.ToolDefinition{
+	read := registry.ToolDefinition{
 		Name:          "note_read",
 		Description:   "Reads notes from the navi's durable verbatim scratchpad: get one by id, list by tag, or search title/body by literal substring. Not semantic — notes are verbatim, semantic recall belongs to memory. Bodies over the note size cap are truncated with a notice.",
 		InputSchema:   readSchema,
@@ -129,12 +141,8 @@ func Register(reg *registry.Registry, naviID string, state store.StatefulToolSto
 			"Bodies may be truncated at the note size cap (truncated: true).",
 		},
 		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/note/note.go"},
-	}, naviID, state, noteReadHandler(o.MaxBodyBytes))
-	if err != nil {
-		return err
 	}
-
-	return reg.RegisterStateful(registry.ToolDefinition{
+	write := registry.ToolDefinition{
 		Name:          "note_write",
 		Description:   "Stores a note in the navi's durable verbatim scratchpad: omit id to create (a new id is assigned), pass an existing id to update it, or set remove: true to delete the note with that id. Bodies over the per-note cap and writes past the per-navi total cap are rejected; existing notes stay unchanged on rejection.",
 		InputSchema:   writeSchema,
@@ -151,7 +159,48 @@ func Register(reg *registry.Registry, naviID string, state store.StatefulToolSto
 			"Bodies are capped at 64 KiB per note and 10 MiB total per navi.",
 		},
 		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/note/note.go"},
-	}, naviID, state, noteWriteHandler(o.MaxBodyBytes, o.MaxNaviBytes))
+	}
+	return read, write, nil
+}
+
+// Tools returns note_read and note_write as public contract tools bound
+// to naviID and state — the collection form of Register for the navi
+// composition root.
+func Tools(naviID string, state store.StatefulToolStore, opts ...Options) ([]tool.Tool, error) {
+	if naviID == "" {
+		return nil, fmt.Errorf("note: navi identity is required")
+	}
+	if state == nil {
+		return nil, fmt.Errorf("note: stateful store handle is required")
+	}
+	o := mergeOptions(opts...)
+	readDef, writeDef, err := definitions()
+	if err != nil {
+		return nil, err
+	}
+	stateCtx := registry.StateContext{NaviID: naviID, Store: state}
+	pairs := []struct {
+		def     registry.ToolDefinition
+		handler registry.StatefulHandler
+	}{
+		{readDef, noteReadHandler(o.MaxBodyBytes)},
+		{writeDef, noteWriteHandler(o.MaxBodyBytes, o.MaxNaviBytes)},
+	}
+	out := make([]tool.Tool, 0, len(pairs))
+	for _, pair := range pairs {
+		def, err := registry.ToDef(pair.def)
+		if err != nil {
+			return nil, err
+		}
+		h := pair.handler
+		out = append(out, tool.Tool{
+			Def: def,
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return h(ctx, args, stateCtx)
+			},
+		})
+	}
+	return out, nil
 }
 
 // truncateBody cuts body at maxBytes (bytes) and appends

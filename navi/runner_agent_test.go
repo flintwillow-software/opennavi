@@ -2,6 +2,7 @@ package navi
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -157,5 +158,48 @@ func TestModeRestrictsTheToolSurface(t *testing.T) {
 
 	if wrote {
 		t.Fatal("a write tool must not be bound in a read-only mode")
+	}
+}
+
+// TestBuiltinPlanModeValidates pins the shipped planning profile: it is
+// a legal mode and it restricts the surface without escalating the
+// ceiling.
+func TestBuiltinPlanModeValidates(t *testing.T) {
+	n := mockNavi(t, llm.NewMockProvider(streamEvents("ok")))
+	if err := n.Tools.Add(scriptedTool("read_get", tool.AccessReadOnly,
+		func(_ context.Context, _ map[string]any) (string, error) { return "read", nil })); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Modes.Add(PlanMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Validate(); err != nil {
+		t.Fatalf("plan mode must validate: %v", err)
+	}
+
+	// Starting from the built-in's own policy, narrowing is fine and
+	// widening past the compiled ceiling is rejected (ADR 0006).
+	ceiling := PlanMode.Permissions
+	if err := (PermissionPolicy{MaxAccess: tool.AccessReadOnly}).Exceeds(ceiling); err != nil {
+		t.Fatalf("read-only is inside plan's ceiling: %v", err)
+	}
+	if err := (PermissionPolicy{MaxAccess: tool.AccessExecute}).Exceeds(ceiling); err == nil {
+		t.Fatal("execute exceeds plan's read-only ceiling and must be rejected")
+	}
+}
+
+// TestModeEscalationPastCeilingRejected pins the cross-cutting check Run
+// performs: a mode may restrict but never widen the compiled ceiling.
+func TestModeEscalationPastCeilingRejected(t *testing.T) {
+	n := New("ceiling",
+		WithProvider(llm.NewMockProvider(streamEvents("ok"))),
+		WithWorkers(1),
+		WithPermissions(PermissionPolicy{MaxAccess: tool.AccessReadOnly}),
+	)
+	if err := n.Modes.Add(ExecuteMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Validate(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an execute mode above a read-only ceiling must be rejected, got %v", err)
 	}
 }

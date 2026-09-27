@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -75,6 +76,42 @@ func RegisterOne(reg *registry.Registry, naviID string, state store.StatefulTool
 	default:
 		return fmt.Errorf("todo: unknown tool %q (want todo_read, todo_write, or todo_update)", name)
 	}
+}
+
+// Tools returns the three todo tools as public contract tools bound to
+// naviID and state — the collection form of RegisterTools for the navi
+// composition root.
+func Tools(naviID string, state store.StatefulToolStore) ([]tool.Tool, error) {
+	if naviID == "" {
+		return nil, errors.New("todo: navi identity is required")
+	}
+	if state == nil {
+		return nil, errors.New("todo: stateful tool store is required")
+	}
+	stateCtx := registry.StateContext{NaviID: naviID, Store: state}
+	pairs := []struct {
+		def     registry.ToolDefinition
+		handler registry.StatefulHandler
+	}{
+		{readDef(), handleRead},
+		{writeDef(), handleWrite},
+		{updateDef(), handleUpdate},
+	}
+	out := make([]tool.Tool, 0, len(pairs))
+	for _, pair := range pairs {
+		def, err := registry.ToDef(pair.def)
+		if err != nil {
+			return nil, err
+		}
+		h := pair.handler
+		out = append(out, tool.Tool{
+			Def: def,
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return h(ctx, args, stateCtx)
+			},
+		})
+	}
+	return out, nil
 }
 
 func readDef() registry.ToolDefinition {

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -137,13 +138,20 @@ func Register(reg *registry.Registry, opts ...Options) error {
 		return errors.New("http: registry is required")
 	}
 	o := mergeOptions(opts...)
+	def, err := definition()
+	if err != nil {
+		return err
+	}
+	return reg.Register(def, requestHandler(o))
+}
 
+// definition builds the complete http_request descriptor.
+func definition() (registry.ToolDefinition, error) {
 	schema, err := registry.ParseSchema(SchemaJSON)
 	if err != nil {
-		return fmt.Errorf("http: schema: %w", err)
+		return registry.ToolDefinition{}, fmt.Errorf("http: schema: %w", err)
 	}
-
-	return reg.Register(registry.ToolDefinition{
+	return registry.ToolDefinition{
 		Name:          "http_request",
 		Description:   "Performs an outbound HTTP request (GET, POST, PUT, PATCH, DELETE) and returns the response status, filtered headers, and body. Non-2xx responses are returned as normal output — recovery is the caller's call. Bodies are truncated at maxResponseBytes with a notice. SSRF guard: private/loopback/link-local/multicast targets are denied unless allowlisted; redirects are re-validated per hop (max 3).",
 		InputSchema:   schema,
@@ -161,7 +169,22 @@ func Register(reg *registry.Registry, opts ...Options) error {
 			"Redirects are followed and re-validated per hop (max 3).",
 		},
 		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/http/http.go"},
-	}, requestHandler(o))
+	}, nil
+}
+
+// Tool returns http_request as a public contract tool — the collection
+// form of Register for the navi composition root.
+func Tool(opts ...Options) (tool.Tool, error) {
+	o := mergeOptions(opts...)
+	def, err := definition()
+	if err != nil {
+		return tool.Tool{}, err
+	}
+	contract, err := registry.ToDef(def)
+	if err != nil {
+		return tool.Tool{}, fmt.Errorf("http: %w", err)
+	}
+	return tool.Tool{Def: contract, Handler: tool.Handler(requestHandler(o))}, nil
 }
 
 // ── SSRF guard ─────────────────────────────────────────────────────────
