@@ -93,6 +93,57 @@ func drain(m *tuiModel) {
 	_, _ = m.Update(feedMsg{evs: evs, lost: lost})
 }
 
+// TestDepsTransport is the TUI-as-portal gate: the portal's transport is
+// built from Deps alone (thought system + bounded observation), with no
+// concrete queue at construction.
+func TestDepsTransport(t *testing.T) {
+	q := newQueue(t)
+	broker := pubportal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
+
+	tr, err := NewDepsTransport(pubportal.Deps{ThoughtSystem: q, Observation: broker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Feed().Close()
+
+	if err := tr.Enqueue("hi", 5, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	thoughts, err := tr.Snapshot()
+	if err != nil || len(thoughts) != 1 {
+		t.Fatalf("snapshot = %v (%v)", thoughts, err)
+	}
+	id := thoughts[0].ID
+
+	// The lifecycle event arrived on the Deps-provided subscription.
+	evs, _, _ := tr.Feed().ReadAfter(0)
+	sawEnqueued := false
+	for _, ev := range evs {
+		if ev.Kind == "enqueued" && ev.ThoughtID == id {
+			sawEnqueued = true
+		}
+	}
+	if !sawEnqueued {
+		t.Fatal("enqueued event not observed through Deps")
+	}
+
+	// Control goes through the thought-system handle.
+	if err := tr.Steer(id, "steered"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Bump(id, 2); err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.GetThought(id)
+	if err != nil || !strings.Contains(got.Context, "steered") {
+		t.Fatalf("steer did not land: %+v (%v)", got, err)
+	}
+	if got.Priority != 2 {
+		t.Fatalf("bump did not land: priority %d", got.Priority)
+	}
+}
+
 func TestLocalAuthorizerPermitsLocal(t *testing.T) {
 	if err := (LocalAuthorizer{}).Authorize(portal.PortalActSteer, LocalIdentity); err != nil {
 		t.Errorf("local authorizer refused local control: %v", err)

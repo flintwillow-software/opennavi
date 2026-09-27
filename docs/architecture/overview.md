@@ -94,6 +94,7 @@ thought/       public  Thought, thought-system handle, events, the queue
 connector/     public  Connector interface + Deps (thought/model handles)
 connector/cron public  cron connector (schedules as a thought factory)
 portal/        public  Portal interface + Deps, bounded observation contract
+portal/gateway public  HTTP portal gateway (observation + control framing)
 model/         public  Model + provider descriptor
 skill/         public  Skill value (embedded content)
 navi/          public  composition root; imports the above

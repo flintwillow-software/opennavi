@@ -6,3 +6,4 @@
 /templates/navi-daemon/navi-daemon
 /cmd/navi/navi.db
 /cmd/navi/navi.log
+/tools/sdk-consumer/navi-consumer

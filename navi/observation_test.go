@@ -59,6 +59,8 @@ func (p *observingPortal) Steer(string, string, string) error     { return nil }
 func (p *observingPortal) Pause(string, string) error             { return nil }
 func (p *observingPortal) Resume(string, string) error            { return nil }
 func (p *observingPortal) Cancel(string, string) error            { return nil }
+func (p *observingPortal) BumpPriority(string, string, int) error { return nil }
+func (p *observingPortal) Retry(string, string) error             { return nil }
 func (p *observingPortal) Enqueue(string, *thought.Thought) error { return nil }
 
 func (p *observingPortal) saw(want string) bool {

@@ -70,10 +70,8 @@ type Runtime struct {
 	inflight *inFlightAgents
 	// Portal is the control + observation service (S000407). It is always
 	// assembled so in-process front-ends can use it; the gateway is
-	// mounted only when PortalAddr is set. PortalBuf is the served
-	// stream's bounded subscription (single attachment for the shim).
+	// mounted only when PortalAddr is set.
 	Portal      *portal.Hub
-	PortalBuf   pubportal.Subscription
 	Observation pubportal.Observer
 }
 
@@ -337,8 +335,6 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	portalBuf := broker.Subscribe(DefaultPortalMailboxCap)
-
 	// Test seam: an injected logger replaces the env-built one.
 	var logger *logging.Logger
 	if params.Logger != nil {
@@ -439,7 +435,6 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		StopReconcile: q.StartReconcile(), // NAVI-336: adopt external writers' rows
 		StopFlusher:   q.StartFlusher(),   // NAVI-338: drain the dirty set
 		Portal:        portalPlane,
-		PortalBuf:     portalBuf,
 		Observation:   broker,
 	}, nil
 }

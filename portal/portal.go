@@ -8,11 +8,19 @@ package portal
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/thought"
 )
+
+// ErrUnauthorized is returned when an attach or control action is refused:
+// either no authorizer is wired (fail-closed) or the caller's identity is
+// not permitted. Unauthorized control attempts are NEVER defaulted open.
+// A portal implementation maps it to its transport's refusal status (HTTP
+// 403, a rejected frame, ...).
+var ErrUnauthorized = errors.New("portal: unauthorized")
 
 // Deps hands a portal the handles it needs (ADR 0004 rule 2): the
 // thought system for observation/control, the model registry, the
@@ -71,6 +79,11 @@ type Portal interface {
 	Pause(identity, thoughtID string) error
 	Resume(identity, thoughtID string) error
 	Cancel(identity, thoughtID string) error
+	// BumpPriority changes a queued thought's priority (NAVI-319 added the
+	// operation to the portal surface; the queue clamps it).
+	BumpPriority(identity, thoughtID string, prio int) error
+	// Retry re-queues a failed thought (S010002).
+	Retry(identity, thoughtID string) error
 	// Enqueue schedules a new thought on behalf of identity
 	// (session-created thoughts claim the foreground slot).
 	Enqueue(identity string, t *thought.Thought) error
