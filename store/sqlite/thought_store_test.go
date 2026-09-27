@@ -242,6 +242,35 @@ func TestDeferralSurvivesRestartViaSqlite(t *testing.T) {
 
 func testNow() time.Time { return time.Now().UTC() }
 
+// TestThoughtStoreModeRoundTrip covers the per-thought mode (ADR 0007):
+// a durable thought's capability profile survives a restart.
+func TestThoughtStoreModeRoundTrip(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	want := &thought.Thought{ID: "t-mode", Prompt: "p", Status: thought.ThoughtPending, Mode: "plan"}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-mode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != "plan" {
+		t.Fatalf("mode round trip = %q, want plan", got.Mode)
+	}
+
+	plain := &thought.Thought{ID: "t-no-mode", Prompt: "p"}
+	if err := ts.SaveThought(plain); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ts.LoadThought("t-no-mode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Mode != "" {
+		t.Fatalf("unset mode became %q", p.Mode)
+	}
+}
+
 func TestThoughtStoreProviderModelRoundTrip(t *testing.T) {
 	_, ts := openThoughtStore(t)
 	want := &thought.Thought{ID: "t-prov", Prompt: "p", Status: thought.ThoughtPending,
