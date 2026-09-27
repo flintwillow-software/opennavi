@@ -188,9 +188,14 @@ slowing the queue.
   that frames the bounded observation stream and control channel over HTTP
   and delegates authorization to the control portal (the `Hub`), so there is
   one authorization path and a remote front-end attaches through the same
-  contract as every other portal. The TUI is likewise available as a
-  `portal.Portal` component built from `Deps`; the reference binary still
-  drives its richer in-process path until M5.
+  contract as every other portal. The TUI is likewise a public
+  `portal.Portal` component built from `Deps`, registered by the reference
+  navi through `n.Portals`.
+- **Control** is a contract capability too: `portal.Control` authorizes
+  attach/control through a `portal.Authorizer` and applies the actions
+  through the thought system it receives at `Start`. The gateway delegates
+  to it, so a remote front-end can queue, steer, and manage thoughts in
+  another process.
 
 The composition root package is named `navi`; connectors and portals never
 import it — they depend only on the contract packages.

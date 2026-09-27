@@ -135,10 +135,14 @@ portals observe queue and running-agent events through the bounded
 `portal.Observation` contract (NAVI-352). Durable thoughts persist their
 mode.
 
-The `cmd/navi` binary plus `internal/daemon.Assemble` remains the working
-reference runtime; M5 rebuilds `cmd/navi` and the starter templates as real
-navis on the new surface. The milestones that close the gap are in
-[rewrite-plan.md](./rewrite-plan.md).
+`cmd/navi` is now the reference navi: `run` assembles through `navi.New`
+with durable stores, the catalog, configured providers (fallback chain and
+compaction included), cron, and portals; `daemon` mode serves the HTTP
+portal gateway so remote front-ends attach and control across processes.
+`navi-code` and `navi-daemon` are real navi modules on the same surface.
+The old `internal/daemon` run path is now dead code, tracked for removal
+(NAVI-354); transcript replay for portals is tracked as NAVI-353. The
+remaining milestones are in [rewrite-plan.md](./rewrite-plan.md).
 
 ## Related
 

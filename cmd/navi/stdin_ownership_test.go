@@ -103,27 +103,34 @@ func TestDaemonPipedStdinDrainsAndExits(t *testing.T) {
 }
 
 // TestTUIBranchHasNoStdinReader: source-level tripwire for the
-// NAVI-332 contention bug — the TUI branch must not spawn
-// readSession (Bubble Tea owns stdin). The freeze was invisible in
-// unit tests (needs a real pty), so this structural guard keeps the
-// invariant visible.
+// NAVI-332 contention bug — the TUI path must not spawn readSession
+// (Bubble Tea owns stdin). The reference navi guards the stdin loop
+// behind `if p.daemonMode`, and run.go must not call it at all.
 func TestTUIBranchHasNoStdinReader(t *testing.T) {
 	src, err := os.ReadFile("run.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(src)
-	// Locate the TUI branch (between the daemon-mode else's closing
-	// brace and the tuiRun check) and assert no readSession spawn lives
-	// there. The daemon branch legitimately spawns the stdin loop.
-	start := strings.Index(s, "var tuiRun error")
-	elseIdx := strings.Index(s[start:], "} else {")
-	end := strings.Index(s, "if tuiRun != nil")
-	if start < 0 || elseIdx < 0 || end < 0 || end <= start {
-		t.Fatal("session-driver structure not found in run.go")
+	if strings.Contains(string(src), "readSession(") {
+		t.Fatal("run.go spawns readSession — the reference navi must guard it behind --daemon")
 	}
-	tuiBranch := s[start+elseIdx : end]
-	if strings.Contains(tuiBranch, "readSession(") {
-		t.Fatal("TUI branch spawns readSession — stdin contention with Bubble Tea (NAVI-332 regression)")
+
+	ref, err := os.ReadFile("reference.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := string(ref)
+	// Exactly two references: the definition and one daemon-guarded call.
+	if n := strings.Count(rs, "readSession("); n != 2 {
+		t.Fatalf("readSession references = %d, want definition + one daemon-mode call", n)
+	}
+	guard := strings.Index(rs, "if p.daemonMode {")
+	call := strings.Index(rs, "readSession(")
+	def := strings.Index(rs, "func readSession(")
+	if guard < 0 || call < 0 || def < 0 {
+		t.Fatal("reference navi session-driver structure not found")
+	}
+	if call != def && call < guard {
+		t.Fatal("readSession is called outside the --daemon guard (stdin contention regression)")
 	}
 }
