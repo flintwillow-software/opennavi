@@ -14,6 +14,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
+	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -56,7 +58,7 @@ func (a LocalAuthorizer) Authorize(action portal.PortalAction, identity string) 
 // them).
 type Transport interface {
 	// Feed returns this transport's subscription mailbox.
-	Feed() *portal.PortalMailbox
+	Feed() portal.PortalSubscription
 	// Snapshot returns current queue state for seeding (in-process:
 	// full; remote: converges from events, may return empty).
 	Snapshot() ([]*thought.Thought, error)
@@ -89,27 +91,35 @@ type Transport interface {
 // nil = no replay source).
 type inProcessTransport struct {
 	portal   *portal.Hub
-	feed     *portal.PortalMailbox
+	feed     portal.PortalSubscription
+	queue    *thought.Queue
 	sessions *session.SessionManager
 }
 
 // NewInProcess builds the in-process transport over the navi's queue.
-// sessions (the runtime's SessionManager) enables transcript replay;
-// pass nil to disable.
-func NewInProcess(q *thought.Queue, sessions *session.SessionManager) (*inProcessTransport, error) {
+// obs is the runtime observation source (the bounded broker) the portal
+// subscribes to; sessions (the runtime's SessionManager) enables
+// transcript replay; pass nil to disable.
+func NewInProcess(q *thought.Queue, obs portal.PortalObserver, sessions *session.SessionManager) (*inProcessTransport, error) {
 	if q == nil {
 		return nil, errors.New("tui: in-process transport requires a queue")
 	}
-	p := portal.NewHub(q, LocalAuthorizer{})
-	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap), sessions: sessions}, nil
+	p := portal.NewHub(LocalAuthorizer{})
+	if err := p.Start(context.Background(), pubportal.Deps{
+		ThoughtSystem: q,
+		Observation:   obs,
+	}); err != nil {
+		return nil, fmt.Errorf("tui: start portal: %w", err)
+	}
+	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap), queue: q, sessions: sessions}, nil
 }
 
-func (t *inProcessTransport) Feed() *portal.PortalMailbox { return t.feed }
+func (t *inProcessTransport) Feed() portal.PortalSubscription { return t.feed }
 func (t *inProcessTransport) Snapshot() ([]*thought.Thought, error) {
-	if t.portal.Queue() == nil {
+	if t.queue == nil {
 		return []*thought.Thought{}, nil
 	}
-	return t.portal.Queue().GetThoughts(), nil
+	return t.queue.GetThoughts(), nil
 }
 func (t *inProcessTransport) Steer(thoughtID, text string) error {
 	return t.portal.Steer(LocalIdentity, thoughtID, text)
@@ -219,7 +229,7 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 	return t, nil
 }
 
-func (t *remoteTransport) Feed() *portal.PortalMailbox { return t.feed }
+func (t *remoteTransport) Feed() portal.PortalSubscription { return t.feed }
 
 // Snapshot: remote clients converge from the event stream (the shim
 // has no snapshot endpoint); returns empty for the seed.
@@ -439,7 +449,7 @@ type tickMsg struct{}
 // only assembled by Run).
 type tuiModel struct {
 	transport Transport
-	feed      *portal.PortalMailbox
+	feed      portal.PortalSubscription
 	cursor    int
 	rows      []row
 	byID      map[string]int

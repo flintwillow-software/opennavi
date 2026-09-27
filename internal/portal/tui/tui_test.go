@@ -16,6 +16,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
+	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -44,6 +45,38 @@ func newQueue(t *testing.T) *thought.Queue {
 	return q
 }
 
+// newInProcess builds the in-process transport over q with a fresh
+// observation broker (NAVI-352): queue lifecycle events are wired in and
+// the returned broker lets tests publish agent events.
+func newInProcess(t *testing.T, q *thought.Queue, sessions *session.SessionManager) (*inProcessTransport, *pubportal.Broker) {
+	t.Helper()
+	broker := pubportal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
+	tport, err := NewInProcess(q, broker, sessions)
+	if err != nil {
+		t.Fatalf("NewInProcess: %v", err)
+	}
+	return tport, broker
+}
+
+// observe publishes an agent event through the broker the way the real
+// runner's producer does.
+func observe(broker *pubportal.Broker, thoughtID string, ev agent.AgentEvent) {
+	detail := ""
+	switch {
+	case ev.Tool != nil:
+		detail = strings.TrimSpace(ev.Tool.Name + " " + string(ev.Tool.Input))
+	case ev.Message != nil:
+		detail = strings.TrimSpace(ev.Message.Content)
+	case ev.Error != nil:
+		detail = ev.Error.Error()
+	}
+	broker.Publish(pubportal.Event{
+		Category: pubportal.CategoryAgent, Kind: string(ev.Type),
+		ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC(),
+	})
+}
+
 func th(id string, prio int) *thought.Thought {
 	return &thought.Thought{ID: id, Prompt: "task " + id, Priority: prio, Status: thought.ThoughtPending,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
@@ -68,10 +101,7 @@ func TestLocalAuthorizerPermitsLocal(t *testing.T) {
 
 func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	q := newQueue(t)
-	tport, err := NewInProcess(q, sessionSessions(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init() // seed from snapshot (returns the poll cmd, re-armed by tea)
 
@@ -100,7 +130,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 
 func TestModelAckDisplay(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t2", 4)); err != nil {
@@ -118,7 +148,7 @@ func TestModelAckDisplay(t *testing.T) {
 
 func TestModelLiveView(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, broker := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t3", 4)); err != nil {
@@ -137,12 +167,12 @@ func TestModelLiveView(t *testing.T) {
 		t.Errorf("opening user turn missing: %+v", m.turns)
 	}
 	// Assistant deltas accumulate into ONE assistant turn.
-	tport.portal.ObserveAgent("t3", agent.AgentEvent{
+	observe(broker, "t3", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "hello world"},
 	})
 	drain(m)
-	tport.portal.ObserveAgent("t3", agent.AgentEvent{
+	observe(broker, "t3", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "!"},
 	})
@@ -151,7 +181,7 @@ func TestModelLiveView(t *testing.T) {
 		t.Errorf("deltas did not accumulate into one assistant turn:\n%s", m.View())
 	}
 	// Tool calls render as indented blocks.
-	tport.portal.ObserveAgent("t3", agent.AgentEvent{
+	observe(broker, "t3", agent.AgentEvent{
 		Type: agent.AgentEventToolCall,
 		Tool: &agent.ToolUpdate{ToolCallID: "c1", Name: "note_write", Input: json.RawMessage(`{"title":"x"}`)},
 	})
@@ -172,7 +202,7 @@ func TestModelLiveView(t *testing.T) {
 		t.Errorf("lifecycle system line missing:\n%s", m.View())
 	}
 	// Events for OTHER thoughts do not pollute the live window.
-	tport.portal.ObserveAgent("other", agent.AgentEvent{
+	observe(broker, "other", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "noise"},
 	})
@@ -184,7 +214,7 @@ func TestModelLiveView(t *testing.T) {
 
 func TestActionsThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	if err := tport.Bump("x", 2); err == nil {
 		t.Error("bump of unknown thought succeeded")
 	}
@@ -253,7 +283,7 @@ func TestActionsThroughTransport(t *testing.T) {
 
 func TestEnqueueThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 
 	// Default priority thought, due now, foreground-tagged.
 	if err := tport.Enqueue("a brand new task", 0, time.Time{}); err != nil {
@@ -315,7 +345,7 @@ func keyEnter(m *tuiModel) { _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) }
 
 func TestModelEnqueueFlow(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -383,7 +413,7 @@ func TestModelEnqueueFlow(t *testing.T) {
 
 func TestModelEnqueueRejectsEmptyPrompt(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -534,7 +564,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 
 func TestTeaProgramRunsAndQuits(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("smoke", 4)); err != nil {
@@ -564,7 +594,7 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 
 func TestModelShowsModelColumn(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	tagged := th("mm1", 4)
@@ -587,7 +617,7 @@ func TestModelShowsModelColumn(t *testing.T) {
 
 func TestSanitizeRowNewlines(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	weird := th("n1", 4)
@@ -664,7 +694,7 @@ func persistConversationFor(t *testing.T, sessM *session.SessionManager, thought
 func TestReplayCompletedThought(t *testing.T) {
 	q := newQueue(t)
 	sessM := sessionSessions(t)
-	tport, _ := NewInProcess(q, sessM)
+	tport, _ := newInProcess(t, q, sessM)
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -698,7 +728,7 @@ func TestReplayCompletedThought(t *testing.T) {
 
 func TestLiveViewHeaderMarksLive(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("run1", 4)); err != nil {
@@ -716,7 +746,7 @@ func TestLiveViewHeaderMarksLive(t *testing.T) {
 
 func TestHomeViewAgentPreview(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, broker := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("run1", 1)); err != nil {
@@ -728,7 +758,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 	drain(m)
 
 	// Deltas stream a preview snippet onto the row in LIST mode.
-	tport.portal.ObserveAgent("run1", agent.AgentEvent{
+	observe(broker, "run1", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "writing a hello world example"},
 	})
@@ -740,7 +770,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 		t.Errorf("delta preview missing from the row:\n%s", m.View())
 	}
 	// Tool activity shows on the row and in the status activity line.
-	tport.portal.ObserveAgent("run1", agent.AgentEvent{
+	observe(broker, "run1", agent.AgentEvent{
 		Type: agent.AgentEventToolCall,
 		Tool: &agent.ToolUpdate{ToolCallID: "c1", Name: "note_write", Input: json.RawMessage(`{"title":"x"}`)},
 	})
@@ -760,7 +790,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 
 func TestTickingClockWhileRunning(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := NewInProcess(q, sessionSessions(t))
+	tport, _ := newInProcess(t, q, sessionSessions(t))
 	m := NewModel(tport)
 	_ = m.Init()
 

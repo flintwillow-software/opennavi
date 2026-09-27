@@ -21,6 +21,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/llm"
+	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
@@ -67,11 +68,13 @@ type Runtime struct {
 	// SetSteeringRouter closure delegates here. Test seam: read via
 	// steeringSnapshot to verify injection.
 	inflight *inFlightAgents
-	// Portal is the served observation/control surface (S000407); nil
-	// when PortalAddr is unset (zero cost). PortalBuf is the served
-	// stream's bounded mailbox (single attachment for the shim).
-	Portal    *portal.Hub
-	PortalBuf *portal.PortalMailbox
+	// Portal is the control + observation service (S000407). It is always
+	// assembled so in-process front-ends can use it; the gateway is
+	// mounted only when PortalAddr is set. PortalBuf is the served
+	// stream's bounded subscription (single attachment for the shim).
+	Portal      *portal.Hub
+	PortalBuf   pubportal.Subscription
+	Observation pubportal.Observer
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -314,17 +317,27 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
-	// Portal (S000407): the observation + control surface served on
-	// PortalAddr when set — zero cost when unset (mirrors MetricsAddr).
-	// No authorizer is wired in production (OverrideAuthorizer is a
-	// test seam): IAM lands later, so attachments and control fail
-	// closed until then (S040200 fail-closed stub).
-	var portalPlane *portal.Hub
-	var portalBuf *portal.PortalMailbox
-	if params.PortalAddr != "" {
-		portalPlane = portal.NewHub(q, params.OverrideAuthorizer)
-		portalBuf = portalPlane.Subscribe(DefaultPortalMailboxCap)
+	// Observation fanout (NAVI-352): the public bounded broker merges
+	// queue lifecycle and running-agent events; the portal hub and any
+	// in-process front-end subscribe through it.
+	broker := pubportal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
+
+	// Portal control service (S000407): assembled unconditionally and
+	// bound from Deps, so an in-process front-end can observe without the
+	// gateway. It is served on PortalAddr when set. No authorizer is
+	// wired in production (OverrideAuthorizer is a test seam): IAM lands
+	// later, so attachments and control fail closed until then (S040200
+	// fail-closed stub).
+	portalPlane := portal.NewHub(params.OverrideAuthorizer)
+	if err := portalPlane.Start(context.Background(), pubportal.Deps{
+		ThoughtSystem: q,
+		Observation:   broker,
+	}); err != nil {
+		store.Close()
+		return nil, err
 	}
+	portalBuf := broker.Subscribe(DefaultPortalMailboxCap)
 
 	// Test seam: an injected logger replaces the env-built one.
 	var logger *logging.Logger
@@ -362,13 +375,16 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// start; the router closure runs outside q.mu (RouteMessage
 	// guarantee) so snapshot reads are safe.
 	tracker := newInFlightAgents()
-	// Per-thought agent events (S000407): the portal observes the
-	// running agents' event buses through this hook when served.
-	var agentEvents func(thoughtID string, ev agent.AgentEvent)
-	if portalPlane != nil {
-		agentEvents = func(thoughtID string, ev agent.AgentEvent) {
-			portalPlane.ObserveAgent(thoughtID, ev)
-		}
+	// Per-thought agent events (S000407/NAVI-352): the runtime publishes
+	// them onto the observation broker, where any subscriber sees them.
+	agentEvents := func(thoughtID string, ev agent.AgentEvent) {
+		broker.Publish(pubportal.Event{
+			Category:  pubportal.CategoryAgent,
+			Kind:      string(ev.Type),
+			ThoughtID: thoughtID,
+			Detail:    agentDetail(ev),
+			At:        time.Now().UTC(),
+		})
 	}
 	runner := NewAgentRunner(agentRunnerDeps{
 		chain:          chain,
@@ -424,7 +440,33 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		StopFlusher:   q.StartFlusher(),   // NAVI-338: drain the dirty set
 		Portal:        portalPlane,
 		PortalBuf:     portalBuf,
+		Observation:   broker,
 	}, nil
+}
+
+// agentDetail summarizes an agent event for the observation stream
+// (bounded length; never raw credentials). NAVI-352 moved the neutral
+// event type to the public contract; the agent-specific summary stays
+// here, where the agent package is already in scope.
+func agentDetail(ev agent.AgentEvent) string {
+	if ev.Tool != nil {
+		snippet := string(ev.Tool.Input)
+		if len(snippet) > 120 {
+			snippet = snippet[:120] + "…"
+		}
+		return strings.TrimSpace(ev.Tool.Name + " " + snippet)
+	}
+	if ev.Message != nil {
+		c := strings.TrimSpace(ev.Message.Content)
+		if len(c) > 256 {
+			c = c[:256] + "…"
+		}
+		return c
+	}
+	if ev.Error != nil {
+		return ev.Error.Error()
+	}
+	return ""
 }
 
 // bindOptions maps the runtime ToolPolicy onto the bridge's bind-time
@@ -665,7 +707,7 @@ func (d *Runtime) startConnectors() (stopConnectors func()) {
 	// The serve shim (portal.go) is a loopback-grade JSON mapping;
 	// the real wire protocol is deferred. Control and attach fail
 	// closed until IAM lands (no authorizer wired).
-	if d.Portal != nil {
+	if d.Config.PortalAddr != "" {
 		addr := d.Config.PortalAddr
 		portalSrv := &http.Server{
 			Addr:              addr,

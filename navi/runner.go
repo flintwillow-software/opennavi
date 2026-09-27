@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
@@ -111,6 +113,14 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	if err := r.navi.bindTools(a, t); err != nil {
 		return fmt.Errorf("navi: thought %s: %w", t.ID, err)
 	}
+
+	// Observation (NAVI-352): forward the agent's events into the navi's
+	// bounded observation fanout, tagged with the thought id. Subscribers
+	// are bounded and asynchronous, so this never slows the run.
+	unsubscribe := a.Subscribe(func(ev agent.AgentEvent) {
+		r.navi.observation.Publish(agentObservation(t.ID, ev))
+	}, false)
+	defer unsubscribe()
 
 	// Crash recovery / resume: restore a checkpoint if present and
 	// restorable; a stale/corrupt checkpoint degrades to a fresh run
@@ -234,6 +244,42 @@ func lastAssistantContent(msgs []agent.AgentMessage) string {
 		if msgs[i].Role == agent.RoleAssistant && msgs[i].Content != "" {
 			return msgs[i].Content
 		}
+	}
+	return ""
+}
+
+// agentObservation normalizes a per-thought agent event onto the public
+// observation stream (NAVI-352): the neutral event carries a bounded
+// human-short detail, never the raw conversation.
+func agentObservation(thoughtID string, ev agent.AgentEvent) portal.Event {
+	return portal.Event{
+		Category:  portal.CategoryAgent,
+		Kind:      string(ev.Type),
+		ThoughtID: thoughtID,
+		Detail:    agentDetail(ev),
+		At:        time.Now().UTC(),
+	}
+}
+
+// agentDetail summarizes an agent event for the stream (bounded length;
+// never raw credentials).
+func agentDetail(ev agent.AgentEvent) string {
+	if ev.Tool != nil {
+		snippet := string(ev.Tool.Input)
+		if len(snippet) > 120 {
+			snippet = snippet[:120] + "…"
+		}
+		return strings.TrimSpace(ev.Tool.Name + " " + snippet)
+	}
+	if ev.Message != nil {
+		c := strings.TrimSpace(ev.Message.Content)
+		if len(c) > 256 {
+			c = c[:256] + "…"
+		}
+		return c
+	}
+	if ev.Error != nil {
+		return ev.Error.Error()
 	}
 	return ""
 }

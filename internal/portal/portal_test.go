@@ -1,14 +1,14 @@
 package portal
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -40,8 +40,27 @@ func thoughtT(id string) *thought.Thought {
 	return &thought.Thought{ID: id, Prompt: "task " + id, Priority: 4, Status: thought.ThoughtPending}
 }
 
-func readAll(m *PortalMailbox) []PortalEvent {
-	evs, _, _ := m.ReadAfter(0)
+// newBrokerHub builds the observation broker + portal hub over a queue,
+// binding both from Deps (NAVI-352): the hub no longer takes the concrete
+// queue at construction.
+func newBrokerHub(t *testing.T, q *thought.Queue, auth PortalAuthorizer) (*Hub, *pubportal.Broker) {
+	t.Helper()
+	broker := pubportal.NewBroker()
+	if q != nil {
+		q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
+	}
+	p := NewHub(auth)
+	if err := p.Start(context.Background(), pubportal.Deps{
+		ThoughtSystem: q,
+		Observation:   broker,
+	}); err != nil {
+		t.Fatalf("hub start: %v", err)
+	}
+	return p, broker
+}
+
+func readAll(s pubportal.Subscription) []PortalEvent {
+	evs, _, _ := s.ReadAfter(0)
 	return evs
 }
 
@@ -91,11 +110,36 @@ func TestMailboxClosedDrops(t *testing.T) {
 	}
 }
 
+// TestBrokerSlowSubscriberDoesNotBlock is the NAVI-352 backpressure
+// guarantee: a full mailbox drops oldest and publishing never blocks.
+func TestBrokerSlowSubscriberDoesNotBlock(t *testing.T) {
+	broker := pubportal.NewBroker()
+	slow := broker.Subscribe(4) // never drained
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			broker.Publish(pubportal.Event{Category: pubportal.CategoryAgent, Kind: "content_delta"})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publishing to a stalled subscriber blocked")
+	}
+
+	evs, _, lost := slow.ReadAfter(0)
+	if len(evs) != 4 || !lost {
+		t.Fatalf("bounded window = %d events (lost=%v), want 4/dropped", len(evs), lost)
+	}
+}
+
 // ── Queue observation + delivery acks ────────────────────────────────────
 
 func TestPortalFansQueueLifecycle(t *testing.T) {
 	q := newQueue(t)
-	p := NewHub(q, allowAuth{})
+	p, _ := newBrokerHub(t, q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t1")); err != nil {
@@ -128,7 +172,7 @@ func TestPortalFansQueueLifecycle(t *testing.T) {
 
 func TestPortalFansDeliveryAck(t *testing.T) {
 	q := newQueue(t)
-	p := NewHub(q, allowAuth{})
+	p, _ := newBrokerHub(t, q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t2")); err != nil {
@@ -157,18 +201,18 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 
 // ── Per-thought agent events ─────────────────────────────────────────────
 
-func TestObserveAgentFansToSubscribers(t *testing.T) {
+func TestAgentEventsFanToSubscribers(t *testing.T) {
 	q := newQueue(t)
-	p := NewHub(q, allowAuth{})
+	p, broker := newBrokerHub(t, q, allowAuth{})
 	mb := p.Subscribe(32)
 
-	p.ObserveAgent("t9", agent.AgentEvent{
-		Type: agent.AgentEventToolCall,
-		Tool: &agent.ToolUpdate{ToolCallID: "call-1", Name: "note_write", Input: json.RawMessage(`{"title":"x"}`)},
+	broker.Publish(pubportal.Event{
+		Category: pubportal.CategoryAgent, Kind: "tool_call", ThoughtID: "t9",
+		Detail: "note_write {\"title\":\"x\"}", At: time.Now().UTC(),
 	})
-	p.ObserveAgent("t9", agent.AgentEvent{
-		Type:    agent.AgentEventContentDelta,
-		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "delta one"},
+	broker.Publish(pubportal.Event{
+		Category: pubportal.CategoryAgent, Kind: "content_delta", ThoughtID: "t9",
+		Detail: "delta one", At: time.Now().UTC(),
 	})
 
 	evs := readAll(mb)
@@ -190,7 +234,7 @@ func TestObserveAgentFansToSubscribers(t *testing.T) {
 
 func TestControlActionsApplyAndEmit(t *testing.T) {
 	q := newQueue(t)
-	p := NewHub(q, allowAuth{})
+	p, _ := newBrokerHub(t, q, allowAuth{})
 	mb := p.Subscribe(64)
 
 	if err := p.Enqueue("u1", thoughtT("pending-1")); err != nil {
@@ -244,7 +288,7 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	q := newQueue(t)
 
 	// No authorizer: every action fails closed (S040200).
-	p := NewHub(q, nil)
+	p, _ := newBrokerHub(t, q, nil)
 	if err := p.Attach("u"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach: %v, want ErrPortalUnauthorized", err)
 	}
@@ -265,32 +309,32 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	}
 
 	// A wired authorizer that refuses is equally enforced.
-	denyPortal := NewHub(q, denyAuth{})
+	denyPortal, _ := newBrokerHub(t, q, denyAuth{})
 	if err := denyPortal.Steer("u", "x", "hi"); err == nil || errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("deny-auth steer: %v, want a refusal", err)
 	}
 }
 
 func TestAttach(t *testing.T) {
-	p := NewHub(newQueue(t), allowAuth{})
+	p, _ := newBrokerHub(t, newQueue(t), allowAuth{})
 	if err := p.Attach("tui"); err != nil {
 		t.Fatalf("attach with allow authorizer: %v", err)
 	}
-	closed := NewHub(newQueue(t), nil)
+	closed, _ := newBrokerHub(t, newQueue(t), nil)
 	if err := closed.Attach("tui"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach without authorizer: %v, want unauthorized", err)
 	}
 }
 
-func TestUnsubscribeStopsFan(t *testing.T) {
+func TestClosedSubscriptionStopsFan(t *testing.T) {
 	q := newQueue(t)
-	p := NewHub(q, allowAuth{})
+	p, _ := newBrokerHub(t, q, allowAuth{})
 	mb := p.Subscribe(16)
-	p.Unsubscribe(mb)
+	mb.Close()
 	if err := q.Enqueue(thoughtT("t1")); err != nil {
 		t.Fatal(err)
 	}
 	if len(readAll(mb)) != 0 {
-		t.Error("unsubscribed mailbox still received events")
+		t.Error("closed subscription still received events")
 	}
 }
