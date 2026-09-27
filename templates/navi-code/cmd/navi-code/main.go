@@ -1,84 +1,134 @@
-// Command navi-code is the starter CLI coding agent: a navi that
-// orients itself in a repository and helps with code work through an
-// interactive terminal chat (interface per S000400 §01).
+// Command navi-code is a starter coding navi: a real navi module that
+// assembles through navi.New, declares its tools/skills/model, and runs
+// the TUI.
 //
 // Authoring model (S000200 §04): everything below is the static,
-// compiled-in definition — Go only, no YAML definition file. The
-// runtime config (provider endpoints, key paths) lives under
-// .config/navi/navi-code/ and is set by the end user, not here.
+// compiled-in definition — Go only, no YAML definition file. Runtime
+// settings (provider endpoints, credential references) come from the
+// config file named by NAVI_CONFIG, if set.
 package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/sdk"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/navi"
+	"github.com/flintwillow-software/opennavi/portal/tui"
+	"github.com/flintwillow-software/opennavi/skill"
+	"github.com/flintwillow-software/opennavi/tool"
+	"github.com/flintwillow-software/opennavi/tools/builtin"
 )
 
+//go:embed coding-conventions.md
+var codingConventions string
+
 func main() {
-	reg := registry.New()
-
-	// One author tool registered through the tool registry (S130400):
-	// registration IS the declaration.
-	must(reg.Register(registry.ToolDefinition{
-		Name:        "repo_stats",
-		Description: "Walks the repository working tree and reports file counts and total line counts per top-level directory. Use for orientation before planning changes.",
-		InputSchema: mustSchema(json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {"type": "string", "description": "Repository root to scan (default: working directory)"}
-			}
-		}`)),
-		OutputFormat:  "markdown",
-		Access:        registry.AccessReadOnly,
-		Timeout:       30 * time.Second,
-		Recovery:      "retry_once",
-		Mode:          registry.ToolModeParallel,
-		Tags:          []string{"code", "repo", "orientation"},
-		Version:       "1.0.0",
-		PromptSnippet: "Summarize repository structure and size per top-level directory",
-		PromptGuidelines: []string{
-			"Call repo_stats before planning multi-file changes",
-		},
-		SourceInfo: registry.SourceInfo{Origin: registry.OriginAuthor, Path: "cmd/navi-code/main.go"},
-	}, repoStats))
-
-	// Activate the author tool. Catalog builtins (file_*, shell_exec,
-	// git_*, ...) join the active set once the tool catalog ships
-	// (epic NAVI-59); they register through the same registry.
-	must(reg.SetActive([]string{"repo_stats"}))
-
-	def := sdk.NaviDef{
-		Name:    "navi-code",
-		Version: "0.1.0",
-		Personality: "You are navi-code, a focused CLI coding agent. You orient yourself in the " +
-			"repository before acting, prefer small verifiable changes, and keep your reasoning terse.",
-		Skills: []sdk.Skill{
-			{Name: "coding-conventions", Path: "skills/coding-conventions.md"},
-		},
-		Interfaces: sdk.InterfaceSet{
-			CLI: true,
-		},
-		Permissions: sdk.PermissionPolicy{
-			// Deny takes precedence over Allow; navi-code never runs shell
-			// commands until the operator grants it.
-			Deny: []string{"shell_exec"},
-		},
-	}
-
-	// sdk.Build validates the definition and compiles the binary
-	// (S000300). It exits after producing the binary.
-	if err := sdk.Build(def); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "navi-code:", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opts := []navi.Option{
+		navi.WithVersion("0.1.0"),
+		navi.WithPersonality("You are navi-code, a focused CLI coding agent. You orient yourself in the " +
+			"repository before acting, prefer small verifiable changes, and keep your reasoning terse."),
+		// navi-code never runs shell commands until the operator grants it.
+		navi.WithPermissions(navi.PermissionPolicy{DenyTools: []string{"shell_exec"}}),
+	}
+	if cfg := os.Getenv("NAVI_CONFIG"); cfg != "" {
+		opts = append(opts, navi.WithRuntimeConfig(cfg))
+	}
+	n := navi.New("navi-code", opts...)
+
+	if err := n.Skills.Add(skill.Skill{
+		Name:        "coding_conventions",
+		Description: "Repository conventions and working style for code changes.",
+		Content:     codingConventions,
+		Tags:        []string{"code", "conventions"},
+		Version:     "1.0.0",
+	}); err != nil {
+		return err
+	}
+
+	// Builtins: file_read + shell_exec, bound to the working directory.
+	// shell_exec is compiled in but denied by the permission ceiling above
+	// (deny wins), so it is never bound into a thought's surface.
+	workDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	builtins, err := builtin.Tools(workDir)
+	if err != nil {
+		return err
+	}
+	for _, t := range builtins {
+		if err := n.Tools.Add(t); err != nil {
+			return err
+		}
+	}
+
+	// One author tool: a complete tool.Tool descriptor + handler.
+	if err := n.Tools.Add(repoStatsTool()); err != nil {
+		return err
+	}
+
+	// One model, marked default (ADR 0009). Runtime config may retarget
+	// the provider/model; the declared set is what model_list reports.
+	if err := n.Models.Add(model.Ollama("qwen3.8:27b", model.Default())); err != nil {
+		return err
+	}
+
+	// The TUI is the front door (ADR 0002: portals).
+	if err := n.Portals.Add(tui.NewPortal()); err != nil {
+		return err
+	}
+
+	return n.Run(ctx)
+}
+
+// repoStatsTool declares repo_stats as a public contract tool.
+func repoStatsTool() tool.Tool {
+	schema, _ := tool.ParseSchema(json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {"type": "string", "description": "Repository root to scan (default: working directory)"}
+		}
+	}`))
+	return tool.Tool{
+		Def: tool.Def{
+			Name:          "repo_stats",
+			Description:   "Walks the repository working tree and reports file counts and total line counts per top-level directory. Use for orientation before planning changes.",
+			InputSchema:   schema,
+			OutputFormat:  "markdown",
+			Access:        tool.AccessReadOnly,
+			Timeout:       30 * time.Second,
+			Recovery:      "retry_once",
+			Mode:          tool.ToolModeParallel,
+			Tags:          []string{"code", "repo", "orientation"},
+			Version:       "1.0.0",
+			PromptSnippet: "Summarize repository structure and size per top-level directory",
+			PromptGuidelines: []string{
+				"Call repo_stats before planning multi-file changes",
+			},
+			SourceInfo: tool.SourceInfo{Origin: tool.OriginAuthor, Path: "cmd/navi-code/main.go"},
+		},
+		Handler: repoStats,
 	}
 }
 
@@ -148,19 +198,4 @@ func lineCount(path string) (int, error) {
 		return 0, err
 	}
 	return strings.Count(string(data), "\n"), nil
-}
-
-func mustSchema(raw json.RawMessage) registry.Schema {
-	s, err := registry.ParseSchema(raw)
-	if err != nil {
-		panic(fmt.Sprintf("navi-code: tool schema: %v", err))
-	}
-	return s
-}
-
-func must(err error) {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "navi-code:", err)
-		os.Exit(1)
-	}
 }

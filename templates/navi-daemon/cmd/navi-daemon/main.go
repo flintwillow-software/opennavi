@@ -1,12 +1,11 @@
-// Command navi-daemon is the starter daemon-style navi: an always-on
-// background agent (the OpenClaw/Hermes pattern) that consumes its
-// thought queue, wakes on cron schedules, and serves the gateway as
-// its delivery mode (interfaces per S000400 §01).
+// Command navi-daemon is a starter daemon-style navi: a real navi module
+// that assembles through navi.New, wakes on cron schedules, and serves the
+// HTTP portal gateway.
 //
-// Authoring model (S000200 §04): the Go definition below is the
-// static, compiled-in half. The deployment half — provider endpoints,
-// cron schedules, discovery sources — is runtime config under
-// .config/navi/navi-daemon/ owned by the operator.
+// Authoring model (S000200 §04): the Go definition below is the static,
+// compiled-in half. Deployment settings (provider endpoints, credential
+// references, cron overrides) come from the config file named by
+// NAVI_CONFIG, if set.
 package main
 
 import (
@@ -14,59 +13,87 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/sdk"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/connector/cron"
+	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/navi"
+	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/tool"
 )
 
 func main() {
-	reg := registry.New()
-
-	// One author tool registered through the tool registry (S130400):
-	// registration IS the declaration.
-	must(reg.Register(registry.ToolDefinition{
-		Name:          "queue_status",
-		Description:   "Reports the navi's own runtime status: uptime, process memory usage, and goroutine count. Use for self-diagnostics and in scheduled health reports.",
-		InputSchema:   mustSchema(json.RawMessage(`{"type": "object"}`)),
-		OutputFormat:  "text",
-		Access:        registry.AccessReadOnly,
-		Timeout:       5 * time.Second,
-		Recovery:      "retry_once",
-		Mode:          registry.ToolModeSequential,
-		Tags:          []string{"daemon", "health", "status"},
-		Version:       "1.0.0",
-		PromptSnippet: "Report daemon uptime and runtime health",
-		SourceInfo:    registry.SourceInfo{Origin: registry.OriginAuthor, Path: "cmd/navi-daemon/main.go"},
-	}, queueStatus))
-
-	// Activate the author tool. Catalog builtins join the active set
-	// once the tool catalog ships (epic NAVI-59); they register through
-	// the same registry.
-	must(reg.SetActive([]string{"queue_status"}))
-
-	def := sdk.NaviDef{
-		Name:    "navi-daemon",
-		Version: "0.1.0",
-		Personality: "You are navi-daemon, an always-on operator's assistant. You are proactive but " +
-			"quiet: you act on schedules and queued work, surface only what needs attention, and log the rest.",
-		Interfaces: sdk.InterfaceSet{
-			Gateway: sdk.InterfaceConfig{Enabled: true, HTTPPort: 8080},
-			Cron:    sdk.InterfaceConfig{Enabled: true},
-		},
-		Permissions: sdk.PermissionPolicy{
-			// A daemon talks to the world through its schedules and gateway;
-			// deny interactive shell by default.
-			Deny: []string{"shell_exec"},
-		},
-	}
-
-	// sdk.Build validates the definition and compiles the binary
-	// (S000300). It exits after producing the binary.
-	if err := sdk.Build(def); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "navi-daemon:", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opts := []navi.Option{
+		navi.WithVersion("0.1.0"),
+		navi.WithPersonality("You are navi-daemon, an always-on operator's assistant. You are proactive but " +
+			"quiet: you act on schedules and queued work, surface only what needs attention, and log the rest."),
+		// A daemon talks to the world through its schedules and gateway;
+		// deny interactive shell by default.
+		navi.WithPermissions(navi.PermissionPolicy{DenyTools: []string{"shell_exec"}}),
+	}
+	if cfg := os.Getenv("NAVI_CONFIG"); cfg != "" {
+		opts = append(opts, navi.WithRuntimeConfig(cfg))
+	}
+	n := navi.New("navi-daemon", opts...)
+
+	if err := n.Tools.Add(queueStatusTool()); err != nil {
+		return err
+	}
+
+	// One model, marked default (ADR 0009).
+	if err := n.Models.Add(model.Ollama("qwen3.8:27b", model.Default())); err != nil {
+		return err
+	}
+
+	// Cron: schedules are a thought factory (ADR 0010).
+	if err := n.Connectors.Add(cron.New(cron.Config{Schedules: []cron.Schedule{
+		{Name: "health", Expr: "*/30 * * * *", Prompt: "Report the navi's runtime health concisely."},
+	}})); err != nil {
+		return err
+	}
+
+	// Gateway: the HTTP observation + control portal. Control is
+	// authorizer-gated and fails closed until IAM lands, so this starter
+	// binds no control portal (observation only).
+	if err := n.Portals.Add(gateway.New(":8080", nil)); err != nil {
+		return err
+	}
+
+	return n.Run(ctx)
+}
+
+// queueStatusTool declares queue_status as a public contract tool.
+func queueStatusTool() tool.Tool {
+	schema, _ := tool.ParseSchema(json.RawMessage(`{"type": "object"}`))
+	return tool.Tool{
+		Def: tool.Def{
+			Name:          "queue_status",
+			Description:   "Reports the navi's own runtime status: uptime, process memory usage, and goroutine count. Use for self-diagnostics and in scheduled health reports.",
+			InputSchema:   schema,
+			OutputFormat:  "text",
+			Access:        tool.AccessReadOnly,
+			Timeout:       5 * time.Second,
+			Recovery:      "retry_once",
+			Mode:          tool.ToolModeSequential,
+			Tags:          []string{"daemon", "health", "status"},
+			Version:       "1.0.0",
+			PromptSnippet: "Report daemon uptime and runtime health",
+			SourceInfo:    tool.SourceInfo{Origin: tool.OriginAuthor, Path: "cmd/navi-daemon/main.go"},
+		},
+		Handler: queueStatus,
 	}
 }
 
@@ -82,18 +109,3 @@ func queueStatus(ctx context.Context, args map[string]any) (string, error) {
 }
 
 var start = time.Now()
-
-func mustSchema(raw json.RawMessage) registry.Schema {
-	s, err := registry.ParseSchema(raw)
-	if err != nil {
-		panic(fmt.Sprintf("navi-daemon: tool schema: %v", err))
-	}
-	return s
-}
-
-func must(err error) {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "navi-daemon:", err)
-		os.Exit(1)
-	}
-}
