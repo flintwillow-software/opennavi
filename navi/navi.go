@@ -68,6 +68,16 @@ type Navi struct {
 	// portals through portal.Deps.
 	observation *portal.Broker
 
+	// thoughtStore / queueConfig configure the thought system; the
+	// defaults (memory store, off reconcile/flush) suit tests, while a
+	// durable navi supplies a sqlite store and enables both.
+	thoughtStore thought.Store
+	queueConfig  *thought.Config
+
+	// inflight is the steering bridge's lookup (S010310): maps a running
+	// thought to its agent so RouteMessage can inject at the turn boundary.
+	inflight *inFlightAgents
+
 	log *slog.Logger
 
 	// runtimeFile is the runtime config path (WithRuntimeConfig).
@@ -96,6 +106,25 @@ type Navi struct {
 // Option adjusts a navi during New. Options are applied before any
 // collection is populated, so they configure defaults rather than items.
 type Option func(*Navi)
+
+// WithThoughtStore sets the durable thought store the queue persists to.
+// Defaults to an in-memory store, which means thoughts do not survive the
+// process.
+func WithThoughtStore(s thought.Store) Option {
+	return func(n *Navi) {
+		if s != nil {
+			n.thoughtStore = s
+		}
+	}
+}
+
+// WithQueueConfig overrides the queue's scheduling configuration
+// (concurrency, priority slots, foreground slots, reconcile/flush
+// cadence). The default keeps reconciliation and flushing off, which is
+// correct for the in-memory store; a durable navi enables both.
+func WithQueueConfig(cfg thought.Config) Option {
+	return func(n *Navi) { n.queueConfig = &cfg }
+}
 
 // WithVersion sets the navi's version string.
 func WithVersion(v string) Option { return func(n *Navi) { n.version = v } }
@@ -156,15 +185,20 @@ func New(name string, opts ...Option) *Navi {
 	// loops (dirty-set flusher, store reconcile) stay off until a
 	// durable store is wired — with the in-memory store they would
 	// guard nothing.
-	// The queue is the runtime handle: the navi and its workers hold the
-	// concrete type, while components receive it narrowed to
-	// thought.ThoughtSystem through Deps.
-	q, err := thought.NewQueue(thought.Config{
+	cfg := thought.Config{
 		MaxConcurrent:     2,
 		ReconcileInterval: -1,
 		FlushInterval:     -1,
 		SlotExhaustion:    thought.PolicyQueue,
-	}, thought.NewMemoryStore())
+	}
+	if n.queueConfig != nil {
+		cfg = *n.queueConfig
+	}
+	queueStore := n.thoughtStore
+	if queueStore == nil {
+		queueStore = thought.NewMemoryStore()
+	}
+	q, err := thought.NewQueue(cfg, queueStore)
 	if err != nil {
 		n.initErr = fmt.Errorf("navi: thought queue: %w", err)
 	} else {
@@ -183,7 +217,12 @@ func New(name string, opts ...Option) *Navi {
 	if n.runner == nil {
 		n.runner = &AgentRunner{navi: n, log: n.log}
 	}
+	// The steering bridge (S010310): a running thought's RouteMessage is
+	// injected into its agent at the turn boundary. The runner registers
+	// each agent on run start.
+	n.inflight = newInFlightAgents()
 	if n.Thoughts != nil {
+		n.Thoughts.SetSteeringRouter(n.inflight.steer)
 		n.watchForWork()
 	}
 	// The observation fanout merges queue lifecycle and running-agent

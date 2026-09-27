@@ -114,6 +114,12 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		return fmt.Errorf("navi: thought %s: %w", t.ID, err)
 	}
 
+	// Steering bridge (S010310): register the in-flight agent so a
+	// message routed to this thought mid-run is injected at the turn
+	// boundary. Unregistered when the run returns.
+	unregister := r.navi.inflight.track(t.ID, a)
+	defer unregister()
+
 	// Observation (NAVI-352): forward the agent's events into the navi's
 	// bounded observation fanout, tagged with the thought id. Subscribers
 	// are bounded and asynchronous, so this never slows the run.
