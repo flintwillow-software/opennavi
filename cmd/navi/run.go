@@ -15,7 +15,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
-	"github.com/flintwillow-software/opennavi/internal/portal/tui"
+	"github.com/flintwillow-software/opennavi/portal/tui"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -142,7 +142,7 @@ func runInteractive(args []string) error {
 		go readSession(rt, logger, sessionDone, false)
 		fmt.Println("navi run --daemon — headless; type a message; Ctrl+C parks the current thought; Ctrl+D ends the session")
 	} else {
-		tport, terr := tui.NewInProcess(rt.Queue, rt.Observation, rt.SessionM)
+		tport, terr := tui.NewInProcess(rt.Queue, rt.Observation)
 		if terr != nil {
 			return terr
 		}

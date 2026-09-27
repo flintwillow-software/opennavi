@@ -14,26 +14,17 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/portal"
-	"github.com/flintwillow-software/opennavi/internal/session"
-	pubportal "github.com/flintwillow-software/opennavi/portal"
+	internalportal "github.com/flintwillow-software/opennavi/internal/portal"
+	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth permits every portal action: the shim-attachment test
-// seam (production wires nil and fails closed; TUI.LocalAuthorizer is
-// the in-process local-trust authorizer).
+// seam (production wires nil and fails closed).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action internalportal.PortalAction, identity string) error {
 	return nil
-}
-
-// sessionSessions builds a session manager over an in-memory store
-// (the tui test seam for transcript replay, NAVI-334).
-func sessionSessions(t *testing.T) *session.SessionManager {
-	t.Helper()
-	return session.NewSessionManager(session.NewMemoryStore())
 }
 
 func newQueue(t *testing.T) *thought.Queue {
@@ -48,11 +39,11 @@ func newQueue(t *testing.T) *thought.Queue {
 // newInProcess builds the in-process transport over q with a fresh
 // observation broker (NAVI-352): queue lifecycle events are wired in and
 // the returned broker lets tests publish agent events.
-func newInProcess(t *testing.T, q *thought.Queue, sessions *session.SessionManager) (*inProcessTransport, *pubportal.Broker) {
+func newInProcess(t *testing.T, q *thought.Queue) (*inProcessTransport, *portal.Broker) {
 	t.Helper()
-	broker := pubportal.NewBroker()
-	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
-	tport, err := NewInProcess(q, broker, sessions)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	tport, err := NewInProcess(q, broker)
 	if err != nil {
 		t.Fatalf("NewInProcess: %v", err)
 	}
@@ -61,7 +52,7 @@ func newInProcess(t *testing.T, q *thought.Queue, sessions *session.SessionManag
 
 // observe publishes an agent event through the broker the way the real
 // runner's producer does.
-func observe(broker *pubportal.Broker, thoughtID string, ev agent.AgentEvent) {
+func observe(broker *portal.Broker, thoughtID string, ev agent.AgentEvent) {
 	detail := ""
 	switch {
 	case ev.Tool != nil:
@@ -71,8 +62,8 @@ func observe(broker *pubportal.Broker, thoughtID string, ev agent.AgentEvent) {
 	case ev.Error != nil:
 		detail = ev.Error.Error()
 	}
-	broker.Publish(pubportal.Event{
-		Category: pubportal.CategoryAgent, Kind: string(ev.Type),
+	broker.Publish(portal.Event{
+		Category: portal.CategoryAgent, Kind: string(ev.Type),
 		ThoughtID: thoughtID, Detail: detail, At: time.Now().UTC(),
 	})
 }
@@ -98,10 +89,10 @@ func drain(m *tuiModel) {
 // concrete queue at construction.
 func TestDepsTransport(t *testing.T) {
 	q := newQueue(t)
-	broker := pubportal.NewBroker()
-	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
 
-	tr, err := NewDepsTransport(pubportal.Deps{ThoughtSystem: q, Observation: broker})
+	tr, err := NewDepsTransport(portal.Deps{ThoughtSystem: q, Observation: broker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,15 +135,9 @@ func TestDepsTransport(t *testing.T) {
 	}
 }
 
-func TestLocalAuthorizerPermitsLocal(t *testing.T) {
-	if err := (LocalAuthorizer{}).Authorize(portal.PortalActSteer, LocalIdentity); err != nil {
-		t.Errorf("local authorizer refused local control: %v", err)
-	}
-}
-
 func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init() // seed from snapshot (returns the poll cmd, re-armed by tea)
 
@@ -181,7 +166,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 
 func TestModelAckDisplay(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t2", 4)); err != nil {
@@ -199,7 +184,7 @@ func TestModelAckDisplay(t *testing.T) {
 
 func TestModelLiveView(t *testing.T) {
 	q := newQueue(t)
-	tport, broker := newInProcess(t, q, sessionSessions(t))
+	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("t3", 4)); err != nil {
@@ -265,7 +250,7 @@ func TestModelLiveView(t *testing.T) {
 
 func TestActionsThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	if err := tport.Bump("x", 2); err == nil {
 		t.Error("bump of unknown thought succeeded")
 	}
@@ -334,7 +319,7 @@ func TestActionsThroughTransport(t *testing.T) {
 
 func TestEnqueueThroughTransport(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 
 	// Default priority thought, due now, foreground-tagged.
 	if err := tport.Enqueue("a brand new task", 0, time.Time{}); err != nil {
@@ -396,7 +381,7 @@ func keyEnter(m *tuiModel) { _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) }
 
 func TestModelEnqueueFlow(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -464,7 +449,7 @@ func TestModelEnqueueFlow(t *testing.T) {
 
 func TestModelEnqueueRejectsEmptyPrompt(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 
@@ -615,7 +600,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 
 func TestTeaProgramRunsAndQuits(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("smoke", 4)); err != nil {
@@ -645,7 +630,7 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 
 func TestModelShowsModelColumn(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	tagged := th("mm1", 4)
@@ -668,7 +653,7 @@ func TestModelShowsModelColumn(t *testing.T) {
 
 func TestSanitizeRowNewlines(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	weird := th("n1", 4)
@@ -708,78 +693,9 @@ func TestSanitizeRowNewlines(t *testing.T) {
 	}
 }
 
-// ── transcript replay (NAVI-334) ────────────────────────────────────────
-
-// persistConversationFor mirrors the daemon runner: create a session
-// named after the thought and fill it with user/assistant/tool/system
-// entries.
-func persistConversationFor(t *testing.T, sessM *session.SessionManager, thoughtID string) {
-	t.Helper()
-	sess, err := sessM.CreateSession("daemon", thoughtID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := func(role session.Role, msg string) session.SessionEntry {
-		e := session.NewEntry(role, msg)
-		return e
-	}
-	sess.AppendEntry(entry(session.RoleUser, "what is the capital?"))
-
-	// Assistant content entry.
-	assistant := entry(session.RoleAssistant, "The capital is Paris.")
-	sess.AppendEntry(assistant)
-	// Assistant tool-call entry.
-	tool := session.NewEntry(session.RoleAssistant, "")
-	tool.ToolName = "note_write"
-	tool.ToolInput = json.RawMessage(`{"title":"x"}`)
-	sess.AppendEntry(tool)
-	// Tool result entry.
-	sess.AppendEntry(entry(session.RoleTool, "saved note x"))
-	// System entry.
-	sess.AppendEntry(entry(session.RoleSystem, "compaction ran"))
-	if err := sessM.SaveSession(sess); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReplayCompletedThought(t *testing.T) {
-	q := newQueue(t)
-	sessM := sessionSessions(t)
-	tport, _ := newInProcess(t, q, sessM)
-	m := NewModel(tport)
-	_ = m.Init()
-
-	if err := q.Enqueue(th("done1", 4)); err != nil {
-		t.Fatal(err)
-	}
-	persistConversationFor(t, sessM, "done1")
-	drain(m)
-
-	// Hop into the completed thought's live view.
-	m.sel = 0
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.mode != ModeLive || m.liveID != "done1" {
-		t.Fatal("did not enter live view")
-	}
-	view := m.View()
-	if !strings.Contains(view, "replay") {
-		t.Errorf("header should mark the chat as (replay):\n%s", view)
-	}
-	if !strings.Contains(view, "what is the capital?") ||
-		!strings.Contains(view, "The capital is Paris.") ||
-		!strings.Contains(view, "note_write") ||
-		!strings.Contains(view, "saved note x") {
-		t.Errorf("replayed conversation incomplete:\n%s", view)
-	}
-	// Tool result merged into the tool block (one ⚙ block).
-	if strings.Contains(view, "⚙") == false {
-		t.Error("tool block missing")
-	}
-}
-
 func TestLiveViewHeaderMarksLive(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("run1", 4)); err != nil {
@@ -797,7 +713,7 @@ func TestLiveViewHeaderMarksLive(t *testing.T) {
 
 func TestHomeViewAgentPreview(t *testing.T) {
 	q := newQueue(t)
-	tport, broker := newInProcess(t, q, sessionSessions(t))
+	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 	if err := q.Enqueue(th("run1", 1)); err != nil {
@@ -841,7 +757,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 
 func TestTickingClockWhileRunning(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q, sessionSessions(t))
+	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
 
