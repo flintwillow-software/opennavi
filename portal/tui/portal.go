@@ -36,8 +36,9 @@ type Portal struct {
 }
 
 // NewPortal builds the TUI portal component (no handles yet; they arrive
-// at Start, per the Deps lifecycle rule).
-func NewPortal() *Portal { return &Portal{} }
+// at Start, per the Deps lifecycle rule). Done is live from construction,
+// so a host can cancel its run when the user quits.
+func NewPortal() *Portal { return &Portal{done: make(chan error, 1)} }
 
 // Start builds the transport from Deps and launches the TUI. The program
 // runs until the user quits or Stop is called; its completion is recorded
@@ -53,7 +54,9 @@ func (p *Portal) Start(ctx context.Context, deps portal.Deps) error {
 	p.mu.Lock()
 	p.tr = tr
 	p.program = prog
-	p.done = make(chan error, 1)
+	if p.done == nil {
+		p.done = make(chan error, 1)
+	}
 	p.mu.Unlock()
 
 	go func() {
