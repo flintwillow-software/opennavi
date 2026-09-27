@@ -102,6 +102,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		Provider:     provider.Name(),
 		Model:        modelName,
 		SystemPrompt: r.navi.systemPromptFor(t),
+		Compaction:   compactionConfig(r.navi.compactBudget),
 	})
 	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
 
@@ -241,6 +242,15 @@ func (n *Navi) bindTools(a *agent.Agent, t *thought.Thought) error {
 	}
 	a.Executor = ex
 	return nil
+}
+
+// compactionConfig maps the navi's compact budget onto the agent's
+// compaction settings (nil = disabled).
+func compactionConfig(budget int) *agent.CompactionConfig {
+	if budget <= 0 {
+		return nil
+	}
+	return &agent.CompactionConfig{Enabled: true, MaxTokens: budget}
 }
 
 // lastAssistantContent returns the final visible assistant reply — the

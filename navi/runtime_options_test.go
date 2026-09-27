@@ -121,3 +121,48 @@ func TestRouteMessageSteersRunningThought(t *testing.T) {
 	close(bp.release)
 	stopServing(t, cancel, done)
 }
+
+// TestProviderFallbackChain pins the ADR 0009 fallback layer: a configured
+// fallback wraps the default resolution, and a per-thought provider
+// override bypasses the chain (daemon parity).
+func TestProviderFallbackChain(t *testing.T) {
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
+	path := writeConfig(t, "provider:\n  fallback: openrouter\n")
+
+	n := testNavi(t, WithRuntimeConfig(path))
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+	if n.fallback == nil {
+		t.Fatal("configured fallback did not build a chain")
+	}
+	p, model, err := n.resolveFor(&thought.Thought{ID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.(*llm.ProviderFallback); !ok {
+		t.Fatalf("default resolution = %T, want the fallback chain", p)
+	}
+	if model != "qwen3.8:27b" {
+		t.Fatalf("model = %q", model)
+	}
+
+	p2, _, err := n.resolveFor(&thought.Thought{ID: "t2", Provider: "openrouter", Model: "some/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p2.(*llm.ProviderFallback); ok {
+		t.Fatal("a per-thought provider override must not use the fallback chain")
+	}
+}
+
+func TestCompactionConfig(t *testing.T) {
+	if compactionConfig(0) != nil {
+		t.Fatal("budget 0 must disable compaction")
+	}
+	c := compactionConfig(4096)
+	if c == nil || !c.Enabled || c.MaxTokens != 4096 {
+		t.Fatalf("compaction config = %+v", c)
+	}
+}
