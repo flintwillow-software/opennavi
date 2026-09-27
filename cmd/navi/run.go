@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/portal/tui"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
+	"github.com/flintwillow-software/opennavi/internal/portal/tui"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
