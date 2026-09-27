@@ -22,6 +22,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -64,6 +65,16 @@ func RegisterTools(reg *registry.Registry) error {
 		return fmt.Errorf("time: register time_read: %w", err)
 	}
 	return nil
+}
+
+// Tool returns time_read as a public contract tool for the navi
+// composition root — the collection form of RegisterTools.
+func Tool() (tool.Tool, error) {
+	def, err := registry.ToDef(Definition())
+	if err != nil {
+		return tool.Tool{}, fmt.Errorf("time: %w", err)
+	}
+	return tool.Tool{Def: def, Handler: handleRead}, nil
 }
 
 // handleRead implements time_read (S130500 §03): current time in the

@@ -92,14 +92,18 @@ written in their own modules without pulling in the runtime:
 tool/          public  Tool, Def, Handler, Schema, Access, provenance
 thought/       public  Thought, thought-system handle, events, the queue
 connector/     public  Connector interface + Deps (thought/model handles)
-portal/        public  Portal interface + Deps
+connector/cron public  cron connector (schedules as a thought factory)
+portal/        public  Portal interface + Deps, bounded observation contract
 model/         public  Model + provider descriptor
 skill/         public  Skill value (embedded content)
 navi/          public  composition root; imports the above
 agent/         public  agent loop, events, tool executor
 llm/           public  Provider interface + adapters
 store/         public  Store interface + implementations
-internal/      private compaction, metrics, CLI plumbing
+tools/         public  catalog (builtin, http, note, thoughts, time, todo)
+tools/registry public  tool registry: metadata, active set, dispatch
+tools/bridge/  public  binds a registry active set into the agent executor
+internal/      private daemon wiring, compaction, metrics, CLI plumbing
 cmd/navi/      reference navi (was the only runnable binary)
 templates/     starter navi modules (guardrail)
 ```
@@ -120,10 +124,20 @@ acyclic and components independently testable.
 
 ## Current state
 
-This is a design in migration. Today the working runtime is the `cmd/navi`
-monolith plus `internal/daemon.Assemble`; the navi object and the public
-contract packages do not exist yet, and `sdk/` is a validation stub. The
-milestones that close the gap are in [rewrite-plan.md](./rewrite-plan.md).
+This is a design in migration. The composition root now exists: `navi.New`
+assembles typed collections, validates and freezes them, and runs a real
+agent runner (`navi.AgentRunner`) that dispatches through `tools/registry`
+and `tools/bridge` with a mode-selected tool surface (ADR 0007). The catalog
+is ported onto `tool.Def` collections, `model_list` exposes the declared
+provider set (ADR 0009), cron ships as the `connector/cron` connector, and
+portals observe queue and running-agent events through the bounded
+`portal.Observation` contract (NAVI-352). Durable thoughts persist their
+mode.
+
+The `cmd/navi` binary plus `internal/daemon.Assemble` remains the working
+reference runtime; M5 rebuilds `cmd/navi` and the starter templates as real
+navis on the new surface. The milestones that close the gap are in
+[rewrite-plan.md](./rewrite-plan.md).
 
 ## Related
 

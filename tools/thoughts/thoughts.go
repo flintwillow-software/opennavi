@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/thought"
+	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
@@ -62,6 +63,37 @@ func Register(reg *registry.Registry, q *thought.Queue) error {
 		{Def: deleteDef(), Handler: handleDelete},
 	}
 	return thought.RegisterQueueTools(reg, handle, tools)
+}
+
+// Tools returns the four thought-management tools as public contract
+// tools bound to the navi's queue — the collection form of Register for
+// the navi composition root.
+func Tools(q *thought.Queue) ([]tool.Tool, error) {
+	if q == nil {
+		return nil, errors.New("thoughts: queue is required")
+	}
+	handle := thought.QueueHandle{Queue: q}
+	pairs := []thought.QueueTool{
+		{Def: readDef(), Handler: handleRead},
+		{Def: createDef(), Handler: handleCreate},
+		{Def: updateDef(), Handler: handleUpdate},
+		{Def: deleteDef(), Handler: handleDelete},
+	}
+	out := make([]tool.Tool, 0, len(pairs))
+	for _, pair := range pairs {
+		def, err := registry.ToDef(pair.Def)
+		if err != nil {
+			return nil, err
+		}
+		h := pair.Handler
+		out = append(out, tool.Tool{
+			Def: def,
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return h(ctx, args, handle)
+			},
+		})
+	}
+	return out, nil
 }
 
 func readDef() registry.ToolDefinition {

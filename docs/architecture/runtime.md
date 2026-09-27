@@ -82,10 +82,10 @@ type Thought struct {
 The public value carries what a *component* acts on. Scheduler
 bookkeeping — slot and worker assignment, preemption requests, the park
 checkpoint, log paths — stays inside the runtime and is not part of this
-contract. `Mode` is declared here but is not yet persisted or consumed by
-the runtime queue; per-thought mode selection reaches the runner in a
-later milestone, and until then reading `Mode` back out of the queue will
-not return it.
+contract. `Mode` is persisted with the thought (the durable thought
+store carries a `mode` column) and consumed by the runner, which resolves
+the tool surface, permission ceiling, and optional model from it; an
+empty mode selects the navi's default surface.
 
 Handle API exposed as `n.Thoughts`:
 
@@ -157,6 +157,10 @@ type Portal interface {
 type Deps struct {
     ThoughtSystem thought.ThoughtSystem
     Model         model.Registry
+    // Observation is the bounded, cursor-ed view of queue lifecycle and
+    // running-agent events (NAVI-352). portal.Deps carries it; a portal
+    // renders a running thought's output from this alone.
+    Observation   portal.Observer
     Log           *slog.Logger
 }
 ```
@@ -166,9 +170,10 @@ root cannot supply it any earlier: a navi declares its collections first and
 only assembles them in `Run`, so a component constructed before `Run` has
 nothing to receive. Threading it through `Start` keeps constructors config-only
 (`connector.Discord(connector.Config{...})`) and keeps these packages free of
-any `navi` import (ADR 0004 rule 1). A portal needs the handle for the same
-reason a connector does — observation happens through
-`Deps.ThoughtSystem.OnEvent`.
+any `navi` import (ADR 0004 rule 1). A portal needs the handles for the same
+reason a connector does — observation arrives through `Deps.Observation`, a
+bounded subscription a slow surface drains (and may fall behind) without ever
+slowing the queue.
 
 - **Connectors** bring work in and manage thought lifecycles (spawn/attach/
   route). Egress tools (`discord_send`, `websocket_send`) close over the
@@ -176,7 +181,9 @@ reason a connector does — observation happens through
   `connector.SendTool()` — never auto-registered, so the capability surface
   stays visible in `main.go`.
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
-  same queue/agent events a connector can observe.
+  same queue and running-agent events a connector can observe — through
+  `Deps.Observation`, whose bounded mailboxes keep a slow front-end from
+  stalling the queue (NAVI-352).
 
 The composition root package is named `navi`; connectors and portals never
 import it — they depend only on the contract packages.

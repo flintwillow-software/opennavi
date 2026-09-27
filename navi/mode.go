@@ -27,6 +27,24 @@ type Mode struct {
 	Prompt string
 }
 
+// Built-in modes (ADR 0007): the SDK ships a read-only planning profile
+// and a full-capability execution profile. Both are ordinary Mode values
+// an author adds to n.Modes; treat them as immutable (declare, do not
+// mutate) because a Mode carries slices shared with every thought that
+// selects it.
+var (
+	// PlanMode caps access at read-only, so write/execute tools are never
+	// bound into a planning thought's surface.
+	PlanMode = Mode{
+		Name:        "plan",
+		Permissions: PermissionPolicy{MaxAccess: tool.AccessReadOnly},
+		Prompt:      "Plan mode: investigate and propose. Do not mutate state or run commands.",
+	}
+	// ExecuteMode is the full-capability profile: the navi's compiled
+	// surface under its own ceiling (the zero Mode adds no restriction).
+	ExecuteMode = Mode{Name: "execute"}
+)
+
 // PermissionPolicy is a tool-surface restriction. The same type serves
 // both roles it has in the design: the navi's compiled *ceiling* (ADR
 // 0006 — what the binary is capable of at all) and a mode's narrower
