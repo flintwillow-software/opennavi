@@ -16,13 +16,13 @@ import (
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/bridge"
 	"github.com/flintwillow-software/opennavi/tools/builtin"
 	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
@@ -37,7 +37,7 @@ import (
 type Runtime struct {
 	Config    RuntimeParams
 	Runtime   config.RuntimeConfig
-	Queue     *thought.ThoughtQueue
+	Queue     *thought.Queue
 	Pool      *thought.Pool
 	Store     *sqlite.Store
 	Stateful  *sqlite.StatefulStore
@@ -70,8 +70,8 @@ type Runtime struct {
 	// Portal is the served observation/control surface (S000407); nil
 	// when PortalAddr is unset (zero cost). PortalBuf is the served
 	// stream's bounded mailbox (single attachment for the shim).
-	Portal    *interfaces.Portal
-	PortalBuf *interfaces.PortalMailbox
+	Portal    *portal.Hub
+	PortalBuf *portal.PortalMailbox
 }
 
 // RuntimeParams carries the command-layer inputs (flags already
@@ -105,7 +105,7 @@ type RuntimeParams struct {
 	// OverrideAuthorizer is a test seam replacing the fail-closed nil
 	// authorizer (S040200): production wires nil, so every portal
 	// attachment is refused until IAM lands.
-	OverrideAuthorizer interfaces.PortalAuthorizer
+	OverrideAuthorizer portal.PortalAuthorizer
 	// NaviID is the per-navi scoping key for stateful tool storage
 	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
@@ -319,11 +319,11 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// No authorizer is wired in production (OverrideAuthorizer is a
 	// test seam): IAM lands later, so attachments and control fail
 	// closed until then (S040200 fail-closed stub).
-	var portal *interfaces.Portal
-	var portalBuf *interfaces.PortalMailbox
+	var portalPlane *portal.Hub
+	var portalBuf *portal.PortalMailbox
 	if params.PortalAddr != "" {
-		portal = interfaces.NewPortal(q, params.OverrideAuthorizer)
-		portalBuf = portal.Subscribe(DefaultPortalMailboxCap)
+		portalPlane = portal.NewHub(q, params.OverrideAuthorizer)
+		portalBuf = portalPlane.Subscribe(DefaultPortalMailboxCap)
 	}
 
 	// Test seam: an injected logger replaces the env-built one.
@@ -365,9 +365,9 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// Per-thought agent events (S000407): the portal observes the
 	// running agents' event buses through this hook when served.
 	var agentEvents func(thoughtID string, ev agent.AgentEvent)
-	if portal != nil {
+	if portalPlane != nil {
 		agentEvents = func(thoughtID string, ev agent.AgentEvent) {
-			portal.ObserveAgent(thoughtID, ev)
+			portalPlane.ObserveAgent(thoughtID, ev)
 		}
 	}
 	runner := NewAgentRunner(agentRunnerDeps{
@@ -422,7 +422,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		inflight:      tracker,
 		StopReconcile: q.StartReconcile(), // NAVI-336: adopt external writers' rows
 		StopFlusher:   q.StartFlusher(),   // NAVI-338: drain the dirty set
-		Portal:        portal,
+		Portal:        portalPlane,
 		PortalBuf:     portalBuf,
 	}, nil
 }

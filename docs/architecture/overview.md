@@ -90,7 +90,7 @@ written in their own modules without pulling in the runtime:
 
 ```
 tool/          public  Tool, Def, Handler, Schema, Access, provenance
-thought/       public  Thought, thought-system handle, events
+thought/       public  Thought, thought-system handle, events, the queue
 connector/     public  Connector interface + Deps (thought/model handles)
 portal/        public  Portal interface + Deps
 model/         public  Model + provider descriptor
@@ -99,7 +99,7 @@ navi/          public  composition root; imports the above
 agent/         public  agent loop, events, tool executor
 llm/           public  Provider interface + adapters
 store/         public  Store interface + implementations
-internal/      private queue mechanics, compaction, metrics, CLI plumbing
+internal/      private compaction, metrics, CLI plumbing
 cmd/navi/      reference navi (was the only runnable binary)
 templates/     starter navi modules (guardrail)
 ```

@@ -1,4 +1,4 @@
-package interfaces
+package portal
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAuth is an authorizer that permits every action.
@@ -27,7 +27,7 @@ func (a denyAuth) Authorize(action PortalAction, identity string) error {
 }
 
 // newQueue builds a queue over an in-memory store for contract tests.
-func newQueue(t *testing.T) *thought.ThoughtQueue {
+func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
 	if err != nil {
@@ -95,7 +95,7 @@ func TestMailboxClosedDrops(t *testing.T) {
 
 func TestPortalFansQueueLifecycle(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t1")); err != nil {
@@ -128,7 +128,7 @@ func TestPortalFansQueueLifecycle(t *testing.T) {
 
 func TestPortalFansDeliveryAck(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t2")); err != nil {
@@ -136,7 +136,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 	}
 	// RouteMessage on a pending thought takes the context-append path
 	// (S010312) and emits the delivery-ack event.
-	path, err := q.RouteMessage("t2", "hello")
+	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil {
 		t.Fatalf("RouteMessage: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 
 func TestObserveAgentFansToSubscribers(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	p.ObserveAgent("t9", agent.AgentEvent{
@@ -190,7 +190,7 @@ func TestObserveAgentFansToSubscribers(t *testing.T) {
 
 func TestControlActionsApplyAndEmit(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(64)
 
 	if err := p.Enqueue("u1", thoughtT("pending-1")); err != nil {
@@ -244,7 +244,7 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	q := newQueue(t)
 
 	// No authorizer: every action fails closed (S040200).
-	p := NewPortal(q, nil)
+	p := NewHub(q, nil)
 	if err := p.Attach("u"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach: %v, want ErrPortalUnauthorized", err)
 	}
@@ -265,18 +265,18 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	}
 
 	// A wired authorizer that refuses is equally enforced.
-	denyPortal := NewPortal(q, denyAuth{})
+	denyPortal := NewHub(q, denyAuth{})
 	if err := denyPortal.Steer("u", "x", "hi"); err == nil || errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("deny-auth steer: %v, want a refusal", err)
 	}
 }
 
 func TestAttach(t *testing.T) {
-	p := NewPortal(newQueue(t), allowAuth{})
+	p := NewHub(newQueue(t), allowAuth{})
 	if err := p.Attach("tui"); err != nil {
 		t.Fatalf("attach with allow authorizer: %v", err)
 	}
-	closed := NewPortal(newQueue(t), nil)
+	closed := NewHub(newQueue(t), nil)
 	if err := closed.Attach("tui"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach without authorizer: %v, want unauthorized", err)
 	}
@@ -284,7 +284,7 @@ func TestAttach(t *testing.T) {
 
 func TestUnsubscribeStopsFan(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(16)
 	p.Unsubscribe(mb)
 	if err := q.Enqueue(thoughtT("t1")); err != nil {

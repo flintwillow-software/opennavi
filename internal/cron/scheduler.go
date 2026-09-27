@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // ScheduleDef is one named schedule. Schedule definitions are
@@ -49,7 +49,7 @@ type Scheduler struct {
 
 	idSeq         uint64                                  // monotonic component for collision-proof thought IDs
 	errorHandlers []func(error)                           // tick-loop error observers
-	eventHandlers []func(thought.QueueEvent)              // queue event observers (RecordFire wiring)
+	eventHandlers []func(thought.Event)                   // queue event observers (RecordFire wiring)
 	debugFn       func(msg string, fields map[string]any) // debug-level observer
 }
 
@@ -250,16 +250,16 @@ func (s *Scheduler) loop() {
 
 // OnEvent registers an observer for queue events (e.g. RecordFire
 // wiring in the daemon: started events advance the schedule state).
-func (s *Scheduler) OnEvent(fn func(thought.QueueEvent)) {
+func (s *Scheduler) OnEvent(fn func(thought.Event)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventHandlers = append(s.eventHandlers, fn)
 }
 
 // emitQueueEvent fans a queue event out to registered observers.
-func (s *Scheduler) emitQueueEvent(ev thought.QueueEvent) {
+func (s *Scheduler) emitQueueEvent(ev thought.Event) {
 	s.mu.Lock()
-	handlers := append([]func(thought.QueueEvent){}, s.eventHandlers...)
+	handlers := append([]func(thought.Event){}, s.eventHandlers...)
 	s.mu.Unlock()
 	for _, fn := range handlers {
 		fn(ev)

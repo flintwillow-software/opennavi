@@ -18,7 +18,7 @@ func TestRouteMessageToPending(t *testing.T) {
 	}
 	rec := watchRouted(q)
 
-	path, err := q.RouteMessage("p1", "extra context line")
+	path, err := q.RouteMessageWithPath("p1", "extra context line")
 	if err != nil {
 		t.Fatalf("RouteMessage(pending): %v", err)
 	}
@@ -48,11 +48,11 @@ func TestRouteMessageToPausedResumesWithMessage(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Pause("pz", []byte("checkpoint")); err != nil {
+	if err := q.PauseWithCheckpoint("pz", []byte("checkpoint")); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	path, err := q.RouteMessage("pz", "user follow-up")
+	path, err := q.RouteMessageWithPath("pz", "user follow-up")
 	if err != nil {
 		t.Fatalf("RouteMessage(paused): %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRouteMessageToRunningViaSteering(t *testing.T) {
 		return nil
 	})
 
-	path, err := q.RouteMessage("r1", "steer: focus on tests")
+	path, err := q.RouteMessageWithPath("r1", "steer: focus on tests")
 	if err != nil {
 		t.Fatalf("RouteMessage(running): %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRouteMessageSteeringNotUnderQueueLock(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := q.RouteMessage("r1", "message")
+		_, err := q.RouteMessageWithPath("r1", "message")
 		done <- err
 	}()
 	select {
@@ -150,7 +150,7 @@ func TestRouteMessageRunningWithoutBridge(t *testing.T) {
 	}
 	rec := watchRouted(q)
 
-	_, err := q.RouteMessage("r1", "hello")
+	_, err := q.RouteMessageWithPath("r1", "hello")
 	if !errors.Is(err, ErrSteeringUnavailable) {
 		t.Fatalf("err = %v, want ErrSteeringUnavailable", err)
 	}
@@ -170,7 +170,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Enqueue(&Thought{ID: "t2", Prompt: "x", Priority: 4, Status: ThoughtPending}); err != nil {
@@ -182,7 +182,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 	rec := watchRouted(q)
 
 	for _, id := range []string{"t1", "t2"} {
-		path, err := q.RouteMessage(id, "late message")
+		path, err := q.RouteMessageWithPath(id, "late message")
 		if err == nil {
 			t.Fatalf("RouteMessage(%s) should be rejected", id)
 		}
@@ -205,7 +205,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 	if err := q.Fail("f1", "provider error"); err != nil {
 		t.Fatal(err)
 	}
-	path, err := q.RouteMessage("f1", "nudge")
+	path, err := q.RouteMessageWithPath("f1", "nudge")
 	if err == nil || !strings.Contains(err.Error(), "Retry") {
 		t.Fatalf("failed-thought rejection = %v, want retry hint", err)
 	}
@@ -228,7 +228,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 func TestRouteMessageUnknownID(t *testing.T) {
 	q, _ := routeQueue(t)
 	rec := watchRouted(q)
-	_, err := q.RouteMessage("ghost", "hello")
+	_, err := q.RouteMessageWithPath("ghost", "hello")
 	if !errors.Is(err, ErrThoughtNotFound) {
 		t.Fatalf("err = %v, want ErrThoughtNotFound", err)
 	}
@@ -254,21 +254,21 @@ func TestEveryRoutedAttemptEmitsAck(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok { // claims t1
 		t.Fatal("claim failed")
 	}
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	rec := watchRouted(q)
 
 	// Delivered: pending path.
-	if _, err := q.RouteMessage("a1", "msg"); err != nil {
+	if _, err := q.RouteMessageWithPath("a1", "msg"); err != nil {
 		t.Fatalf("pending route: %v", err)
 	}
 	// Rejected: terminal.
-	if _, err := q.RouteMessage("t1", "late"); err == nil {
+	if _, err := q.RouteMessageWithPath("t1", "late"); err == nil {
 		t.Fatal("terminal delivery should reject")
 	}
 	// Rejected: unknown.
-	if _, err := q.RouteMessage("ghost", "msg"); err == nil {
+	if _, err := q.RouteMessageWithPath("ghost", "msg"); err == nil {
 		t.Fatal("unknown id should reject")
 	}
 
@@ -413,12 +413,12 @@ func TestRouteMessagePauseResumeRoundTrip(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Pause("w1", []byte("checkpoint")); err != nil {
+	if err := q.PauseWithCheckpoint("w1", []byte("checkpoint")); err != nil {
 		t.Fatal(err)
 	}
 
 	rec := watchRouted(q)
-	path, err := q.RouteMessage("w1", "check the logs first")
+	path, err := q.RouteMessageWithPath("w1", "check the logs first")
 	if err != nil {
 		t.Fatalf("RouteMessage(paused): %v", err)
 	}
@@ -446,7 +446,7 @@ func TestRouteMessagePauseResumeRoundTrip(t *testing.T) {
 
 // routeQueue builds a queue over an in-memory store with neutral
 // defaults for the routing tests.
-func routeQueue(t *testing.T) (*ThoughtQueue, *MemoryStore) {
+func routeQueue(t *testing.T) (*Queue, *MemoryStore) {
 	t.Helper()
 	st := NewMemoryStore()
 	q, err := NewQueue(Config{MaxConcurrent: 4, SlotExhaustion: PolicyQueue}, st)
@@ -456,9 +456,9 @@ func routeQueue(t *testing.T) (*ThoughtQueue, *MemoryStore) {
 	return q, st
 }
 
-func watchRouted(q *ThoughtQueue) *routeRecorder {
+func watchRouted(q *Queue) *routeRecorder {
 	rec := &routeRecorder{}
-	q.OnEvent(func(ev QueueEvent) {
+	q.OnEvent(func(ev Event) {
 		if ev.Kind != EventMessageRouted {
 			return
 		}
@@ -469,7 +469,7 @@ func watchRouted(q *ThoughtQueue) *routeRecorder {
 	return rec
 }
 
-func lastRouted(t *testing.T, acks []QueueEvent) QueueEvent {
+func lastRouted(t *testing.T, acks []Event) Event {
 	t.Helper()
 	if len(acks) == 0 {
 		t.Fatal("no routed ack events recorded")
@@ -480,14 +480,14 @@ func lastRouted(t *testing.T, acks []QueueEvent) QueueEvent {
 // routeRecorder captures queue events for assertions.
 type routeRecorder struct {
 	mu   sync.Mutex
-	acks []QueueEvent
-	all  []QueueEvent
+	acks []Event
+	all  []Event
 }
 
-func (r *routeRecorder) list() []QueueEvent {
+func (r *routeRecorder) list() []Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]QueueEvent(nil), r.acks...)
+	return append([]Event(nil), r.acks...)
 }
 
 // ── preemption across the foreground boundary (review #288) ─────────
@@ -645,7 +645,7 @@ func TestDeleteEmitsDeletedEvent(t *testing.T) {
 		t.Fatalf("Delete(pending): %v", err)
 	}
 	evs := rec.allEvents()
-	var deleted []QueueEvent
+	var deleted []Event
 	for _, ev := range evs {
 		if ev.Kind == EventDeleted {
 			deleted = append(deleted, ev)
@@ -663,7 +663,7 @@ func TestDeleteEmitsDeletedEvent(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Pause("pz", []byte("cp")); err != nil {
+	if err := q.PauseWithCheckpoint("pz", []byte("cp")); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Delete("pz"); err != nil {
@@ -694,15 +694,15 @@ func TestDeleteEmitsDeletedEvent(t *testing.T) {
 }
 
 // record captures every queue event (used by the delete-ack test).
-func (r *routeRecorder) record(ev QueueEvent) {
+func (r *routeRecorder) record(ev Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.all = append(r.all, ev)
 }
 
 // allEvents returns every event seen by the recorder.
-func (r *routeRecorder) allEvents() []QueueEvent {
+func (r *routeRecorder) allEvents() []Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]QueueEvent(nil), r.all...)
+	return append([]Event(nil), r.all...)
 }

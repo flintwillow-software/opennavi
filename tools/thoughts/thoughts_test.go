@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
 // route builds a queue wired to the in-memory store for tool tests.
-func routeQueue(t *testing.T) *thought.ThoughtQueue {
+func routeQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 3, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
 	if err != nil {
@@ -25,7 +25,7 @@ func routeQueue(t *testing.T) *thought.ThoughtQueue {
 
 // toolRegistry registers all four tools bound to the given queue with
 // the full active set.
-func toolRegistry(t *testing.T, q *thought.ThoughtQueue) *registry.Registry {
+func toolRegistry(t *testing.T, q *thought.Queue) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
 	if err := Register(reg, q); err != nil {
@@ -124,7 +124,7 @@ func TestThoughtsReadSnapshotAndFilter(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok { // pz claims → running
 		t.Fatal("claim failed")
 	}
-	if err := q.Pause("pz", []byte("cp")); err != nil { // pz → paused
+	if err := q.PauseWithCheckpoint("pz", []byte("cp")); err != nil { // pz → paused
 		t.Fatal(err)
 	}
 	if _, ok := q.Dequeue(); !ok { // p2 claims → running

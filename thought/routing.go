@@ -56,12 +56,6 @@ const (
 	Rejected  = "rejected"
 )
 
-// EventMessageRouted is the delivery-ack event kind (S010312):
-// emitted for every RouteMessage attempt, delivered or rejected, with
-// QueueEvent.Delivery carrying the path and QueueEvent.Detail the
-// outcome ("delivered" or "rejected: <reason>").
-const EventMessageRouted QueueEventKind = "message_routed"
-
 // Errors for message routing.
 var (
 	// ErrDeliveryRejected wraps rejections: terminal states, failed
@@ -84,14 +78,14 @@ type SteeringRouter func(thoughtID, message string) error
 // SetSteeringRouter registers (or replaces) the steering bridge.
 // Passing nil unregisters: running-thought messages are then rejected
 // with ErrSteeringUnavailable.
-func (q *ThoughtQueue) SetSteeringRouter(fn SteeringRouter) {
+func (q *Queue) SetSteeringRouter(fn SteeringRouter) {
 	q.mu.Lock()
 	q.steeringRouter = fn
 	q.mu.Unlock()
 }
 
 // slotBy returns the slot with the given ID (caller holds q.mu).
-func (q *ThoughtQueue) slotBy(slotID string) *Slot {
+func (q *Queue) slotBy(slotID string) *Slot {
 	for i := range q.slots {
 		if q.slots[i].ID == slotID {
 			return &q.slots[i]
@@ -103,7 +97,7 @@ func (q *ThoughtQueue) slotBy(slotID string) *Slot {
 // locate finds the thought by id across all queue lists and reports
 // which list holds it (caller holds q.mu). The returned pointer is
 // the queue's own thought — mutation is safe under q.mu.
-func (q *ThoughtQueue) locate(id string) (*Thought, string, int, bool) {
+func (q *Queue) locate(id string) (*Thought, string, int, bool) {
 	if t, i := q.findIn(q.pending, id); t != nil {
 		return t, "pending", i, true
 	}
@@ -136,7 +130,20 @@ func (q *ThoughtQueue) locate(id string) (*Thought, string, int, bool) {
 // observe delivery and rejections alike. Unknown ids return
 // ErrThoughtNotFound with a rejected ack (the attempt itself is
 // observable).
-func (q *ThoughtQueue) RouteMessage(id, msg string) (DeliveryPath, error) {
+// RouteMessage delivers a message to a thought, discarding the delivery
+// path.
+//
+// This is the form components get through ThoughtSystem. The path is
+// genuinely useful diagnostic detail (context-append vs steering vs
+// resume-with-message) but it is runtime observation, not control, so it
+// lives on the concrete type alongside the checkpointed park.
+func (q *Queue) RouteMessage(id, msg string) error {
+	_, err := q.RouteMessageWithPath(id, msg)
+	return err
+}
+
+// RouteMessageWithPath delivers a message and reports the path it took.
+func (q *Queue) RouteMessageWithPath(id, msg string) (DeliveryPath, error) {
 	q.mu.Lock()
 	t, _, idx, ok := q.locate(id)
 	if !ok {
@@ -145,7 +152,7 @@ func (q *ThoughtQueue) RouteMessage(id, msg string) (DeliveryPath, error) {
 		return "", fmt.Errorf("thought: route %q: %w", id, ErrThoughtNotFound)
 	}
 
-	var evts []QueueEvent
+	var evts []Event
 	var saveErr error
 
 	switch t.Status {
@@ -197,7 +204,7 @@ func (q *ThoughtQueue) RouteMessage(id, msg string) (DeliveryPath, error) {
 		q.sortPending()
 		saveErr = q.save(t)
 		evts = append(evts,
-			QueueEvent{Kind: EventResumed, ThoughtID: id, Detail: "resumed with routed message", At: timeNowUTC()},
+			Event{Kind: EventResumed, ThoughtID: id, Detail: "resumed with routed message", At: timeNowUTC()},
 			routedAck(id, PathResume, Delivered),
 		)
 		q.mu.Unlock()
@@ -240,8 +247,8 @@ func (t *Thought) AppendMessage(msg string) {
 
 // routedAck builds a delivery-ack event (S010312): thought id,
 // delivery path, outcome.
-func routedAck(id string, path DeliveryPath, outcome string) QueueEvent {
-	return QueueEvent{
+func routedAck(id string, path DeliveryPath, outcome string) Event {
+	return Event{
 		Kind:      EventMessageRouted,
 		ThoughtID: id,
 		Delivery:  string(path),
@@ -251,14 +258,14 @@ func routedAck(id string, path DeliveryPath, outcome string) QueueEvent {
 }
 
 // rejectedAck wraps a rejection into an ack event.
-func rejectedAck(id string, path DeliveryPath, err error) []QueueEvent {
-	return []QueueEvent{routedAck(id, path, Rejected+": "+err.Error())}
+func rejectedAck(id string, path DeliveryPath, err error) []Event {
+	return []Event{routedAck(id, path, Rejected+": "+err.Error())}
 }
 
 // timeNowUTC is the routing stamp clock (swappable in tests).
 var timeNowUTC = func() time.Time { return time.Now().UTC() }
 
 // routedAckSlice wraps a single ack into the emit-able slice form.
-func routedAckSlice(id string, path DeliveryPath, outcome string) []QueueEvent {
-	return []QueueEvent{routedAck(id, path, outcome)}
+func routedAckSlice(id string, path DeliveryPath, outcome string) []Event {
+	return []Event{routedAck(id, path, outcome)}
 }

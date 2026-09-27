@@ -1,82 +1,31 @@
-// Package interfaces implements the interface set abstraction (spec
-// 00-navi-core/04-interface-set.md): interfaces are delivery modes
-// (CLI, TUI, Gateway, ...) that a navi binary can enable in any
-// combination. This package defines the contract and selection
-// machinery; concrete adapters register themselves by name.
+// Package portal implements the navi's portal control plane (S000407):
+// transport-agnostic observation and control of a navi's thought process,
+// authorized fail-closed.
 //
-// Build-time pruning (compiling only selected interfaces into the
-// binary) lands with the builder/compiler (#140); until then selection
-// is runtime, over constructors registered at init time. The
-// Interface/registry seam is designed so the builder can drive it
-// without changes.
-//
-// The portal observer contract (S000407) — observation + control for
-// a navi's thought process, transport-agnostic — lives at the bottom
-// of this file.
-package interfaces
+// The retired "interface set" abstraction (spec
+// 00-navi-core/04-interface-set.md) used to live here — a single registry
+// selecting among delivery modes (CLI, TUI, gateway, cron) in any
+// combination. ADR 0010 retired it, because delivery modes are not one
+// layer: human surfaces are *portals* (this package) and inbound
+// transports are *connectors* (internal/cron, and the gateway contract).
+// That is why the selection machinery is gone and only the portal side
+// remains — the abstraction existed to unify two things that turned out
+// to be different, and its registry had no callers outside itself.
+package portal
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	pubportal "github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/thought"
 )
-
-// InterfaceConfig is the generic per-interface configuration block
-// (spec §01). Concrete adapters extend it via their own option structs;
-// the spec's per-interface fields (ports, tokens, themes) live there.
-type InterfaceConfig struct {
-	Enabled bool
-	Port    int
-	Addr    string
-}
-
-// InterfaceSet mirrors the navi definition's interface selection (spec
-// §00/§02): any combination of delivery modes can be enabled.
-type InterfaceSet struct {
-	CLI     bool            // interactive terminal chat (REPL for now, TUI later)
-	WebUI   InterfaceConfig // HTTP + WebSocket chat
-	Gateway InterfaceConfig // webhook daemon
-	Cron    InterfaceConfig // scheduled tasks
-	// Platform adapters (Telegram/Discord/Slack) are follow-ups on the
-	// Gateway contract; they register with the same registry.
-	Extra map[string]bool
-}
-
-// Enabled reports whether the named interface is enabled in the set.
-func (s InterfaceSet) Enabled(name string) bool {
-	switch name {
-	case "cli":
-		return s.CLI
-	case "webui":
-		return s.WebUI.Enabled
-	case "gateway":
-		return s.Gateway.Enabled
-	case "cron":
-		return s.Cron.Enabled
-	default:
-		return s.Extra[name]
-	}
-}
-
-// ConfigFor returns the generic config block for the named interface
-// (empty for interfaces without per-interface config).
-func (s InterfaceSet) ConfigFor(name string) InterfaceConfig {
-	switch name {
-	case "webui":
-		return s.WebUI
-	case "gateway":
-		return s.Gateway
-	case "cron":
-		return s.Cron
-	default:
-		return InterfaceConfig{}
-	}
-}
 
 // ── Portal observation + control (S000407) ──────────────────────────────
 
@@ -227,27 +176,41 @@ func (m *PortalMailbox) Close() {
 	m.mu.Unlock()
 }
 
-// Portal is the observation + control surface for one navi (S000407),
-// transport-agnostic: the same consumption/control pattern serves the
-// TUI in-process (binary run) or a remote gateway attachment. Queue
-// lifecycle events (and their delivery acks) fan from the queue's
-// OnEvent stream; per-thought agent events arrive via the runner
-// hook (ObserveAgent). Control actions arc through the public queue
-// API, so they emit the corresponding events back on the same stream.
-type Portal struct {
-	queue *thought.ThoughtQueue
+// Hub is the shared observation + control service for one navi
+// (S000407), transport-agnostic: it absorbs queue lifecycle events (and
+// their delivery acks) from the queue's event stream and the per-thought
+// agent events the runner forwards (ObserveAgent), fans both into
+// bounded subscriber mailboxes, and authorizes control actions.
+//
+// It is a SERVICE, not a front-end. Front-ends (the TUI in-process, a
+// remote gateway attachment) attach to it and consume a mailbox; each
+// runs in its own goroutine, and because the mailboxes are bounded with
+// drop-oldest and resumable cursors, a slow front-end degrades itself
+// and never the queue.
+//
+// It satisfies portal.Portal so the composition root can register it,
+// with one caveat worth stating plainly: it takes the queue at
+// construction rather than from Deps, because it needs subscription- and
+// observer-level access (the mailbox fanout, the agent-event hook) that
+// the component contract does not yet expose. That gap is what stops a
+// *front-end* from being its own portal, and it is tracked separately.
+type Hub struct {
+	queue *thought.Queue
 	auth  PortalAuthorizer
-	mu    sync.Mutex
-	subs  []*PortalMailbox
+	log   *slog.Logger
+
+	mu      sync.Mutex
+	subs    []*PortalMailbox
+	started bool
 }
 
-// NewPortal builds the portal over the navi's queue and subscribes it
+// NewHub builds the portal over the navi's queue and subscribes it
 // to the queue's OnEvent fanout. auth is the authorizer (nil fails
 // closed; S040200).
-func NewPortal(q *thought.ThoughtQueue, auth PortalAuthorizer) *Portal {
-	p := &Portal{queue: q, auth: auth}
+func NewHub(q *thought.Queue, auth PortalAuthorizer) *Hub {
+	p := &Hub{queue: q, auth: auth}
 	if q != nil {
-		q.OnEvent(func(ev thought.QueueEvent) {
+		q.OnEvent(func(ev thought.Event) {
 			p.fan(PortalEvent{
 				Category:  queueCategory(ev.Kind),
 				Kind:      string(ev.Kind),
@@ -263,7 +226,7 @@ func NewPortal(q *thought.ThoughtQueue, auth PortalAuthorizer) *Portal {
 
 // queueCategory buckets a queue event: delivery acks (S010312) are
 // PortalAck, everything else is a lifecycle PortalQueue event.
-func queueCategory(kind thought.QueueEventKind) PortalCategory {
+func queueCategory(kind thought.EventKind) PortalCategory {
 	if kind == thought.EventMessageRouted {
 		return PortalAck
 	}
@@ -272,7 +235,7 @@ func queueCategory(kind thought.QueueEventKind) PortalCategory {
 
 // Subscribe registers a mailbox and returns it to the caller; the
 // caller owns draining it (the serve path drains it per client).
-func (p *Portal) Subscribe(cap int) *PortalMailbox {
+func (p *Hub) Subscribe(cap int) *PortalMailbox {
 	m := NewPortalMailbox(cap)
 	p.mu.Lock()
 	p.subs = append(p.subs, m)
@@ -281,7 +244,7 @@ func (p *Portal) Subscribe(cap int) *PortalMailbox {
 }
 
 // Unsubscribe removes a mailbox from the fanout and closes it.
-func (p *Portal) Unsubscribe(m *PortalMailbox) {
+func (p *Hub) Unsubscribe(m *PortalMailbox) {
 	p.mu.Lock()
 	for i, s := range p.subs {
 		if s == m {
@@ -298,7 +261,7 @@ func (p *Portal) Unsubscribe(m *PortalMailbox) {
 // which several emits run under q.mu — it must never re-enter the
 // queue (the #280 discipline; all queue control goes through the
 // public queue API from the control methods below).
-func (p *Portal) fan(ev PortalEvent) {
+func (p *Hub) fan(ev PortalEvent) {
 	p.mu.Lock()
 	for _, m := range p.subs {
 		m.Push(ev)
@@ -333,7 +296,7 @@ func agentDetail(ev agent.AgentEvent) string {
 // calls, transitions) onto the stream. The runner forwards events
 // with the thought id it belongs to; the agent's own EventBus already
 // delivers asynchronously, so a slow observer never blocks the agent.
-func (p *Portal) ObserveAgent(thoughtID string, ev agent.AgentEvent) {
+func (p *Hub) ObserveAgent(thoughtID string, ev agent.AgentEvent) {
 	p.fan(PortalEvent{
 		Category:  PortalAgent,
 		Kind:      string(ev.Type),
@@ -345,7 +308,7 @@ func (p *Portal) ObserveAgent(thoughtID string, ev agent.AgentEvent) {
 
 // authorize applies the authorizer, if any. A nil authorizer refuses
 // everything (fail closed).
-func (p *Portal) authorize(action PortalAction, identity string) error {
+func (p *Hub) authorize(action PortalAction, identity string) error {
 	if p.auth == nil {
 		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", ErrPortalUnauthorized, action)
 	}
@@ -356,20 +319,20 @@ func (p *Portal) authorize(action PortalAction, identity string) error {
 // (S000407); the serve path begins streaming only for authorized
 // attachments. Unauthorized attempts are refused, never defaulted
 // open.
-func (p *Portal) Attach(identity string) error {
+func (p *Hub) Attach(identity string) error {
 	return p.authorize(PortalActAttach, identity)
 }
 
 // Steer routes a steering message to a running thought via the queue's
 // RouteMessage (S010312): the routing ack comes back on the stream.
-func (p *Portal) Steer(identity, thoughtID, text string) error {
+func (p *Hub) Steer(identity, thoughtID, text string) error {
 	if err := p.authorize(PortalActSteer, identity); err != nil {
 		return err
 	}
 	if p.queue == nil {
 		return fmt.Errorf("portal: no queue bound")
 	}
-	if _, err := p.queue.RouteMessage(thoughtID, text); err != nil {
+	if _, err := p.queue.RouteMessageWithPath(thoughtID, text); err != nil {
 		return err
 	}
 	return nil
@@ -377,18 +340,18 @@ func (p *Portal) Steer(identity, thoughtID, text string) error {
 
 // Pause parks a running thought (park-with-checkpoint semantics,
 // S010002); the paused event comes back on the stream.
-func (p *Portal) Pause(identity, thoughtID string) error {
+func (p *Hub) Pause(identity, thoughtID string) error {
 	if err := p.authorize(PortalActPause, identity); err != nil {
 		return err
 	}
 	if p.queue == nil {
 		return fmt.Errorf("portal: no queue bound")
 	}
-	return p.queue.Pause(thoughtID, nil)
+	return p.queue.PauseWithCheckpoint(thoughtID, nil)
 }
 
 // Resume re-queues a paused thought; the resumed event comes back.
-func (p *Portal) Resume(identity, thoughtID string) error {
+func (p *Hub) Resume(identity, thoughtID string) error {
 	if err := p.authorize(PortalActResume, identity); err != nil {
 		return err
 	}
@@ -400,7 +363,7 @@ func (p *Portal) Resume(identity, thoughtID string) error {
 
 // Cancel removes queued/paused work (running thoughts must be parked
 // first, per the queue); the cancelled event comes back.
-func (p *Portal) Cancel(identity, thoughtID string) error {
+func (p *Hub) Cancel(identity, thoughtID string) error {
 	if err := p.authorize(PortalActCancel, identity); err != nil {
 		return err
 	}
@@ -412,7 +375,7 @@ func (p *Portal) Cancel(identity, thoughtID string) error {
 
 // Enqueue schedules a thought through the queue; the enqueued event
 // comes back.
-func (p *Portal) Enqueue(identity string, t *thought.Thought) error {
+func (p *Hub) Enqueue(identity string, t *thought.Thought) error {
 	if err := p.authorize(PortalActEnqueue, identity); err != nil {
 		return err
 	}
@@ -425,7 +388,7 @@ func (p *Portal) Enqueue(identity string, t *thought.Thought) error {
 // BumpPriority changes a queued thought's priority through the queue's
 // BumpPriority (clamped by the queue; the operation result is the
 // immediate feedback — the queue itself emits no event for it).
-func (p *Portal) BumpPriority(identity, thoughtID string, prio int) error {
+func (p *Hub) BumpPriority(identity, thoughtID string, prio int) error {
 	if err := p.authorize(PortalActBump, identity); err != nil {
 		return err
 	}
@@ -438,7 +401,7 @@ func (p *Portal) BumpPriority(identity, thoughtID string, prio int) error {
 // Retry re-queues a failed thought (S010002): the queue's Retry flips
 // it back to pending; the enqueued(retry) event comes back on the
 // stream.
-func (p *Portal) Retry(identity, thoughtID string) error {
+func (p *Hub) Retry(identity, thoughtID string) error {
 	if err := p.authorize(PortalActRetry, identity); err != nil {
 		return err
 	}
@@ -450,6 +413,56 @@ func (p *Portal) Retry(identity, thoughtID string) error {
 
 // Queue returns the bound queue (serve paths use it to seed tests /
 // enqueue external work).
-func (p *Portal) Queue() *thought.ThoughtQueue {
+func (p *Hub) Queue() *thought.Queue {
 	return p.queue
 }
+
+// Start binds the hub to the navi-supplied handles and begins serving.
+//
+// Deps supplies the logger and the model registry. The queue arrived at
+// construction instead, because the hub needs subscription- and
+// observer-level access it does not expose — see the type comment for
+// why that matters and what it blocks.
+//
+// Start is idempotent: a composition root may call it once, and a caller
+// that repeats the call should not get a second subscription.
+func (h *Hub) Start(ctx context.Context, deps pubportal.Deps) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.started {
+		return nil
+	}
+	if deps.Log != nil {
+		h.log = deps.Log
+	}
+	h.started = true
+	return nil
+}
+
+// Stop ends serving: attached front-ends are dropped, so a stopped hub
+// cannot be mistaken for a live one. Control methods stay callable —
+// gating them would change behaviour for callers that never started a
+// hub, and that is not this split's business.
+func (h *Hub) Stop() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.started {
+		return nil
+	}
+	h.subs = nil
+	h.started = false
+	return nil
+}
+
+// Serving reports whether the hub has been started.
+func (h *Hub) Serving() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.started
+}
+
+// The hub is the navi's portal component: it satisfies the public
+// contract, so the composition root can register it. What it does NOT
+// yet support is a front-end being its own portal — that needs the
+// observation point the contract lacks.
+var _ pubportal.Portal = (*Hub)(nil)

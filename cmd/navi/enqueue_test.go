@@ -10,16 +10,16 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth permits every portal action: the shim-attachment test
 // seam (production wires nil and fails closed until IAM).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
 	return nil
 }
 
@@ -37,7 +37,7 @@ func servePortal(t *testing.T, allow bool) (string, *daemon.Runtime) {
 		addr = ln.Addr().String()
 		ln.Close()
 	}
-	var authz interfaces.PortalAuthorizer
+	var authz portal.PortalAuthorizer
 	if allow {
 		authz = allowAllAuth{}
 	}

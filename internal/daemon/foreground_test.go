@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // binaryParams assembles a foreground runtime over a temp DB.
@@ -31,7 +31,7 @@ func binaryEvents(content string) []llm.StreamEvent {
 	}
 }
 
-func waitDrain(t *testing.T, q *thought.ThoughtQueue, timeout time.Duration) {
+func waitDrain(t *testing.T, q *thought.Queue, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -195,7 +195,7 @@ func TestBinaryRunSteeringBridgeDelivers(t *testing.T) {
 	// message (RouteMessage → SetSteeringRouter closure → agent.Steer).
 	// Re-entry via GetThought inside RouteMessage is safe (outside
 	// q.mu) — proven by the bridge's snapshot use in tests.
-	path, err := rt.Queue.RouteMessage("fg-1", "steer: check tests")
+	path, err := rt.Queue.RouteMessageWithPath("fg-1", "steer: check tests")
 	if err != nil {
 		t.Fatalf("RouteMessage(running): %v", err)
 	}

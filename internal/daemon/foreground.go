@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // ── Binary-run support (S010003 §06) ─────────────────────────────────

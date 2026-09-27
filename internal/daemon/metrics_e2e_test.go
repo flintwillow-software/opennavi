@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // getFreePort grabs an ephemeral port for the metrics listener.

@@ -229,6 +229,13 @@ var migrations = []string{
 	// primary (and its fallback chain) and runtime model.
 	`ALTER TABLE thoughts ADD COLUMN provider TEXT`,
 	`ALTER TABLE thoughts ADD COLUMN model TEXT`,
+	// 9: thought completion message (NAVI-348) — the outcome a runner
+	// reports when a thought reaches complete, so "what did this thought
+	// produce?" is answerable from the queue rather than only from its
+	// session transcript. Expected to be revisited when the agent runner
+	// lands: a real agent produces tool calls and multi-turn state, not
+	// one string.
+	`ALTER TABLE thoughts ADD COLUMN result TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

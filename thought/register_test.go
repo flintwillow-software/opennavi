@@ -23,13 +23,13 @@ func queueDef(name string) registry.ToolDefinition {
 		Recovery:      "none",
 		Mode:          registry.ToolModeParallel,
 		PromptSnippet: "Test tool (" + name + ")",
-		SourceInfo:    registry.SourceInfo{Origin: registry.OriginSDK, Path: "internal/thought/register_test.go"},
+		SourceInfo:    registry.SourceInfo{Origin: registry.OriginSDK, Path: "thought/register_test.go"},
 	}
 }
 
 // handleSeen records the queue handle delivered to a handler.
 type handleSeen struct {
-	queue *ThoughtQueue
+	queue *Queue
 }
 
 func TestRegisterQueueToolsBindsHandle(t *testing.T) {

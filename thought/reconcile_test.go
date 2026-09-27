@@ -73,7 +73,7 @@ func waitReconcile(t *testing.T, timeout time.Duration, cond func() bool, what s
 	}
 }
 
-func reconcileQueue(t *testing.T, cfg Config, st *extStore) (*ThoughtQueue, func()) {
+func reconcileQueue(t *testing.T, cfg Config, st *extStore) (*Queue, func()) {
 	t.Helper()
 	if cfg.ReconcileInterval == 0 {
 		cfg.ReconcileInterval = 20 * time.Millisecond // test cadence
@@ -300,7 +300,7 @@ func TestReconcileEmitsOutsideLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q.OnEvent(func(ev QueueEvent) {
+	q.OnEvent(func(ev Event) {
 		if ev.Kind == EventEnqueued && ev.Detail == "external-adopted" {
 			// Re-entry: would deadlock if the event source held q.mu.
 			_, _ = q.GetThought(ev.ThoughtID)

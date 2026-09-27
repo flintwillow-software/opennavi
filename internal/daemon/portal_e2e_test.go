@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth is an authorizer that permits every identity/action:
@@ -22,7 +22,7 @@ import (
 // nil (fail closed).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
 	return nil
 }
 

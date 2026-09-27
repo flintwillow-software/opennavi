@@ -14,9 +14,9 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // allowAllAuth permits every portal action: the shim-attachment test
@@ -24,7 +24,7 @@ import (
 // the in-process local-trust authorizer).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
 	return nil
 }
 
@@ -35,7 +35,7 @@ func sessionSessions(t *testing.T) *session.SessionManager {
 	return session.NewSessionManager(session.NewMemoryStore())
 }
 
-func newQueue(t *testing.T) *thought.ThoughtQueue {
+func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
 	if err != nil {
@@ -61,7 +61,7 @@ func drain(m *tuiModel) {
 }
 
 func TestLocalAuthorizerPermitsLocal(t *testing.T) {
-	if err := (LocalAuthorizer{}).Authorize(interfaces.PortalActSteer, LocalIdentity); err != nil {
+	if err := (LocalAuthorizer{}).Authorize(portal.PortalActSteer, LocalIdentity); err != nil {
 		t.Errorf("local authorizer refused local control: %v", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	}
 
 	// Complete it: the lifecycle transition lands within one drain.
-	if err := q.Complete("t1"); err != nil {
+	if err := q.Complete("t1", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
@@ -106,7 +106,7 @@ func TestModelAckDisplay(t *testing.T) {
 	if err := q.Enqueue(th("t2", 4)); err != nil {
 		t.Fatal(err)
 	}
-	path, err := q.RouteMessage("t2", "hello")
+	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil || path != thought.PathContextAppend {
 		t.Fatalf("RouteMessage: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestModelLiveView(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("t3 not claimable")
 	}
-	if err := q.Complete("t3"); err != nil {
+	if err := q.Complete("t3", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
@@ -749,7 +749,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 		t.Errorf("tool preview / activity line missing:\n%s", m.View())
 	}
 	// Completion clears the activity line.
-	if err := q.Complete("run1"); err != nil {
+	if err := q.Complete("run1", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 func openThoughtStore(t *testing.T) (*Store, *ThoughtStore) {
@@ -267,5 +267,39 @@ func TestThoughtStoreProviderModelRoundTrip(t *testing.T) {
 	}
 	if p.Provider != "" || p.Model != "" {
 		t.Fatalf("unset provider/model became non-empty")
+	}
+}
+
+// TestThoughtStoreResultRoundTrip covers the completion message: it is
+// the only place a thought's outcome lives apart from its session
+// transcript, so a persistence regression here silently loses the answer.
+func TestThoughtStoreResultRoundTrip(t *testing.T) {
+	_, ts := openThoughtStore(t)
+
+	want := &thought.Thought{ID: "t-result", Prompt: "p", Status: thought.ThoughtComplete,
+		Result: "pong, with punctuation: \"quoted\" and a newline\n"}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Result != want.Result {
+		t.Fatalf("result round trip:\n got %q\nwant %q", got.Result, want.Result)
+	}
+
+	// A thought that has not completed carries no result, and an empty
+	// result must stay empty rather than becoming NULL-ish text.
+	pending := &thought.Thought{ID: "t-pending", Prompt: "p", Status: thought.ThoughtPending}
+	if err := ts.SaveThought(pending); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ts.LoadThought("t-pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Result != "" {
+		t.Fatalf("unset result became %q", p.Result)
 	}
 }

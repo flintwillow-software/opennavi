@@ -3,7 +3,7 @@ package cron
 import (
 	"sync"
 
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // memoryEnqueuer records enqueued thoughts (implements Enqueuer).

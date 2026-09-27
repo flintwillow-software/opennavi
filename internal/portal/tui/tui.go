@@ -26,9 +26,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/internal/thought"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // LocalIdentity is the identity the in-process front door presents.
@@ -44,7 +44,7 @@ const DefaultFeedCap = 1024
 // control stays fail-closed until IAM lands.
 type LocalAuthorizer struct{}
 
-func (a LocalAuthorizer) Authorize(action interfaces.PortalAction, identity string) error {
+func (a LocalAuthorizer) Authorize(action portal.PortalAction, identity string) error {
 	return nil
 }
 
@@ -56,7 +56,7 @@ func (a LocalAuthorizer) Authorize(action interfaces.PortalAction, identity stri
 // them).
 type Transport interface {
 	// Feed returns this transport's subscription mailbox.
-	Feed() *interfaces.PortalMailbox
+	Feed() *portal.PortalMailbox
 	// Snapshot returns current queue state for seeding (in-process:
 	// full; remote: converges from events, may return empty).
 	Snapshot() ([]*thought.Thought, error)
@@ -88,23 +88,23 @@ type Transport interface {
 // the transport access to persisted transcripts for replay (NAVI-334;
 // nil = no replay source).
 type inProcessTransport struct {
-	portal   *interfaces.Portal
-	feed     *interfaces.PortalMailbox
+	portal   *portal.Hub
+	feed     *portal.PortalMailbox
 	sessions *session.SessionManager
 }
 
 // NewInProcess builds the in-process transport over the navi's queue.
 // sessions (the runtime's SessionManager) enables transcript replay;
 // pass nil to disable.
-func NewInProcess(q *thought.ThoughtQueue, sessions *session.SessionManager) (*inProcessTransport, error) {
+func NewInProcess(q *thought.Queue, sessions *session.SessionManager) (*inProcessTransport, error) {
 	if q == nil {
 		return nil, errors.New("tui: in-process transport requires a queue")
 	}
-	p := interfaces.NewPortal(q, LocalAuthorizer{})
+	p := portal.NewHub(q, LocalAuthorizer{})
 	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap), sessions: sessions}, nil
 }
 
-func (t *inProcessTransport) Feed() *interfaces.PortalMailbox { return t.feed }
+func (t *inProcessTransport) Feed() *portal.PortalMailbox { return t.feed }
 func (t *inProcessTransport) Snapshot() ([]*thought.Thought, error) {
 	if t.portal.Queue() == nil {
 		return []*thought.Thought{}, nil
@@ -196,7 +196,7 @@ func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Ti
 type remoteTransport struct {
 	base     string
 	identity string
-	feed     *interfaces.PortalMailbox
+	feed     *portal.PortalMailbox
 	mu       sync.Mutex
 	cursor   int
 	closed   bool
@@ -212,14 +212,14 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 	t := &remoteTransport{
 		base:     base,
 		identity: identity,
-		feed:     interfaces.NewPortalMailbox(DefaultFeedCap),
+		feed:     portal.NewPortalMailbox(DefaultFeedCap),
 		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 	go t.pump()
 	return t, nil
 }
 
-func (t *remoteTransport) Feed() *interfaces.PortalMailbox { return t.feed }
+func (t *remoteTransport) Feed() *portal.PortalMailbox { return t.feed }
 
 // Snapshot: remote clients converge from the event stream (the shim
 // has no snapshot endpoint); returns empty for the seed.
@@ -262,8 +262,8 @@ func (t *remoteTransport) ingest(body string) {
 	}
 	evs, _ := doc["events"].([]any)
 	if v, ok := doc["lost"].(bool); ok && v {
-		t.feed.Push(interfaces.PortalEvent{
-			Category: interfaces.PortalQueue,
+		t.feed.Push(portal.PortalEvent{
+			Category: portal.PortalQueue,
 			Kind:     "stream_lost",
 			Detail:   "portal stream dropped events (resume gap)",
 			At:       time.Now().UTC(),
@@ -280,8 +280,8 @@ func (t *remoteTransport) ingest(body string) {
 			}
 			return ""
 		}
-		t.feed.Push(interfaces.PortalEvent{
-			Category:  interfaces.PortalCategory(str("category")),
+		t.feed.Push(portal.PortalEvent{
+			Category:  portal.PortalCategory(str("category")),
 			Kind:      str("kind"),
 			ThoughtID: str("thoughtID"),
 			Detail:    str("detail"),
@@ -426,7 +426,7 @@ type row struct {
 
 // feedMsg delivers a drained mailbox batch to the model.
 type feedMsg struct {
-	evs  []interfaces.PortalEvent
+	evs  []portal.PortalEvent
 	lost bool
 }
 
@@ -439,7 +439,7 @@ type tickMsg struct{}
 // only assembled by Run).
 type tuiModel struct {
 	transport Transport
-	feed      *interfaces.PortalMailbox
+	feed      *portal.PortalMailbox
 	cursor    int
 	rows      []row
 	byID      map[string]int
@@ -591,17 +591,17 @@ func (m *tuiModel) applyFeed(f feedMsg) {
 	}
 	for _, ev := range f.evs {
 		switch ev.Category {
-		case interfaces.PortalQueue:
+		case portal.PortalQueue:
 			m.queueEvent(ev)
-		case interfaces.PortalAck:
+		case portal.PortalAck:
 			m.ackEvent(ev)
-		case interfaces.PortalAgent:
+		case portal.PortalAgent:
 			m.agentEvent(ev)
 		}
 	}
 }
 
-func (m *tuiModel) queueEvent(ev interfaces.PortalEvent) {
+func (m *tuiModel) queueEvent(ev portal.PortalEvent) {
 	if ev.Kind == "stream_lost" {
 		m.lost = true
 		m.status = ev.Detail
@@ -654,7 +654,7 @@ func displayStatus(kind string) string {
 	return kind
 }
 
-func (m *tuiModel) ackEvent(ev interfaces.PortalEvent) {
+func (m *tuiModel) ackEvent(ev portal.PortalEvent) {
 	if ev.Kind == "message_routed" {
 		// Steering deliveries render as user turns in the live chat
 		// window, at the point they were injected (NAVI-330):
@@ -673,7 +673,7 @@ func (m *tuiModel) ackEvent(ev interfaces.PortalEvent) {
 	m.status = fmt.Sprintf("%s: %s", ev.ThoughtID, ev.Detail)
 }
 
-func (m *tuiModel) agentEvent(ev interfaces.PortalEvent) {
+func (m *tuiModel) agentEvent(ev portal.PortalEvent) {
 	if m.mode == ModeLive && ev.ThoughtID == m.liveID {
 		m.chatAgentEvent(ev)
 		return
@@ -688,7 +688,7 @@ func (m *tuiModel) agentEvent(ev interfaces.PortalEvent) {
 
 // chatAgentEvent feeds an agent event into the live chat window turns
 // (NAVI-330). Only called for the live view's own thought.
-func (m *tuiModel) chatAgentEvent(ev interfaces.PortalEvent) {
+func (m *tuiModel) chatAgentEvent(ev portal.PortalEvent) {
 	switch ev.Kind {
 	case "content_delta":
 		// Accumulate deltas into ONE assistant turn.
@@ -714,7 +714,7 @@ func (m *tuiModel) chatAgentEvent(ev interfaces.PortalEvent) {
 
 // homeAgentEvent updates the running thought's row preview + the
 // status activity line from agent events (NAVI-335).
-func (m *tuiModel) homeAgentEvent(ev interfaces.PortalEvent) {
+func (m *tuiModel) homeAgentEvent(ev portal.PortalEvent) {
 	preview := ""
 	switch ev.Kind {
 	case "content_delta":

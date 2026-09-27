@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	clifw "github.com/flintwillow-software/opennavi/internal/interfaces/cli"
+	clifw "github.com/flintwillow-software/opennavi/internal/portal/cli"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 

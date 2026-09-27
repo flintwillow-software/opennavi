@@ -330,7 +330,7 @@ func TestQueuePreemption(t *testing.T) {
 
 	// The worker honours the request: Pause with the runner's snapshot
 	// frees the slot, and high becomes claimable.
-	if err := q.Pause("low", []byte("low-checkpoint")); err != nil {
+	if err := q.PauseWithCheckpoint("low", []byte("low-checkpoint")); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := q.Dequeue()
@@ -383,7 +383,7 @@ func TestQueuePauseResume(t *testing.T) {
 		t.Fatal("a should be claimable")
 	}
 
-	if err := q.Pause("a", []byte("checkpoint-data")); err != nil {
+	if err := q.PauseWithCheckpoint("a", []byte("checkpoint-data")); err != nil {
 		t.Fatal(err)
 	}
 	// Slot freed: a new thought can now be claimed.
@@ -402,7 +402,7 @@ func TestQueuePauseResume(t *testing.T) {
 	if _, ok := q.Dequeue(); ok {
 		t.Fatal("a must wait: the only slot is busy with b")
 	}
-	if err := q.Complete("b"); err != nil {
+	if err := q.Complete("b", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := q.Dequeue()
@@ -433,7 +433,7 @@ func TestQueueCancelLifecycle(t *testing.T) {
 	if err := q.Cancel("r"); err == nil {
 		t.Fatal("cancel of running thought should fail")
 	}
-	if err := q.Pause("r", nil); err != nil {
+	if err := q.PauseWithCheckpoint("r", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Cancel("r"); err != nil {
@@ -473,7 +473,7 @@ func TestQueueCompleteFailRetry(t *testing.T) {
 	if !ok || got.ID != "t" {
 		t.Fatalf("retried thought not claimable: %v, %v", got, ok)
 	}
-	if err := q.Complete("t"); err != nil {
+	if err := q.Complete("t", ""); err != nil {
 		t.Fatal(err)
 	}
 	done, _ := q.GetThought("t")
@@ -738,7 +738,7 @@ func TestTerminalThoughtsNotScheduled(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Complete("t"); err != nil {
+	if err := q.Complete("t", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Dequeue must not re-claim the terminal thought.
@@ -823,4 +823,57 @@ func TestPoolCopyInCopyOutIsolatesRunner(t *testing.T) {
 		t.Fatal("runner SessionID mutation leaked into queue state")
 	}
 	p.StopAndWait()
+}
+
+// TestCompleteRecordsTheResult covers the completion message at the queue
+// level: the worker hands the runner's reported outcome to Complete, and
+// that outcome must be readable from the queue afterwards — it is the
+// only place a thought's result lives apart from its session transcript.
+func TestCompleteRecordsTheResult(t *testing.T) {
+	q, err := NewQueue(Config{MaxConcurrent: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Enqueue(&Thought{ID: "t-result", Prompt: "p", Priority: 5, Status: ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok := q.Dequeue()
+	if !ok {
+		t.Fatal("thought was not claimable")
+	}
+	if err := q.Complete(claimed.ID, "the answer"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := q.GetThought("t-result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Result != "the answer" {
+		t.Fatalf("result = %q, want %q", got.Result, "the answer")
+	}
+	if got.Status != ThoughtComplete {
+		t.Fatalf("status = %q", got.Status)
+	}
+
+	// A thought that fails carries no completion message — its detail
+	// lives on the failure, and conflating the two would make "what did
+	// this produce?" answerable for work that produced nothing.
+	if err := q.Enqueue(&Thought{ID: "t-fail", Prompt: "p", Priority: 5, Status: ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	failed, ok := q.Dequeue()
+	if !ok {
+		t.Fatal("second thought was not claimable")
+	}
+	if err := q.Fail(failed.ID, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	f, err := q.GetThought("t-fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Result != "" {
+		t.Fatalf("a failed thought must carry no result, got %q", f.Result)
+	}
 }

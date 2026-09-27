@@ -103,6 +103,9 @@ func (r *CompletionRunner) Run(ctx context.Context, t *thought.Thought) error {
 		r.log.Warn("thought produced no visible content",
 			"thought", t.ID, "provider", provider.Name(), "model", modelName)
 	}
+	// The completion message rides the thought, so the queue itself can
+	// answer "what did this produce?" without going to the transcript.
+	t.Result = reply
 	return r.navi.record(t, msgs, reply)
 }
 
@@ -140,7 +143,7 @@ func (n *Navi) workLoop(ctx context.Context) {
 		// cover several thoughts, and Dequeue returns false both for
 		// "empty" and "no slot free".
 		for {
-			t, ok := n.Thoughts.dequeue()
+			t, ok := n.Thoughts.Dequeue()
 			if !ok {
 				break
 			}
@@ -158,7 +161,7 @@ func (n *Navi) workLoop(ctx context.Context) {
 func (n *Navi) runOne(ctx context.Context, t *thought.Thought) {
 	err := n.runner.Run(ctx, t)
 	if err == nil {
-		if cerr := n.Thoughts.complete(t.ID); cerr != nil {
+		if cerr := n.Thoughts.Complete(t.ID, t.Result); cerr != nil {
 			n.log.Error("record thought completion", "thought", t.ID, "err", cerr)
 		}
 		return
@@ -175,7 +178,7 @@ func (n *Navi) runOne(ctx context.Context, t *thought.Thought) {
 	}
 
 	n.log.Error("thought failed", "thought", t.ID, "err", err)
-	if ferr := n.Thoughts.fail(t.ID, err.Error()); ferr != nil {
+	if ferr := n.Thoughts.Fail(t.ID, err.Error()); ferr != nil {
 		n.log.Error("record thought failure", "thought", t.ID, "err", ferr)
 	}
 }
@@ -228,3 +231,9 @@ func (n *Navi) sessionFor(t *thought.Thought) (*store.Session, error) {
 
 // SessionStore returns the store backing thought transcripts.
 func (n *Navi) SessionStore() store.Store { return n.sessions }
+
+// watchForWork wakes the execution pool whenever the thought system
+// reports activity — enqueue, resume, retry, or a freed slot.
+func (n *Navi) watchForWork() {
+	n.Thoughts.OnEvent(func(thought.Event) { n.dispatch.signal() })
+}
