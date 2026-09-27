@@ -1,7 +1,7 @@
 // Portal serve shim (S000407): the daemon serves the portal stream +
 // control channel so a remote gateway attachment can observe the
 // navi's thought process and — once IAM lands — control it. The
-// contract (internal/portal.Portal) is transport-agnostic; this
+// contract (internal/portal.Hub) is transport-agnostic; this
 // file provides the thin loopback-grade JSON mapping the daemon's
 // gateway serves. The real wire protocol is deferred to 05-messaging
 // (spec says so); until then this shim mirrors the --metrics-addr

@@ -16,9 +16,9 @@ import (
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
-	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
@@ -70,7 +70,7 @@ type Runtime struct {
 	// Portal is the served observation/control surface (S000407); nil
 	// when PortalAddr is unset (zero cost). PortalBuf is the served
 	// stream's bounded mailbox (single attachment for the shim).
-	Portal    *portal.Portal
+	Portal    *portal.Hub
 	PortalBuf *portal.PortalMailbox
 }
 
@@ -319,10 +319,10 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// No authorizer is wired in production (OverrideAuthorizer is a
 	// test seam): IAM lands later, so attachments and control fail
 	// closed until then (S040200 fail-closed stub).
-	var portalPlane *portal.Portal
+	var portalPlane *portal.Hub
 	var portalBuf *portal.PortalMailbox
 	if params.PortalAddr != "" {
-		portalPlane = portal.NewPortal(q, params.OverrideAuthorizer)
+		portalPlane = portal.NewHub(q, params.OverrideAuthorizer)
 		portalBuf = portalPlane.Subscribe(DefaultPortalMailboxCap)
 	}
 

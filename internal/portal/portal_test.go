@@ -95,7 +95,7 @@ func TestMailboxClosedDrops(t *testing.T) {
 
 func TestPortalFansQueueLifecycle(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t1")); err != nil {
@@ -128,7 +128,7 @@ func TestPortalFansQueueLifecycle(t *testing.T) {
 
 func TestPortalFansDeliveryAck(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	if err := q.Enqueue(thoughtT("t2")); err != nil {
@@ -159,7 +159,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 
 func TestObserveAgentFansToSubscribers(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(32)
 
 	p.ObserveAgent("t9", agent.AgentEvent{
@@ -190,7 +190,7 @@ func TestObserveAgentFansToSubscribers(t *testing.T) {
 
 func TestControlActionsApplyAndEmit(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(64)
 
 	if err := p.Enqueue("u1", thoughtT("pending-1")); err != nil {
@@ -244,7 +244,7 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	q := newQueue(t)
 
 	// No authorizer: every action fails closed (S040200).
-	p := NewPortal(q, nil)
+	p := NewHub(q, nil)
 	if err := p.Attach("u"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach: %v, want ErrPortalUnauthorized", err)
 	}
@@ -265,18 +265,18 @@ func TestUnauthorizedControlRefused(t *testing.T) {
 	}
 
 	// A wired authorizer that refuses is equally enforced.
-	denyPortal := NewPortal(q, denyAuth{})
+	denyPortal := NewHub(q, denyAuth{})
 	if err := denyPortal.Steer("u", "x", "hi"); err == nil || errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("deny-auth steer: %v, want a refusal", err)
 	}
 }
 
 func TestAttach(t *testing.T) {
-	p := NewPortal(newQueue(t), allowAuth{})
+	p := NewHub(newQueue(t), allowAuth{})
 	if err := p.Attach("tui"); err != nil {
 		t.Fatalf("attach with allow authorizer: %v", err)
 	}
-	closed := NewPortal(newQueue(t), nil)
+	closed := NewHub(newQueue(t), nil)
 	if err := closed.Attach("tui"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach without authorizer: %v, want unauthorized", err)
 	}
@@ -284,7 +284,7 @@ func TestAttach(t *testing.T) {
 
 func TestUnsubscribeStopsFan(t *testing.T) {
 	q := newQueue(t)
-	p := NewPortal(q, allowAuth{})
+	p := NewHub(q, allowAuth{})
 	mb := p.Subscribe(16)
 	p.Unsubscribe(mb)
 	if err := q.Enqueue(thoughtT("t1")); err != nil {

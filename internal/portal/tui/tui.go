@@ -88,7 +88,7 @@ type Transport interface {
 // the transport access to persisted transcripts for replay (NAVI-334;
 // nil = no replay source).
 type inProcessTransport struct {
-	portal   *portal.Portal
+	portal   *portal.Hub
 	feed     *portal.PortalMailbox
 	sessions *session.SessionManager
 }
@@ -100,7 +100,7 @@ func NewInProcess(q *thought.Queue, sessions *session.SessionManager) (*inProces
 	if q == nil {
 		return nil, errors.New("tui: in-process transport requires a queue")
 	}
-	p := portal.NewPortal(q, LocalAuthorizer{})
+	p := portal.NewHub(q, LocalAuthorizer{})
 	return &inProcessTransport{portal: p, feed: p.Subscribe(DefaultFeedCap), sessions: sessions}, nil
 }
 
