@@ -1,6 +1,6 @@
 // Package cli is the CLI delivery interface: an interactive chat REPL
 // over the agent runtime and session store (#226), formalized behind
-// the interfaces.Interface contract (#141). The full TUI (Bubble Tea,
+// its own contract (#141). The full TUI (Bubble Tea,
 // differential rendering) per spec §01.1 is a follow-up that replaces
 // the REPL front-end; the wiring below is what it reuses.
 package cli
@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
@@ -32,10 +31,10 @@ type Config struct {
 	Out           io.Writer
 }
 
-// Name implements interfaces.Interface.
+// Name identifies the mode.
 func (c *Config) Name() string { return "cli" }
 
-// Run implements interfaces.Interface: blocks serving the REPL until
+// Run blocks serving the REPL until
 // stdin is exhausted or ctx is cancelled.
 func (c *Config) Run(ctx context.Context) error {
 	cipher, err := sqlite.CipherFromEnv()
@@ -50,13 +49,17 @@ func (c *Config) Run(ctx context.Context) error {
 	return runREPL(ctx, c.In, c.Out, store, c)
 }
 
-// Stop implements interfaces.Interface. The REPL is stdin-driven;
+// Stop ends the REPL. The REPL is stdin-driven;
 // closing stdin (the shell/parent's job on shutdown) ends it. Nothing
 // to stop actively.
 func (c *Config) Stop() error { return nil }
 
-// Ensure the config satisfies the interface contract.
-var _ interfaces.Interface = (*Config)(nil)
+// NOTE — this mode deliberately does NOT implement portal.Portal. It
+// runs its own agent REPL rather than driving the thought queue, so
+// porting it onto the contract (Deps + control actions) is a behaviour
+// change to the interactive path, not a signature change. That belongs
+// with the cmd/navi rebuild rather than with the interface-set split.
+// It keeps Name/Run/Stop as its own surface in the meantime.
 
 // REPL state: one live agent + its bound session (nil until /new or
 // /resume).

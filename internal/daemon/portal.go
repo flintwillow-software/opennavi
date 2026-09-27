@@ -1,7 +1,7 @@
 // Portal serve shim (S000407): the daemon serves the portal stream +
 // control channel so a remote gateway attachment can observe the
 // navi's thought process and — once IAM lands — control it. The
-// contract (internal/interfaces.Portal) is transport-agnostic; this
+// contract (internal/portal.Portal) is transport-agnostic; this
 // file provides the thin loopback-grade JSON mapping the daemon's
 // gateway serves. The real wire protocol is deferred to 05-messaging
 // (spec says so); until then this shim mirrors the --metrics-addr
@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -84,7 +84,7 @@ func serveEvents(w http.ResponseWriter, r *http.Request, d *Runtime) {
 		return
 	}
 	if aerr := d.Portal.Attach(attachIdentity(r)); aerr != nil {
-		if errors.Is(aerr, interfaces.ErrPortalUnauthorized) {
+		if errors.Is(aerr, portal.ErrPortalUnauthorized) {
 			http.Error(w, "portal: unauthorized (fail closed)", http.StatusForbidden)
 			return
 		}
@@ -196,7 +196,7 @@ func serveControl(w http.ResponseWriter, r *http.Request, d *Runtime) {
 	}
 
 	if ctrlErr != nil {
-		if errors.Is(ctrlErr, interfaces.ErrPortalUnauthorized) {
+		if errors.Is(ctrlErr, portal.ErrPortalUnauthorized) {
 			http.Error(w, "portal: unauthorized (fail closed)", http.StatusForbidden)
 			return
 		}

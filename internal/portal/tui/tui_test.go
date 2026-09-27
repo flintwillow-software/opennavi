@@ -14,7 +14,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/interfaces"
+	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -24,7 +24,7 @@ import (
 // the in-process local-trust authorizer).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action interfaces.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
 	return nil
 }
 
@@ -61,7 +61,7 @@ func drain(m *tuiModel) {
 }
 
 func TestLocalAuthorizerPermitsLocal(t *testing.T) {
-	if err := (LocalAuthorizer{}).Authorize(interfaces.PortalActSteer, LocalIdentity); err != nil {
+	if err := (LocalAuthorizer{}).Authorize(portal.PortalActSteer, LocalIdentity); err != nil {
 		t.Errorf("local authorizer refused local control: %v", err)
 	}
 }
