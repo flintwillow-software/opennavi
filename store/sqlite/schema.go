@@ -236,6 +236,10 @@ var migrations = []string{
 	// lands: a real agent produces tool calls and multi-turn state, not
 	// one string.
 	`ALTER TABLE thoughts ADD COLUMN result TEXT`,
+	// 10: per-thought mode (ADR 0007) — the capability profile the runner
+	// resolves the tool surface, permission ceiling, and optional model
+	// from. Empty selects the navi's default surface.
+	`ALTER TABLE thoughts ADD COLUMN mode TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
