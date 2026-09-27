@@ -1,16 +1,12 @@
-// Command navi is the minimal CLI entry point: dispatches subcommands
-// (run, enqueue, health; daemon as a deprecated alias) or falls
-// through to the interactive chat REPL.
+// Command navi is the reference navi CLI: it dispatches subcommands
+// (run, enqueue, health; daemon as a deprecated alias for `run
+// --daemon`). With no subcommand it runs the navi — the TUI by default,
+// headless when `--daemon` is passed.
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
 	"os"
-
-	clifw "github.com/flintwillow-software/opennavi/internal/portal/cli"
-	"github.com/flintwillow-software/opennavi/store/sqlite"
 )
 
 func main() {
@@ -49,38 +45,8 @@ func main() {
 		}
 	}
 
-	// Default: chat REPL.
-	dbPath := flag.String("db", "./navi.db", "path to the session SQLite database")
-	model := flag.String("model", "", "Ollama model name (required)")
-	ollamaHost := flag.String("ollama-host", "", "Ollama base URL (default $OLLAMA_HOST or http://localhost:11434)")
-	workDir := flag.String("workdir", ".", "working directory for file/shell tools")
-	compactBudget := flag.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
-	systemPrompt := flag.String("system-prompt", "", "system prompt for the agent")
-	flag.Parse()
-
-	cipher, err := sqlite.CipherFromEnv()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "navi:", err)
-		os.Exit(1)
-	}
-	store, err := sqlite.Open(*dbPath, sqlite.Options{Cipher: cipher})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "navi:", err)
-		os.Exit(1)
-	}
-	defer store.Close()
-
-	cfg := &clifw.Config{
-		DBPath:        *dbPath,
-		Model:         *model,
-		OllamaHost:    *ollamaHost,
-		WorkDir:       *workDir,
-		SystemPrompt:  *systemPrompt,
-		CompactBudget: *compactBudget,
-		In:            os.Stdin,
-		Out:           os.Stdout,
-	}
-	if err := cfg.Run(context.Background()); err != nil {
+	// Default: run the navi (TUI, or headless with --daemon).
+	if err := runInteractive(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "navi:", err)
 		os.Exit(1)
 	}
