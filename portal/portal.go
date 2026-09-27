@@ -15,16 +15,20 @@ import (
 )
 
 // Deps hands a portal the handles it needs (ADR 0004 rule 2): the
-// thought system for observation/control, the model registry, and
-// the logger. NO memory handle — short-term memory is navi-internal
-// working state (not an extension surface) and long-term memory
-// search is a tool against the M4 contract (same rationale as
-// connector.Deps).
+// thought system for observation/control, the model registry, the
+// bounded observation stream, and the logger. NO memory handle —
+// short-term memory is navi-internal working state (not an extension
+// surface) and long-term memory search is a tool against the M4
+// contract (same rationale as connector.Deps).
 type Deps struct {
 	// ThoughtSystem is the navi's queue handle.
 	ThoughtSystem thought.ThoughtSystem
 	// Model is the provider registry.
 	Model model.Registry
+	// Observation is the bounded, cursor-ed view of queue + running-agent
+	// events (NAVI-352). A portal renders a running thought's output from
+	// this alone, with no runtime hook.
+	Observation Observer
 	// Log is the shared structured logger (stdlib log/slog).
 	Log *slog.Logger
 }

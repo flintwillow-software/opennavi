@@ -63,6 +63,11 @@ type Navi struct {
 	// Thoughts is the thought system. It is core, not added (ADR 0003).
 	Thoughts *thought.Queue
 
+	// observation is the bounded observation fanout (NAVI-352): queue
+	// lifecycle events and running-agent events merge here and reach
+	// portals through portal.Deps.
+	observation *portal.Broker
+
 	log *slog.Logger
 
 	// runtimeFile is the runtime config path (WithRuntimeConfig).
@@ -180,6 +185,14 @@ func New(name string, opts ...Option) *Navi {
 	}
 	if n.Thoughts != nil {
 		n.watchForWork()
+	}
+	// The observation fanout merges queue lifecycle and running-agent
+	// events; portals subscribe to it through portal.Deps (NAVI-352).
+	n.observation = portal.NewBroker()
+	if n.Thoughts != nil {
+		n.Thoughts.OnEvent(func(ev thought.Event) {
+			n.observation.Publish(portal.QueueEvent(ev))
+		})
 	}
 	return n
 }
@@ -405,7 +418,7 @@ func (n *Navi) Serving() bool {
 // stopped — a half-serving navi is not a state worth having.
 func (n *Navi) serve(ctx context.Context) error {
 	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
-	pdeps := portal.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
+	pdeps := portal.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log, Observation: n.observation}
 
 	var started []func()
 	stopAll := func() {
