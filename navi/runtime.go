@@ -84,14 +84,22 @@ func (n *Navi) assemble() error {
 		// the default is still resolved so the selection remains
 		// reportable.
 		n.providers = set
-		return nil
-	}
-	if sel.Provider != "" {
-		if _, err := set.For(sel.Provider); err != nil {
-			return fmt.Errorf("navi: default provider: %w", err)
+	} else {
+		if sel.Provider != "" {
+			if _, err := set.For(sel.Provider); err != nil {
+				return fmt.Errorf("navi: default provider: %w", err)
+			}
 		}
+		n.providers = set
 	}
-	n.providers = set
+
+	// Build the runtime tool registry from the declared collection and set
+	// the compiled default active set under the permission ceiling.
+	reg, err := n.buildRegistry()
+	if err != nil {
+		return err
+	}
+	n.registry = reg
 	return nil
 }
 

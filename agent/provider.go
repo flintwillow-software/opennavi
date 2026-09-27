@@ -63,7 +63,45 @@ func (p *OllamaProvider) Close() error {
 // Stream adapts agent types onto llm.Provider.Stream and maps llm
 // stream events back onto agent Events.
 func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools []AgentTool, config AgentConfig) (<-chan Event, error) {
-	events, err := p.inner.Stream(ctx, toLLMMessages(messages), toLLMTools(tools), agentConfigToLLM(config))
+	return streamFromLLM(ctx, p.inner, "ollama", messages, tools, config)
+}
+
+// LLMProviderAdapter adapts any llm.Provider onto the agent's
+// ProviderInterface. Unlike OllamaProvider — which binds the provider
+// layer's Ollama client — this accepts an arbitrary llm.Provider, so a
+// composition root (or a test) can drive the agent loop with the
+// provider it resolved (ADR 0009) without depending on the ollama
+// adapter. name is the logical provider name carried on llm.Config.
+type LLMProviderAdapter struct {
+	inner llm.Provider
+	name  string
+}
+
+// NewProviderAdapter wraps p, forwarding name to llm.Config.Provider.
+func NewProviderAdapter(p llm.Provider, name string) *LLMProviderAdapter {
+	return &LLMProviderAdapter{inner: p, name: name}
+}
+
+// Stream adapts agent types onto the wrapped provider.
+func (p *LLMProviderAdapter) Stream(ctx context.Context, messages []Message, tools []AgentTool, config AgentConfig) (<-chan Event, error) {
+	return streamFromLLM(ctx, p.inner, p.name, messages, tools, config)
+}
+
+// Close releases the wrapped provider's resources when it supports
+// closing.
+func (p *LLMProviderAdapter) Close() error {
+	if closer, ok := p.inner.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+// streamFromLLM is the shared agent<->llm stream bridge: it forwards the
+// conversation and maps llm stream events onto agent events. Both
+// OllamaProvider and LLMProviderAdapter route through it, so the mapping
+// lives in one place.
+func streamFromLLM(ctx context.Context, inner llm.Provider, name string, messages []Message, tools []AgentTool, config AgentConfig) (<-chan Event, error) {
+	events, err := inner.Stream(ctx, toLLMMessages(messages), toLLMTools(tools), agentConfigToLLM(name, config))
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +159,9 @@ func errString(err error) string {
 	return err.Error()
 }
 
-func agentConfigToLLM(config AgentConfig) llm.Config {
+func agentConfigToLLM(name string, config AgentConfig) llm.Config {
 	return llm.Config{
-		Provider:    "ollama",
+		Provider:    name,
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		MaxTokens:   config.MaxTokens,
@@ -161,5 +199,8 @@ func toLLMTools(tools []AgentTool) []llm.Tool {
 	return out
 }
 
-// Compile-time check: the adapter satisfies the agent-side contract.
-var _ ProviderInterface = (*OllamaProvider)(nil)
+// Compile-time check: the adapters satisfy the agent-side contract.
+var (
+	_ ProviderInterface = (*OllamaProvider)(nil)
+	_ ProviderInterface = (*LLMProviderAdapter)(nil)
+)

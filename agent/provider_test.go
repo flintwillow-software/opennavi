@@ -46,7 +46,7 @@ func TestToLLMMessages(t *testing.T) {
 }
 
 func TestAgentConfigToLLM(t *testing.T) {
-	cfg := agentConfigToLLM(AgentConfig{Model: "qwen3.8:27b", Temperature: 0.7, MaxTokens: 512})
+	cfg := agentConfigToLLM("ollama", AgentConfig{Model: "qwen3.8:27b", Temperature: 0.7, MaxTokens: 512})
 	if cfg.Provider != "ollama" || cfg.Model != "qwen3.8:27b" || cfg.Temperature != 0.7 || cfg.MaxTokens != 512 {
 		t.Fatalf("config = %+v", cfg)
 	}
