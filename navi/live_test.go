@@ -160,8 +160,8 @@ func TestOllamaPathAgainstAFakeDaemon(t *testing.T) {
 	if gotModel != "test-model" {
 		t.Fatalf("descriptor model did not reach the provider: %q", gotModel)
 	}
-	if sawStreaming {
-		t.Fatal("the completion runner must not request a streaming response")
+	if !sawStreaming {
+		t.Fatal("the agent runner must request a streaming response")
 	}
 }
 

@@ -32,6 +32,7 @@ import (
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
+	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
 // ErrNoName is returned by Run for a navi declared without a name.
@@ -70,6 +71,9 @@ type Navi struct {
 	// Resolved by assemble, before serving starts.
 	selection DefaultSelection
 	providers *provider.Set
+	// registry is the runtime tool registry built from the declared Tools
+	// collection (built once, at assemble).
+	registry *registry.Registry
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
@@ -172,7 +176,7 @@ func New(name string, opts ...Option) *Navi {
 	}
 	n.dispatch = newDispatch()
 	if n.runner == nil {
-		n.runner = &CompletionRunner{navi: n, log: n.log}
+		n.runner = &AgentRunner{navi: n, log: n.log}
 	}
 	if n.Thoughts != nil {
 		n.watchForWork()

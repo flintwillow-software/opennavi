@@ -2,6 +2,7 @@ package navi
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -78,10 +79,18 @@ func mockNavi(t *testing.T, mock *llm.MockProvider, opts ...Option) *Navi {
 
 // --- the gate: a thought actually executes through a provider ---------
 
+// streamEvents scripts one assistant turn: a content delta then stop. The
+// agent runner consumes the streaming path (the old completion runner
+// consumed Complete), so tests script streams.
+func streamEvents(content string) []llm.StreamEvent {
+	return []llm.StreamEvent{
+		{Type: llm.StreamEventContentDelta, Content: content},
+		{Type: llm.StreamEventStop},
+	}
+}
+
 func TestRunExecutesAThoughtThroughAMockProvider(t *testing.T) {
-	mock := llm.NewMockProvider().WithResponses(&llm.Response{
-		Message: llm.Message{Role: llm.RoleAssistant, Content: "pong"},
-	})
+	mock := llm.NewMockProvider(streamEvents("pong"))
 	n := mockNavi(t, mock)
 
 	cancel, done := startServing(t, n)
@@ -114,9 +123,7 @@ func TestRunExecutesAThoughtThroughAMockProvider(t *testing.T) {
 }
 
 func TestPersonalityBecomesTheSystemTurn(t *testing.T) {
-	mock := llm.NewMockProvider().WithResponses(&llm.Response{
-		Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
-	})
+	mock := llm.NewMockProvider(streamEvents("ok"))
 	n := mockNavi(t, mock, WithPersonality("You are terse."))
 
 	cancel, done := startServing(t, n)
@@ -137,9 +144,7 @@ func TestPersonalityBecomesTheSystemTurn(t *testing.T) {
 }
 
 func TestThoughtContextRidesAlongWithThePrompt(t *testing.T) {
-	mock := llm.NewMockProvider().WithResponses(&llm.Response{
-		Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
-	})
+	mock := llm.NewMockProvider(streamEvents("ok"))
 	n := mockNavi(t, mock)
 
 	cancel, done := startServing(t, n)
@@ -160,8 +165,9 @@ func TestThoughtContextRidesAlongWithThePrompt(t *testing.T) {
 }
 
 func TestFailedProviderFailsTheThought(t *testing.T) {
-	// An unscripted mock fails Complete with a clear error.
-	n := mockNavi(t, llm.NewMockProvider())
+	// A stream error fails the run; the runner surfaces it and the worker
+	// marks the thought failed.
+	n := mockNavi(t, llm.NewMockProvider().WithStreamError(errors.New("boom")))
 
 	cancel, done := startServing(t, n)
 	defer stopServing(t, cancel, done)
