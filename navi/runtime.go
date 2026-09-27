@@ -93,6 +93,31 @@ func (n *Navi) assemble() error {
 		n.providers = set
 	}
 
+	// Fallback chain (ADR 0009): only for thoughts that name no provider,
+	// matching the daemon's resolution. An unknown fallback fails assembly
+	// rather than degrading silently.
+	if n.override == nil {
+		fbName := n.fallbackName
+		if fbName == "" && file != nil {
+			fbName = strings.TrimSpace(file.Provider.Fallback)
+		}
+		if fbName != "" {
+			primary, perr := set.For(sel.Provider)
+			if perr != nil {
+				return fmt.Errorf("navi: fallback primary: %w", perr)
+			}
+			fb, ferr := set.For(fbName)
+			if ferr != nil {
+				return fmt.Errorf("navi: fallback provider %q: %w", fbName, ferr)
+			}
+			chain, cerr := llm.NewProviderFallback(primary, fb, retryFromConfig(file))
+			if cerr != nil {
+				return fmt.Errorf("navi: fallback chain: %w", cerr)
+			}
+			n.fallback = chain
+		}
+	}
+
 	// Build the runtime tool registry from the declared collection and set
 	// the compiled default active set under the permission ceiling.
 	reg, err := n.buildRegistry()
@@ -173,6 +198,15 @@ func (n *Navi) resolveFor(pt *thought.Thought) (llm.Provider, string, error) {
 	if n.providers == nil {
 		return nil, "", fmt.Errorf("navi: resolve provider before serving")
 	}
+	// A thought that names no provider uses the default selection, and the
+	// configured fallback chain applies to exactly that path.
+	if pt.Provider == "" && n.fallback != nil {
+		modelName := pt.Model
+		if modelName == "" {
+			modelName = n.selection.Model
+		}
+		return n.fallback, modelName, nil
+	}
 	name := pt.Provider
 	if name == "" {
 		name = n.selection.Provider
@@ -195,4 +229,23 @@ func (n *Navi) resolveFor(pt *thought.Thought) (llm.Provider, string, error) {
 // same thing: an empty override is not an override.
 func envValue(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+// retryFromConfig maps the runtime provider retry knobs onto the llm retry
+// config (nil = defaults).
+func retryFromConfig(file *config.RuntimeConfig) *llm.RetryConfig {
+	if file == nil {
+		return nil
+	}
+	pc := file.Provider
+	if pc.MaxRetries == 0 && pc.InitialDelay == 0 {
+		return nil
+	}
+	return &llm.RetryConfig{
+		MaxRetries:    pc.MaxRetries,
+		InitialDelay:  pc.InitialDelay,
+		MaxDelay:      pc.MaxDelay,
+		BackoffFactor: pc.BackoffFactor,
+		JitterEnabled: true,
+	}
 }

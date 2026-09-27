@@ -78,6 +78,13 @@ type Navi struct {
 	// thought to its agent so RouteMessage can inject at the turn boundary.
 	inflight *inFlightAgents
 
+	// fallback is the provider fallback chain for thoughts that name no
+	// provider (ADR 0009: fallback stays at the provider-config layer).
+	fallback     llm.Provider
+	fallbackName string
+	// compactBudget enables context compaction when > 0 (agent turns).
+	compactBudget int
+
 	log *slog.Logger
 
 	// runtimeFile is the runtime config path (WithRuntimeConfig).
@@ -124,6 +131,23 @@ func WithThoughtStore(s thought.Store) Option {
 // correct for the in-memory store; a durable navi enables both.
 func WithQueueConfig(cfg thought.Config) Option {
 	return func(n *Navi) { n.queueConfig = &cfg }
+}
+
+// WithProviderFallback declares a fallback provider for thoughts that name
+// no provider (ADR 0009). The runtime config file's provider.fallback is
+// used when this option is absent; an unknown fallback fails assembly.
+func WithProviderFallback(providerName string) Option {
+	return func(n *Navi) {
+		if providerName != "" {
+			n.fallbackName = providerName
+		}
+	}
+}
+
+// WithCompactBudget enables context compaction with the given token budget
+// (0 disables it), mirroring the daemon's --compact-budget.
+func WithCompactBudget(budget int) Option {
+	return func(n *Navi) { n.compactBudget = budget }
 }
 
 // WithVersion sets the navi's version string.
