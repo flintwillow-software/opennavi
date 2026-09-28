@@ -759,16 +759,43 @@ func (m *tuiModel) enterLive(thoughtID string) {
 
 // key handles a key press; returns true when the user quits.
 func (m *tuiModel) key(k tea.KeyMsg) bool {
-	switch k.String() {
-	case "q", "ctrl+c":
-		return true
-	case "esc", "escape", "l":
-		if m.mode == ModeLive || m.mode == ModeInput {
+	// Input mode owns the keyboard: every printable rune goes into the
+	// buffer and only explicit control keys act. Command keys (q/n/a/p/s/…)
+	// must never fire while typing — a real terminal delivers them one
+	// rune per KeyMsg, so the command switch below would otherwise swallow
+	// them (and q would quit mid-message).
+	if m.mode == ModeInput {
+		switch k.String() {
+		case "ctrl+c":
+			return true
+		case "esc", "escape":
 			m.mode = ModeList
 			m.input = ""
 			m.inputID = ""
 			m.enqueue = false
 			m.stage = 0
+		case "enter":
+			m.submitInput()
+		case "backspace":
+			if r := []rune(m.input); len(r) > 0 {
+				m.input = string(r[:len(r)-1])
+			}
+		case "up", "down", "left", "right", "tab":
+			// No cursor movement / completion yet.
+		default:
+			if len(k.Runes) > 0 {
+				m.input += string(k.Runes)
+			}
+		}
+		return false
+	}
+
+	switch k.String() {
+	case "q", "ctrl+c":
+		return true
+	case "esc", "escape", "l":
+		if m.mode == ModeLive {
+			m.mode = ModeList
 		}
 	case "up", "k":
 		if m.mode == ModeLive {
@@ -785,30 +812,8 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.sel++
 		}
 	case "enter":
-		switch m.mode {
-		case ModeList:
-			if len(m.rows) > 0 {
-				m.enterLive(m.rows[m.sel].thoughtID)
-			}
-		case ModeInput:
-			if m.inputID != "" {
-				// Attach-message flow (steer): unchanged.
-				if strings.TrimSpace(m.input) != "" {
-					if err := m.transport.Steer(m.inputID, m.input); err != nil {
-						m.status = "steer failed: " + err.Error()
-					} else {
-						m.status = fmt.Sprintf("steered %s", m.inputID)
-					}
-				}
-				m.mode = ModeList
-				m.input = ""
-				m.inputID = ""
-			} else {
-				// Enqueue flow: prompt -> optional priority -> optional
-				// deferral (minutes); the enqueued event comes back on
-				// the stream and lands the row in the queue view.
-				m.enqueueStep()
-			}
+		if m.mode == ModeList && len(m.rows) > 0 {
+			m.enterLive(m.rows[m.sel].thoughtID)
 		}
 	case "n":
 		if m.mode == ModeList {
@@ -850,18 +855,28 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		if m.mode == ModeList && len(m.rows) > 0 {
 			m.doAction("retry", m.rows[m.sel].thoughtID, 0)
 		}
-	case "backspace":
-		if m.mode == ModeInput && len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
-	default:
-		if m.mode == ModeInput && len(k.Runes) > 0 {
-			for _, r := range k.Runes {
-				m.input += string(r)
-			}
-		}
 	}
 	return false
+}
+
+// submitInput handles enter in input mode: an attach-message flow steers
+// the selected thought; otherwise it advances the enqueue stages
+// (prompt -> priority -> defer).
+func (m *tuiModel) submitInput() {
+	if m.inputID != "" {
+		if strings.TrimSpace(m.input) != "" {
+			if err := m.transport.Steer(m.inputID, m.input); err != nil {
+				m.status = "steer failed: " + err.Error()
+			} else {
+				m.status = fmt.Sprintf("steered %s", m.inputID)
+			}
+		}
+		m.mode = ModeList
+		m.input = ""
+		m.inputID = ""
+		return
+	}
+	m.enqueueStep()
 }
 
 func maxPriority(p int) int {
