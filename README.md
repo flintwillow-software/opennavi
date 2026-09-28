@@ -39,10 +39,14 @@ The SDK provides:
 - **Contract packages** (`tool`, `thought`, `connector`, `portal`, `model`,
   `skill`) — the dependency-light public surface components and navis are
   written against.
-- **Agent runtime** (`agent/`) — the think → act → observation loop with
-  streaming, tool execution, and context-window compaction.
-- **Thought system** (`thought/`) — a durable priority queue with scheduling,
-  preemption, park-with-checkpoint, and crash recovery.
+- **Thought-based runtime** — the navi's main loop is the thought system
+  (`thought/`): a durable priority queue with scheduling, preemption,
+  park-with-checkpoint, and crash recovery. Every door (CLI, connectors, tools)
+  feeds the same queue, and each thought executes through a pluggable `Runner`.
+- **Agent loop** (`agent/`) — the shipped `Runner`: the think → act →
+  observation loop with streaming, tool execution, and context-window
+  compaction, run once per thought. `navi.AgentRunner` bridges it to the
+  thought system.
 - **Provider layer** (`llm/`) — Ollama and OpenRouter with a fallback chain.
 - **Session store** (`store/`, `store/sqlite/`) — conversations, thoughts, and
   memory in one SQLite database.
