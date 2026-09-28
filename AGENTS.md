@@ -15,10 +15,11 @@ are written against the public component packages. Durable design lives in
 
 - `navi/` — composition root; `tool/` `thought/` `connector/` `portal/`
   `model/` `skill/` — public component packages
-- `tool/registry`, `tool/bridge`, `tool/{builtin,http,note,thoughts,time,todo}`
-  — the tool system: registry, executor bridge, and shipped catalog
-- `agent/` `llm/` `store/` — public implementations
-- `internal/` — runtime wiring (config, cron, context, ops)
+- `tool/registry`, `tool/{builtin,http,note,thoughts,time,todo}`
+  — the tool system: registry and shipped catalog
+- `store/` — public session store
+- `internal/` — runtime wiring (agent loop, providers, bridge, config, cron,
+  context, ops)
 - `cmd/navi/` — the reference navi; `templates/` — starter navi modules
 - `testdata/external-*` — synthetic out-of-repo modules for the CI guardrail
 - `docs/architecture/`, `docs/adr/` — durable design; `CHANGELOG.md` — release history

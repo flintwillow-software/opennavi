@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )

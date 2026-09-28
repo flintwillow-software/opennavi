@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )

@@ -3,9 +3,9 @@ package navi
 import (
 	"fmt"
 
+	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tool/bridge"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 

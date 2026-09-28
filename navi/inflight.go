@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 )
 
 // inFlightAgents tracks a running thought's agent for the steering bridge

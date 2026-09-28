@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/tool/builtin"
 	"github.com/flintwillow-software/opennavi/tool/registry"

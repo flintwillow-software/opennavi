@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 )
 
 // OllamaProvider adapts the provider layer's Ollama client onto the

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/internal/config"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tool/bridge"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 

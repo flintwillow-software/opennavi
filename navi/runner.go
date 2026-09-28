@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/bridge"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tool/bridge"
 )
 
 // Runner executes one thought to a terminal state. It is a seam: the

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 

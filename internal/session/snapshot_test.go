@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 )
 
 // runToolConversation drives a real agent through a tool-call turn and

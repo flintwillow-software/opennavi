@@ -43,11 +43,12 @@ The SDK provides:
   (`thought/`): a durable priority queue with scheduling, preemption,
   park-with-checkpoint, and crash recovery. Every door (CLI, connectors, tools)
   feeds the same queue, and each thought executes through a pluggable `Runner`.
-- **Agent loop** (`agent/`) — the shipped `Runner`: the think → act →
+- **Agent loop** (`internal/agent`) — the shipped `Runner`: the think → act →
   observation loop with streaming, tool execution, and context-window
   compaction, run once per thought. `navi.AgentRunner` bridges it to the
   thought system.
-- **Provider layer** (`llm/`) — Ollama and OpenRouter with a fallback chain.
+- **Provider layer** (`internal/llm`) — Ollama and OpenRouter with a fallback
+  chain.
 - **Session store** (`store/`, `store/sqlite/`) — conversations, thoughts, and
   memory in one SQLite database.
 - **Tool system** (`tool/`) — the `Tool` type, the registry and bridge, and
@@ -79,11 +80,9 @@ opennavi/
 ├── cmd/navi/       # reference navi binary (run, enqueue, health)
 ├── navi/           # composition root
 ├── tool/ thought/ connector/ portal/ model/ skill/   # public component packages
-├── tool/           # the tool system: Tool type, registry, bridge, catalog
-├── agent/          # public agent loop and tool executor
-├── llm/            # public provider layer (Ollama, OpenRouter, fallback)
+├── tool/           # the tool system: Tool type, registry, catalog
 ├── store/          # public session store interface + SQLite implementation
-├── internal/       # runtime implementation (daemon, scheduler, config)
+├── internal/       # runtime: agent loop, providers, bridge, daemon, config
 ├── templates/      # starter navi modules (CI guardrail)
 ├── testdata/       # synthetic out-of-repo modules (CI fixtures)
 └── docs/

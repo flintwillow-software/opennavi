@@ -24,8 +24,8 @@ import (
 	"sync"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/provider"
-	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/skill"

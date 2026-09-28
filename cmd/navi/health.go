@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"

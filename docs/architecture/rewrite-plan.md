@@ -54,7 +54,7 @@ explicitly via `connector.SendTool()` (no auto-registration).
   `thought.ThoughtSystem`, `model.Registry`, `*slog.Logger`.
 - Keep `tool` aligned with the existing `tool/registry` descriptor so the
   catalog port is mechanical.
-- Component packages must not import `store/sqlite`, `llm/*` adapters, or
+- Component packages must not import `store/sqlite`, `internal/llm` adapters, or
   `internal/*`.
 - Memory is deliberately **not** part of M1. Short-term memory is
   navi-internal — the navi's own working state rather than an extension-surface

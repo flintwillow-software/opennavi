@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 )
 
 // This file bridges the agent runtime and the session store: pausing an

@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/daemon"
 	internalportal "github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/portal"
