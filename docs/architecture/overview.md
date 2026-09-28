@@ -106,7 +106,7 @@ navi/                 public  composition root; imports the above
 internal/             private runtime: agent loop, providers, bridge, daemon, config, ops
 cmd/navi/             reference navi (was the only runnable binary)
 templates/            starter navi modules (guardrail)
-testdata/             synthetic out-of-repo modules (CI fixtures)
+internal/testdata/    synthetic out-of-repo modules (CI fixtures)
 ```
 
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
@@ -140,7 +140,7 @@ compaction included), cron, and portals; `daemon` mode serves the HTTP portal
 gateway so remote front-ends attach and control across processes. `navi-code`
 and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
 authoring stub is retired, and the out-of-repo extension path is guarded by CI
-(`testdata/external-navi`, `testdata/external-component`). The old `internal/daemon`
+(`internal/testdata/external-navi`, `internal/testdata/external-component`). The old `internal/daemon`
 run path is dead code, tracked for removal (NAVI-354); transcript replay for
 portals is tracked as NAVI-353.
 

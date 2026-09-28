@@ -152,8 +152,8 @@ register into the same tool registry at a distinct trust level.
   compatibility record.
 - CI builds **synthetic out-of-repo modules** — an external navi and an external
   component module — against `main` and every release tag, in addition to the
-  in-tree starter templates. `testdata/external-navi` and
-  `testdata/external-component` are those modules; the `external-consumer` CI job
+  in-tree starter templates. `internal/testdata/external-navi` and
+  `internal/testdata/external-component` are those modules; the `external-consumer` CI job
   builds them and asserts the component's import boundary.
 - `SourceInfo` is populated from build info so provenance is auditable at
   runtime.

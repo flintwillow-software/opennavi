@@ -91,7 +91,7 @@ explicitly via `connector.SendTool()` (no auto-registration).
 - The starter-template guardrail (CI job `templates`) builds the two in-tree
   templates against the checkout.
 - A separate CI job (`external-consumer`) builds two synthetic out-of-repo
-  modules — `testdata/external-navi` and `testdata/external-component` — that import
+  modules — `internal/testdata/external-navi` and `internal/testdata/external-component` — that import
   only public component packages, and asserts the component's import boundary.
 
 ## Explicitly out of scope

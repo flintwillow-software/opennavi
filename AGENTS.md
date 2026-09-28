@@ -21,7 +21,7 @@ are written against the public component packages. Durable design lives in
 - `internal/` — runtime wiring (agent loop, providers, bridge, config, cron,
   context, ops)
 - `cmd/navi/` — the reference navi; `templates/` — starter navi modules
-- `testdata/external-*` — synthetic out-of-repo modules for the CI guardrail
+- `internal/testdata/external-*` — synthetic out-of-repo modules for the CI guardrail
 - `docs/architecture/`, `docs/adr/` — durable design; `CHANGELOG.md` — release history
 
 ## Conventions

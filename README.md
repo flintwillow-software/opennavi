@@ -84,7 +84,6 @@ opennavi/
 ├── store/          # public session store interface + SQLite implementation
 ├── internal/       # runtime: agent loop, providers, bridge, daemon, config
 ├── templates/      # starter navi modules (CI guardrail)
-├── testdata/       # synthetic out-of-repo modules (CI fixtures)
 └── docs/
     ├── architecture/   # current architecture
     └── adr/            # decision records

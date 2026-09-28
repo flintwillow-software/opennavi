@@ -83,14 +83,14 @@ jobs:
       # downstream repo does — no CI workspace is created for them, so the
       # build exercises the same go.mod a real consumer would ship.
 
-      # testdata/external-component is a synthetic OUT-OF-REPO component
+      # internal/testdata/external-component is a synthetic OUT-OF-REPO component
       # module (ADR 0004, docs/architecture/extension-model.md). Its own
       # code may import only public contract packages and its dependency
       # closure must not reach the composition root or runtime internals.
       # This is the boundary a third-party tool/skill/model/connector/portal
       # author relies on, so a leak fails here, on the PR.
       - name: Check the external component's import boundary
-        working-directory: testdata/external-component
+        working-directory: internal/testdata/external-component
         run: |
           bad="$(go list -f '{{join .Imports "\n"}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
@@ -110,17 +110,17 @@ jobs:
           fi
 
       - name: Build and run the external component
-        working-directory: testdata/external-component
+        working-directory: internal/testdata/external-component
         run: |
           go build ./...
           go vet ./...
           go run ./cmd/check
 
-      # testdata/external-navi is a synthetic OUT-OF-REPO navi: it imports
+      # internal/testdata/external-navi is a synthetic OUT-OF-REPO navi: it imports
       # the public composition root (navi) plus contract packages and the
       # component module above, composes a navi, and validates it.
       - name: Build and run the external navi
-        working-directory: testdata/external-navi
+        working-directory: internal/testdata/external-navi
         run: |
           go build ./...
           go vet ./...
