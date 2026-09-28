@@ -8,6 +8,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -78,7 +79,22 @@ func (n *Navi) assemble() error {
 	}
 	n.selection = sel
 
-	set := provider.New(n.Models.All(), nil)
+	// Runtime endpoint override: the file's provider.endpoint, with
+	// OLLAMA_HOST (Ollama-specific) winning for the ollama provider, is
+	// applied to the selected descriptor before the provider set is
+	// built. This is what lets WithRuntimeConfig retarget an endpoint
+	// without the author baking it in.
+	models := n.Models.All()
+	endpoint := ""
+	if file != nil {
+		endpoint = strings.TrimSpace(file.Provider.Endpoint)
+	}
+	if ep := envValue(config.EnvOllamaHost); ep != "" && sel.Provider == "ollama" {
+		endpoint = ep
+	}
+	models = withEndpoint(models, sel.Provider, endpoint)
+
+	set := provider.New(models, nil)
 	if n.override != nil {
 		// An overridden provider needs no credential and no declared set;
 		// the default is still resolved so the selection remains
@@ -223,6 +239,22 @@ func (n *Navi) resolveFor(pt *thought.Thought) (llm.Provider, string, error) {
 		modelName = n.selection.Model
 	}
 	return p, modelName, nil
+}
+
+// withEndpoint returns a copy of the provider descriptors with the named
+// provider's Endpoint replaced (empty endpoint leaves the set untouched).
+func withEndpoint(models []model.Provider, providerName, endpoint string) []model.Provider {
+	if endpoint == "" || providerName == "" {
+		return models
+	}
+	out := make([]model.Provider, len(models))
+	copy(out, models)
+	for i := range out {
+		if out[i].Name == providerName {
+			out[i].Endpoint = endpoint
+		}
+	}
+	return out
 }
 
 // envValue reads a runtime env var, trimmed. Missing and blank are the

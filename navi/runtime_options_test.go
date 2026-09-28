@@ -8,6 +8,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -207,4 +208,30 @@ func TestDurableFlusherPersists(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("flusher never persisted the thought")
+}
+
+// TestWithEndpointAppliesOverride pins the runtime endpoint override: a
+// copy is adjusted, the declared set is not mutated, and an empty
+// endpoint/provider is a no-op.
+func TestWithEndpointAppliesOverride(t *testing.T) {
+	models := []model.Provider{
+		{Name: "ollama", Endpoint: "http://localhost:11434"},
+		{Name: "openrouter", Endpoint: "https://openrouter.ai"},
+	}
+	got := withEndpoint(models, "ollama", "http://10.0.0.50:11434")
+	if got[0].Endpoint != "http://10.0.0.50:11434" {
+		t.Fatalf("override not applied: %+v", got[0])
+	}
+	if models[0].Endpoint != "http://localhost:11434" {
+		t.Fatal("withEndpoint mutated the input descriptor")
+	}
+	if got[1].Endpoint != "https://openrouter.ai" {
+		t.Fatalf("other provider changed: %+v", got[1])
+	}
+	if withEndpoint(models, "", "x")[0].Endpoint != "http://localhost:11434" {
+		t.Fatal("empty provider must be a no-op")
+	}
+	if withEndpoint(models, "ollama", "")[0].Endpoint != "http://localhost:11434" {
+		t.Fatal("empty endpoint must be a no-op")
+	}
 }
