@@ -515,6 +515,12 @@ func (n *Navi) serve(ctx context.Context) error {
 		})
 	}
 
+	// Background persistence loops (memory-first flusher + external-writer
+	// reconcile). Both are no-ops when their interval is disabled; a
+	// durable navi sets intervals and needs them to persist at all.
+	stopReconcile := n.Thoughts.StartReconcile()
+	stopFlusher := n.Thoughts.StartFlusher()
+
 	workers := n.startWorkers(ctx)
 
 	<-ctx.Done()
@@ -524,6 +530,11 @@ func (n *Navi) serve(ctx context.Context) error {
 	// rather than failing it.
 	stopAll()
 	workers.Wait()
+
+	// Final drain after the pool stops: the flusher persists whatever the
+	// run left dirty (the park checkpoints are already synchronous).
+	stopReconcile()
+	stopFlusher()
 	return nil
 }
 
