@@ -25,7 +25,7 @@ func WireCron(db *sql.DB, cc *config.CronConfig, q *thought.Queue) (*cron.Schedu
 	sched := cron.NewScheduler(q)
 
 	// RecordFire wiring: the queue's started event is the claim boundary
-	// (spec §3.2 worker picks up thought → running). Schedule mapping via
+	// (worker picks up thought → running). Schedule mapping via
 	// thought.Metadata["schedule"] (set at fire time by the cron
 	// scheduler) — keying by thought ID never meets MissedTick, which
 	// reads LastFired(schedule-name).

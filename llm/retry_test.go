@@ -9,7 +9,7 @@ import (
 )
 
 func TestProviderErrorClassification(t *testing.T) {
-	// Anthropic rules (spec §6.1).
+	// Anthropic rules.
 	for _, code := range []int{429, 500, 503} {
 		if !IsAnthropicRetryable(code, "") {
 			t.Errorf("anthropic %d should be retryable", code)
@@ -22,7 +22,7 @@ func TestProviderErrorClassification(t *testing.T) {
 		t.Error("anthropic 400 should not be retryable")
 	}
 
-	// OpenAI-compatible rules (spec §6.1) — covers ollama/openrouter/minimax.
+	// OpenAI-compatible rules — covers ollama/openrouter/minimax.
 	for _, code := range []int{429, 500, 502, 503, 504} {
 		if !IsOpenAIRetryable(code) {
 			t.Errorf("openai-compatible %d should be retryable", code)

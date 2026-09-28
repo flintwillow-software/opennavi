@@ -1,6 +1,6 @@
-// Package note implements the note tools (S130500 §04–05): each
+// Package note implements the note tools: each
 // navi's durable verbatim scratchpad, deliberately distinct from
-// semantic memory (S060000). `note_read` is a pure read — by id, by
+// semantic memory. `note_read` is a pure read — by id, by
 // tag, or by literal substring on title/body (never semantic); its
 // output bodies are truncated at the note size cap with a visible
 // notice. `note_write` stores a note verbatim, assigning a new id when
@@ -9,8 +9,8 @@
 // and writes that would push the navi past its total storage cap,
 // leaving existing notes untouched on rejection.
 //
-// Both tools register through `registry.RegisterStateful` (S130500
-// §07), so handlers receive a per-navi `StateContext` on every
+// Both tools register through `registry.RegisterStateful`,
+// so handlers receive a per-navi `StateContext` on every
 // dispatch and state persists durably, scoped per navi identity.
 package note
 
@@ -26,7 +26,7 @@ import (
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
-// DefaultMaxBodyBytes is the per-note body cap: 64 KiB (S130500 §05).
+// DefaultMaxBodyBytes is the per-note body cap: 64 KiB.
 // note_write rejects larger bodies; note_read truncates any stored
 // body over the cap and marks the result truncated.
 const DefaultMaxBodyBytes = 64 * 1024
@@ -53,7 +53,7 @@ type Options struct {
 	MaxNaviBytes int
 }
 
-// ReadSchema / WriteSchema are the spec input schemas (S130500 §04–05):
+// ReadSchema / WriteSchema are the input schemas:
 // note_read takes at most one of id/tag/query plus an optional limit;
 // note_write takes id/tags/remove optionally and title/body for
 // create/update — but the REMOVE scenario ("calls note_write with that
@@ -89,7 +89,7 @@ func mergeOptions(opts ...Options) Options {
 func FormatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 // Register adds note_read and note_write to reg, bound to naviID
-// through the stateful store state (S130500 §04–05, §07). opts
+// through the stateful store state. opts
 // override the note caps (last one wins). Registration fails cleanly
 // when the registry, navi identity, or store handle is missing.
 func Register(reg *registry.Registry, naviID string, state store.StatefulToolStore, opts ...Options) error {
@@ -337,7 +337,7 @@ func noteWriteHandler(maxBody, maxNavi int) registry.StatefulHandler {
 		// Per-navi total cap: account for the note being replaced so
 		// updates do not double-count. The check is read-then-write;
 		// each store call is atomic, so a rejected write leaves every
-		// existing note unchanged (S130500 §05 body-cap scenario).
+		// existing note unchanged (body-cap scenario).
 		current, err := state.Store.ReadNotes(state.NaviID, store.NoteQuery{Limit: 0})
 		if err != nil {
 			return "", fmt.Errorf("note_write: %w", err)

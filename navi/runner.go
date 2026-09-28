@@ -115,7 +115,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		return fmt.Errorf("navi: thought %s: %w", t.ID, err)
 	}
 
-	// Steering bridge (S010310): register the in-flight agent so a
+	// Steering bridge: register the in-flight agent so a
 	// message routed to this thought mid-run is injected at the turn
 	// boundary. Unregistered when the run returns.
 	unregister := r.navi.inflight.track(t.ID, a)

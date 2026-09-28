@@ -52,7 +52,7 @@ func waitDrain(t *testing.T, q *thought.Queue, timeout time.Duration) {
 	}
 }
 
-// ── S010003 §06 binary-run scenarios ─────────────────────────────────
+// ── binary-run scenarios ─────────────────────────────────
 
 // TestBinaryRunForegroundSlotReserved: Assemble with Foreground marks
 // the queue's foreground reservation; the interactive thought claims
@@ -99,7 +99,7 @@ func TestBinaryRunForegroundSlotConfigured(t *testing.T) {
 
 // TestBinaryRunDurableThoughtAndProcessing: interactive input becomes
 // a durable thought (persisted), scheduled, processed with the
-// governed tool registry — the full S010003 pipeline, headlessly.
+// governed tool registry — the full pipeline, headlessly.
 func TestBinaryRunDurableThoughtScheduledAndProcessed(t *testing.T) {
 	rt, err := Assemble(RuntimeParams{
 		SessionDB:  filepath.Join(t.TempDir(), "binary-e2e.db"),
@@ -147,7 +147,7 @@ func TestBinaryRunDurableThoughtScheduledAndProcessed(t *testing.T) {
 
 // TestBinaryRunSteeringBridgeDelivers: RouteMessage on the running
 // foreground thought reaches the in-flight agent's steering queue via
-// the registered bridge (S010312 running path + S010310).
+// the registered bridge (running path +).
 func TestBinaryRunSteeringBridgeDelivers(t *testing.T) {
 	rt, err := Assemble(RuntimeParams{
 		SessionDB:  filepath.Join(t.TempDir(), "steer.db"),
@@ -361,7 +361,7 @@ func TestBinaryRunExitWhenDrained(t *testing.T) {
 
 // TestBinaryRunForegroundCompetesByPriority: the foreground thought
 // does not get exclusive high priority — daemon-style work with
-// higher priority claims slots first (S010003 §06 "same priority and
+// higher priority claims slots first ("same priority and
 // preemption rules").
 func TestBinaryRunForegroundCompetesByPriority(t *testing.T) {
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 2, ForegroundSlots: 1}, thought.NewMemoryStore())
@@ -370,7 +370,7 @@ func TestBinaryRunForegroundCompetesByPriority(t *testing.T) {
 	}
 	// Foreground enqueued FIRST but low priority; a higher-priority
 	// daemon thought claims the shared slot first — foreground does
-	// not jump the queue (same priority/preemption rules, S010003).
+	// not jump the queue (same priority/preemption rules).
 	_ = q.Enqueue(&thought.Thought{ID: "fg", Prompt: "interactive", Priority: 5, Status: thought.ThoughtPending, Foreground: true})
 	_ = q.Enqueue(&thought.Thought{ID: "urgent-daemon", Prompt: "x", Priority: 1, Status: thought.ThoughtPending})
 	first, ok := q.Dequeue()

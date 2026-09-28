@@ -9,7 +9,7 @@ import (
 )
 
 // ExportMarkdown writes a scope's documents/entries as markdown files,
-// preserving the spec's human-editable story (§02 ownership): user/navi
+// preserving the human-editable ownership model: user/navi
 // scopes get one file per subject (`<subject>.md`); the memories scope
 // gets date-organized files (`YYYY-MM-DD.md`). Returns the paths
 // written.
@@ -94,7 +94,7 @@ func renderDocument(e Entry) string {
 }
 
 // renderEntry renders one memories entry with frontmatter metadata
-// (spec §04: date, source, tags, importance, expires).
+// (date, source, tags, importance, expires).
 func renderEntry(e Entry) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "---\ndate: %s\nsource: %s\nimportance: %.2f\n",

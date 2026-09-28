@@ -7,7 +7,7 @@ import (
 )
 
 // Schema is a JSON Schema (a pragmatic subset) that tool-call arguments
-// are validated against before dispatch (S130400 §06). Construct with
+// are validated against before dispatch. Construct with
 // ParseSchema; the zero value is rejected at registration — a schema of
 // `{}` accepts any object.
 //

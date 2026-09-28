@@ -13,14 +13,14 @@ import (
 	"github.com/flintwillow-software/opennavi/llm"
 )
 
-// Index is the vector index over the memories tier (spec §05 Tier 5):
+// Index is the vector index over the memories tier (Tier 5):
 // embeddings stored as BLOBs in the shared SQLite DB (migration v5),
 // searched by brute-force cosine similarity in pure Go. Design note:
 // sqlite-vec/vec0 is a C extension (unshippable under CGO_ENABLED=0);
 // brute-force cosine is single-digit milliseconds at single-navi scale
 // (thousands of entries × 768 dims), and chromem-go was rejected as a
 // second storage mechanism. FTS5 (keyword) and vectors (semantic) are
-// complementary per spec §05.
+// complementary.
 type Index struct {
 	store    *Store
 	db       *sql.DB
@@ -161,8 +161,8 @@ type ScoredEntry struct {
 }
 
 // SemanticSearch embeds the query via the embedder, finds the top-k
-// similar memories, and hydrates them from the store (spec §05:
-// results are reference material, injected on demand). Orphaned
+// similar memories, and hydrates them from the store
+// (results are reference material, injected on demand). Orphaned
 // vectors (entry pruned without index cleanup) are skipped.
 func (ix *Index) SemanticSearch(ctx context.Context, query string, k int) ([]ScoredEntry, error) {
 	vec, err := ix.embedder.Embed(ctx, query)

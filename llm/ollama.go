@@ -12,7 +12,7 @@ import (
 )
 
 // OllamaProvider implements Provider against an Ollama server's native
-// /api/chat endpoint with NDJSON streaming (spec §3.4). Decision note:
+// /api/chat endpoint with NDJSON streaming. Decision note:
 // the spec suggests delegating to the OpenAI adapter over the /v1
 // endpoint; we use the native format instead (the spec note explicitly
 // blesses it) because the OpenAI adapter (#184) doesn't exist yet and
@@ -293,7 +293,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, messages []Message, tools
 	}
 
 	// Ollama reports prompt/eval token counts on the final chunk;
-	// surfaced as UsageInfo (free per spec section 01, useful for #189).
+	// surfaced as UsageInfo (free , useful for #189).
 	var usage *UsageInfo
 	if final.PromptEvalCount > 0 || final.EvalCount > 0 {
 		usage = &UsageInfo{InputTokens: final.PromptEvalCount, OutputTokens: final.EvalCount}
@@ -316,7 +316,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, messages []Message, tools
 
 // ── Ping / token counting / context window ───────────────────────────────
 
-// Ping queries /api/tags (spec §3.4).
+// Ping queries /api/tags.
 func (p *OllamaProvider) Ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL+"/api/tags", nil)
 	if err != nil {
@@ -376,7 +376,7 @@ func (p *OllamaProvider) TokenCount(messages []Message) int {
 }
 
 // MaxContextWindow returns known context windows for supported model
-// families, conservative 4096 otherwise (spec §3.4).
+// families, conservative 4096 otherwise.
 func (p *OllamaProvider) MaxContextWindow(config Config) int {
 	model := strings.ToLower(config.Model)
 	switch {

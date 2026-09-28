@@ -1,11 +1,10 @@
-// Package context implements context window management (spec
-// 03-session-context/02-context-window-management.md): token budgeting,
+// Package context implements context window management: token budgeting,
 // compaction trigger logic, and LLM-based conversation summarization.
 // It is agent-agnostic — the agent runtime (internal/agent) adapts its
 // own types onto these primitives.
 package context
 
-// ContextBudget governs when compaction triggers (spec §2).
+// ContextBudget governs when compaction triggers.
 type ContextBudget struct {
 	// MaxTokens is the hard token limit for the context window.
 	MaxTokens int
@@ -28,7 +27,7 @@ func DefaultBudget(maxTokens int) ContextBudget {
 }
 
 // ShouldCompact reports whether compaction should fire for the current
-// token usage and message count (spec §3.3): at or above the
+// token usage and message count: at or above the
 // compaction trigger, or above the warning threshold with a large
 // history (more than ~25 turns / 50 messages).
 func ShouldCompact(budget ContextBudget, currentTokens, messageCount int) bool {

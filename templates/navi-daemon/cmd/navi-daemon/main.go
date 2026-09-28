@@ -2,7 +2,7 @@
 // that assembles through navi.New, wakes on cron schedules, and serves the
 // HTTP portal gateway.
 //
-// Authoring model (S000200 §04): the Go definition below is the static,
+// Authoring model: the Go definition below is the static,
 // compiled-in half. Deployment settings (provider endpoints, credential
 // references, cron overrides) come from the config file named by
 // NAVI_CONFIG, if set.

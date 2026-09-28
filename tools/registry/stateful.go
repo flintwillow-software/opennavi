@@ -8,7 +8,7 @@ import (
 )
 
 // StateContext is the per-navi persistence handle handed to stateful
-// tool handlers on every dispatch (S130500 §07). It carries the navi
+// tool handlers on every dispatch. It carries the navi
 // identity the registration was bound to plus the stateful tool
 // store; handlers persist through it and per-navi scoping is enforced
 // at the store layer (every store method is navi-filtered).
@@ -27,7 +27,7 @@ type StateContext struct {
 // persistence handle.
 type StatefulHandler func(ctx context.Context, args map[string]any, state StateContext) (string, error)
 
-// RegisterStateful registers a stateful tool (S130500 §07): the
+// RegisterStateful registers a stateful tool: the
 // handler receives a per-navi store handle on every dispatch, so todo
 // and note state persists across restarts and sessions, scoped per
 // navi identity. Stateless tools register through Register and are

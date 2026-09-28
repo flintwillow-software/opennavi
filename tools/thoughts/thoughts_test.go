@@ -108,7 +108,7 @@ func TestDefinitionsComplete(t *testing.T) {
 	}
 }
 
-// ── S130601 thoughts_read ────────────────────────────────────────────
+// ── thoughts_read ────────────────────────────────────────────
 
 func TestThoughtsReadSnapshotAndFilter(t *testing.T) {
 	q := routeQueue(t)
@@ -174,7 +174,7 @@ func TestThoughtsReadSnapshotAndFilter(t *testing.T) {
 
 // (explicit enqueues above; helper removed)
 
-// ── S130602 thoughts_create ──────────────────────────────────────────────
+// ── thoughts_create ──────────────────────────────────────────────
 
 func TestThoughtsCreateFollowUpWithOriginTag(t *testing.T) {
 	q := routeQueue(t)
@@ -193,7 +193,7 @@ func TestThoughtsCreateFollowUpWithOriginTag(t *testing.T) {
 		t.Fatalf("created id = %v, want self- prefix", created["id"])
 	}
 
-	// S130600 §1.2: origin tag + priority clamp at Enqueue.
+	// origin tag + priority clamp at Enqueue.
 	got, _ := q.GetThought(id)
 	if got.Metadata["origin"] != thought.OriginTool {
 		t.Fatalf("origin metadata = %v, want tool", got.Metadata)
@@ -268,7 +268,7 @@ func timeMustParse(s string) time.Time {
 	return t
 }
 
-// ── S130603 thoughts_update ──────────────────────────────────────────
+// ── thoughts_update ──────────────────────────────────────────
 
 func TestThoughtsUpdatePriorityClamped(t *testing.T) {
 	q := routeQueue(t)
@@ -299,7 +299,7 @@ func TestThoughtsUpdatePauseResumeCancel(t *testing.T) {
 		t.Fatal("claim failed")
 	}
 
-	// Pause: park-with-checkpoint (S010002).
+	// Pause: park-with-checkpoint.
 	if _, err := dispatch(t, reg, "thoughts_update", `{"id":"r1","status":"pause"}`); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestThoughtsUpdateContextAppend(t *testing.T) {
 	}
 }
 
-// ── S130604 thoughts_delete ──────────────────────────────────────────
+// ── thoughts_delete ──────────────────────────────────────────
 
 func TestThoughtsDeleteDeferredAndPending(t *testing.T) {
 	q := routeQueue(t)

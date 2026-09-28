@@ -43,7 +43,7 @@ func TestMergeChainFull(t *testing.T) {
 	}
 	// Env (NAVI_SESSION_DB) wins over file...
 	if got.SessionDB == "/tmp/env.db" {
-		// ...unless flags override: flags win over env.
+		// ..unless flags override: flags win over env.
 	}
 	if got.SessionDB != "/tmp/flag.db" {
 		t.Fatalf("session db = %q, want flags layer", got.SessionDB)
@@ -135,7 +135,7 @@ cron:
 
 func TestRuntimeValidateSelfContained(t *testing.T) {
 	// Under the go-first split the runtime config validates its own
-	// invariants — there is no definition to cross-check (S000207).
+	// invariants — there is no definition to cross-check.
 	cases := []struct {
 		name    string
 		rc      RuntimeConfig

@@ -13,7 +13,7 @@ import (
 )
 
 // OpenRouterProvider implements Provider against the OpenRouter API
-// (spec §3.5): OpenAI-compatible chat completions with OpenRouter-
+// OpenAI-compatible chat completions with OpenRouter-
 // specific headers, proxying to many underlying models behind one key.
 type OpenRouterProvider struct {
 	BaseURL string // default https://openrouter.ai/api/v1
@@ -47,7 +47,7 @@ func NewOpenRouterProvider() *OpenRouterProvider {
 // Name implements Provider.
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
 
-// knownContextWindows maps model IDs to context windows (spec §3.5
+// knownContextWindows maps model IDs to context windows
 // scenario). The live /models/{id} fetch covers everything else.
 var knownContextWindows = map[string]int{
 	"z-ai/glm-5.3-flash":        1310000, // 1.31M

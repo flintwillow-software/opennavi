@@ -1,5 +1,4 @@
-// Package cron implements a pure-Go 5-field cron scheduler (spec
-// 01-agent-runtime/00-thought-queue.md, daemon-navi cron interface):
+// Package cron implements a pure-Go 5-field cron scheduler:
 // it wakes on a cron schedule and enqueues thoughts on the thought
 // queue. Standard 5-field format (minute hour dom mon dow), numbers
 // only; timezone-aware with per-schedule TZ overrides.

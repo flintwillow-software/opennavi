@@ -1,10 +1,10 @@
-// Queue-handle registration seam (S130600 §00): catalog tools bound to
+// Queue-handle registration seam: catalog tools bound to
 // the navi's OWN thought-queue handle at registration, with full
 // registry governance (complete Definition metadata, schema validation,
-// active-set membership, access levels per S130400/S040200) flowing
+// active-set membership, access levels per /) flowing
 // through registry.Register exactly as for any catalog tool. This seam
 // only adds the per-dispatch handle binding — the same shape as
-// RegisterStateful's store binding (S130500 §07) — so the thought
+// RegisterStateful's store binding — so the thought
 // loop itself stays hidden from tool callers behind the public queue
 // surface.
 //

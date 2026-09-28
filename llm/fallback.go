@@ -7,7 +7,7 @@ import (
 )
 
 // ProviderFallback implements Provider over a primary/fallback pair
-// (spec §8.2): attempt the primary, retry retryable failures per the
+// attempt the primary, retry retryable failures per the
 // RetryConfig, then switch to the fallback with the config's provider
 // rewritten. A ProviderFallback is itself a Provider, so chains
 // compose (a fallback can have its own fallback).
@@ -61,7 +61,7 @@ func (f *ProviderFallback) MaxContextWindow(config Config) int {
 }
 
 // Stream attempts the primary (with retries per RetryConfig), then
-// falls back (spec §8.2). Note: retrying covers connection-time
+// falls back. Note: retrying covers connection-time
 // failures only; a stream that already emitted events is not replayed
 // (that would duplicate partial output) — documented limitation.
 func (f *ProviderFallback) Stream(ctx context.Context, messages []Message, tools []Tool, config Config) (<-chan StreamEvent, error) {

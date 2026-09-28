@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// ProviderRegistry is the LLM provider registry (spec §7.1): named
+// ProviderRegistry is the LLM provider registry: named
 // providers registered at startup, looked up for selection and
 // fallback. This is distinct from the #141 interface registry (which
 // selects delivery modes, not LLM backends).

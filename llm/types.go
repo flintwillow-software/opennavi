@@ -1,5 +1,5 @@
 // Package llm implements the unified LLM provider layer (spec
-// 07-llm-provider/00-llm-provider-layer.md §01/§04): provider-agnostic
+// /): provider-agnostic
 // message/tool/config types, the Provider contract, and token
 // counting. Provider adapters (Ollama, OpenAI, Anthropic, ...) build on
 // these types; the agent runtime adapts its own types onto them.
@@ -21,7 +21,7 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message is a provider-agnostic conversation message (spec §01).
+// Message is a provider-agnostic conversation message.
 type Message struct {
 	Role        Role         // "system", "user", "assistant", "tool"
 	Content     string       // text content
@@ -31,7 +31,7 @@ type Message struct {
 	CreatedAt   time.Time    // optional timestamp (export/persistence)
 }
 
-// Tool is a tool definition passed to the provider (spec §01).
+// Tool is a tool definition passed to the provider.
 type Tool struct {
 	Name        string
 	Description string
@@ -46,7 +46,7 @@ type ToolCall struct {
 	Arguments []byte // JSON string of arguments
 }
 
-// ToolCallDelta is a streamed tool-call event (spec §01). Arguments
+// ToolCallDelta is a streamed tool-call event. Arguments
 // may be partial while the call is streaming.
 type ToolCallDelta struct {
 	ID        string
@@ -75,7 +75,7 @@ type ThinkingConfig struct {
 	Budget  int // thinking token budget
 }
 
-// Config is the per-request provider configuration (spec §01).
+// Config is the per-request provider configuration.
 type Config struct {
 	Provider    string // "anthropic", "openai", "ollama", "openrouter", "minimax"
 	Model       string
@@ -86,7 +86,7 @@ type Config struct {
 	APIKey      string // resolved from env var or config
 }
 
-// StreamEventType enumerates stream event kinds (spec §01). Tool calls
+// StreamEventType enumerates stream event kinds. Tool calls
 // are split into start/end events per the spec; providers that emit
 // complete calls in one chunk emit Start+End back-to-back.
 type StreamEventType string
@@ -108,7 +108,7 @@ type UsageInfo struct {
 	ThinkingTokens int // Anthropic-specific
 }
 
-// StreamEvent is one event of a streaming response (spec §01).
+// StreamEvent is one event of a streaming response.
 type StreamEvent struct {
 	Type     StreamEventType
 	Content  string         // text delta for content events

@@ -82,7 +82,7 @@ type Portal interface {
 	// BumpPriority changes a queued thought's priority (NAVI-319 added the
 	// operation to the portal surface; the queue clamps it).
 	BumpPriority(identity, thoughtID string, prio int) error
-	// Retry re-queues a failed thought (S010002).
+	// Retry re-queues a failed thought.
 	Retry(identity, thoughtID string) error
 	// Enqueue schedules a new thought on behalf of identity
 	// (session-created thoughts claim the foreground slot).

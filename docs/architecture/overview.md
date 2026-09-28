@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-28'
 tags:
   - architecture
   - overview
@@ -10,9 +10,8 @@ tags:
 # Architecture Overview
 
 > What OpenNAVI is, how a navi is put together, and where the boundaries are.
-> This document describes the intended architecture. Design decisions are in
-> [`docs/adr/`](../adr/); the rewrite that reaches this state is tracked in
-> [rewrite-plan.md](./rewrite-plan.md) and in Huly.
+> Design decisions are in [`docs/adr/`](../adr/); the rewrite that reached this
+> state is recorded in [rewrite-plan.md](./rewrite-plan.md) and in Huly.
 
 ## What it is
 
@@ -64,12 +63,14 @@ n := navi.New("oncall-bot",
     navi.WithPersonality(onCallPersona),
 )
 
-n.Skills.Add(skills.IncidentResponse)
-n.Tools.Add(tools.TodoRead(store))
-n.Tools.Add(tools.TodoUpdate(store))
+n.Skills.Add(skill.Skill{Name: "incident_response", Content: incidentResponse})
+builtins, _ := builtin.Tools(workDir)
+for _, t := range builtins {
+    n.Tools.Add(t)
+}
 n.Models.Add(model.Ollama("qwen3.8:27b", model.Default()))
-n.Connectors.Add(connectors.Cron())
-n.Portals.Add(portals.TUI())
+n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}))
+n.Portals.Add(tui.NewPortal())
 n.Modes.Add(navi.PlanMode)
 
 if err := n.Run(ctx); err != nil {
@@ -125,24 +126,24 @@ acyclic and components independently testable.
 
 ## Current state
 
-This is a design in migration. The composition root now exists: `navi.New`
-assembles typed collections, validates and freezes them, and runs a real
-agent runner (`navi.AgentRunner`) that dispatches through `tools/registry`
-and `tools/bridge` with a mode-selected tool surface (ADR 0007). The catalog
-is ported onto `tool.Def` collections, `model_list` exposes the declared
-provider set (ADR 0009), cron ships as the `connector/cron` connector, and
-portals observe queue and running-agent events through the bounded
-`portal.Observation` contract (NAVI-352). Durable thoughts persist their
-mode.
+The rewrite is complete (M0–M7). `navi.New` assembles typed collections,
+validates and freezes them, and runs a real agent runner (`navi.AgentRunner`)
+that dispatches through `tools/registry` and `tools/bridge` with a
+mode-selected tool surface (ADR 0007). The catalog is ported onto `tool.Def`
+collections, `model_list` exposes the declared provider set (ADR 0009), cron
+ships as the `connector/cron` connector, and portals observe queue and
+running-agent events through the bounded `portal.Observation` contract
+(NAVI-352). Durable thoughts persist their mode.
 
-`cmd/navi` is now the reference navi: `run` assembles through `navi.New`
-with durable stores, the catalog, configured providers (fallback chain and
-compaction included), cron, and portals; `daemon` mode serves the HTTP
-portal gateway so remote front-ends attach and control across processes.
-`navi-code` and `navi-daemon` are real navi modules on the same surface.
-The old `internal/daemon` run path is now dead code, tracked for removal
-(NAVI-354); transcript replay for portals is tracked as NAVI-353. The
-remaining milestones are in [rewrite-plan.md](./rewrite-plan.md).
+`cmd/navi` is the reference navi: `run` assembles through `navi.New` with
+durable stores, the catalog, configured providers (fallback chain and
+compaction included), cron, and portals; `daemon` mode serves the HTTP portal
+gateway so remote front-ends attach and control across processes. `navi-code`
+and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
+authoring stub is retired, and the out-of-repo extension path is guarded by CI
+(`tools/external-navi`, `tools/external-component`). The old `internal/daemon`
+run path is dead code, tracked for removal (NAVI-354); transcript replay for
+portals is tracked as NAVI-353.
 
 ## Related
 

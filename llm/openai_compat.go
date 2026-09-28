@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Shared OpenAI-compatible wire logic (spec §05: input normalization
+// Shared OpenAI-compatible wire logic (input normalization
 // OpenNavi → provider). Used by the OpenRouter adapter now and the
 // OpenAI adapter (#184) next — both speak the OpenAI chat-completions
 // wire format.

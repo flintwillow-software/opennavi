@@ -88,7 +88,7 @@ func TestThoughtStoreDelete(t *testing.T) {
 
 func TestThoughtStoreQueueCrashRecovery(t *testing.T) {
 	// End-to-end: persist running + pending thoughts through the store,
-	// reopen the queue, verify running→pending recovery (spec §3.5).
+	// reopen the queue, verify running→pending recovery.
 	path := t.TempDir() + "/q.db"
 	st, err := Open(path, Options{})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestThoughtStoreDeferUntilRoundTrip(t *testing.T) {
 }
 
 func TestDeferralSurvivesRestartViaSqlite(t *testing.T) {
-	// End-to-end durability (S010002): a deferred thought enqueued
+	// End-to-end durability: a deferred thought enqueued
 	// through the queue persists, survives a fresh queue over the same
 	// database, and is skipped by the pool until the not-before time.
 	path := t.TempDir() + "/defer.db"

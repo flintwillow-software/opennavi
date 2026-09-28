@@ -11,13 +11,13 @@ import (
 )
 
 // ScheduleDef is one named schedule. Schedule definitions are
-// deployment-time runtime config (S000200 §04); the compiled navi
+// deployment-time runtime config; the compiled navi
 // definition declares only whether the cron interface exists.
 type ScheduleDef struct {
 	Name     string // unique schedule name
 	Expr     string // 5-field cron expression
 	Prompt   string // thought prompt / task template
-	Priority int    // 1-10 (default 3: cron-triggered, spec §2.3)
+	Priority int    // 1-10 (default 3: cron-triggered)
 	TZ       string // IANA timezone ("" = time.Local)
 	// Disabled schedules are skipped by the tick loop. The definition
 	// layer uses *bool (nil = enabled); the scheduler normalizes to a
@@ -35,7 +35,7 @@ type Enqueuer interface {
 type clockFunc func() time.Time
 
 // Scheduler fires named schedules on their cron expressions and
-// enqueues thoughts on the queue (spec: cron-triggered tasks create
+// enqueues thoughts on the queue (cron-triggered tasks create
 // thoughts with cron-defined priority).
 type Scheduler struct {
 	mu        sync.Mutex
@@ -105,7 +105,7 @@ func (s *Scheduler) Add(def ScheduleDef) error {
 		return fmt.Errorf("cron: schedule %q: prompt is required", def.Name)
 	}
 	if def.Priority == 0 {
-		def.Priority = 3 // cron-triggered, spec §2.3
+		def.Priority = 3 // cron-triggered,
 	}
 	expr, err := Parse(def.Expr)
 	if err != nil {

@@ -421,7 +421,7 @@ func (m *memStore) DeleteThought(id string) error {
 
 func TestDeletedEventAccounting(t *testing.T) {
 	// Delete is an exact-delta compensator: in_queue/by_status return
-	// to their pre-enqueue values (S130600 §04 review catch).
+	// to their pre-enqueue values (review catch).
 	c := newTestCollector()
 
 	// Pending delete: queued → deleted nets to zero.

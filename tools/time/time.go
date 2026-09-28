@@ -1,4 +1,4 @@
-// Package time implements the time_read tool (S130500 §03): the
+// Package time implements the time_read tool: the
 // wall-clock affordance every production agent needs. Stateless —
 // no store handle, no per-navi persistence; register with the plain
 // registry.Register through RegisterTools.
@@ -26,7 +26,7 @@ import (
 	"github.com/flintwillow-software/opennavi/tools/registry"
 )
 
-// DefaultZone is the navi's configured zone default (S130500 §03):
+// DefaultZone is the navi's configured zone default:
 // UTC until the runtime zone-config surface lands.
 const DefaultZone = "UTC"
 
@@ -56,7 +56,7 @@ func Definition() registry.ToolDefinition {
 }
 
 // RegisterTools registers time_read on reg (plain registry.Register —
-// the tool is stateless, S130500 §03/§07).
+// the tool is stateless, /).
 func RegisterTools(reg *registry.Registry) error {
 	if reg == nil {
 		return errors.New("time: registry is required")
@@ -77,7 +77,7 @@ func Tool() (tool.Tool, error) {
 	return tool.Tool{Def: def, Handler: handleRead}, nil
 }
 
-// handleRead implements time_read (S130500 §03): current time in the
+// handleRead implements time_read: current time in the
 // requested IANA zone as ISO 8601 with offset, epoch seconds when
 // asked for.
 func handleRead(ctx context.Context, args map[string]any) (string, error) {

@@ -74,7 +74,7 @@ type Navi struct {
 	thoughtStore thought.Store
 	queueConfig  *thought.Config
 
-	// inflight is the steering bridge's lookup (S010310): maps a running
+	// inflight is the steering bridge's lookup: maps a running
 	// thought to its agent so RouteMessage can inject at the turn boundary.
 	inflight *inFlightAgents
 
@@ -241,7 +241,7 @@ func New(name string, opts ...Option) *Navi {
 	if n.runner == nil {
 		n.runner = &AgentRunner{navi: n, log: n.log}
 	}
-	// The steering bridge (S010310): a running thought's RouteMessage is
+	// The steering bridge: a running thought's RouteMessage is
 	// injected into its agent at the turn boundary. The runner registers
 	// each agent on run start.
 	n.inflight = newInFlightAgents()

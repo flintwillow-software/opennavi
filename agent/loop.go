@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// runLoop is the core execution loop (section 07 of the spec).
+// runLoop is the core execution loop.
 // It checks steering, transforms context, streams LLM responses,
 // processes events, executes tool calls, and repeats until stop.
 //
@@ -40,7 +40,7 @@ loop:
 		// 3. Convert executor tools to agent tool descriptors
 		tools := a.Executor.Tools()
 
-		// 4. Context window compaction (spec §3.3): runs between turns,
+		// 4. Context window compaction: runs between turns,
 		// before the next provider call, when the budget is crossed.
 		if err := a.maybeCompact(ctx); err != nil {
 			a.setState(a.state.SetStatus(StatusError).SetError(err))

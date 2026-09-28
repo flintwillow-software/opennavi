@@ -1,5 +1,5 @@
 // Package metrics implements thought-queue observability for the
-// daemon (S010600 scope, #192/NAVI-258): pure-Go Prometheus text
+// daemon (scope, #192/NAVI-258): pure-Go Prometheus text
 // exposition — no OTel SDK, no client_golang, no new dependencies
 // (repo convention; the text format is hand-rolled at this scale).
 //
@@ -8,7 +8,7 @@
 // WireCron use): counters advance on enqueue/park/resume/persist-
 // failure, the in-queue gauge and per-status gauges follow the
 // lifecycle by deltas, and processing duration lands in a histogram
-// with the spec buckets.
+// with standard buckets.
 //
 // Cardinality decision (documented for review): the issue sketch puts
 // thought_id on queued/in-queue series. Prometheus text exposition has
@@ -218,7 +218,7 @@ func (c *Collector) observeEvent(ev thought.Event) {
 	case thought.EventPersistFailed:
 		c.persistFailed++
 	case thought.EventDeleted:
-		// Record removal (Queue.Delete, S130600 §04) — the exact-delta
+		// Record removal (Queue.Delete) — the exact-delta
 		// compensator: Detail carries the PRIOR status so the right
 		// by_status gauge decrements (the collector only sees events).
 		// Removal is not cancellation: the audit trail distinguishes

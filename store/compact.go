@@ -10,7 +10,7 @@ import (
 // tool-call safe (never split a tool result from its assistant call);
 // an unsafe cut is rejected. Compacted entries are soft-deleted —
 // flagged, never removed — with the original history preserved in the
-// store for audit and search (S030100 §06). The cut-point selection
+// store for audit and search. The cut-point selection
 // strategy itself (SafeCompactionCut) stays internal to the runtime.
 func (s *Session) ApplyCompaction(summary string, cutIndex int) error {
 	if cutIndex < 0 || cutIndex > len(s.Entries) {

@@ -60,7 +60,7 @@ func TestDefinitionComplete(t *testing.T) {
 
 func TestTimeReadCurrentTime(t *testing.T) {
 	// No arguments: current time in the default zone (UTC) as ISO 8601
-	// with UTC offset AND epoch seconds (§03 "Reading current time").
+	// with UTC offset AND epoch seconds ("Reading current time").
 	reg := newToolRegistry(t)
 	before := time.Now().UTC()
 	out, err := dispatch(t, reg, "")
@@ -87,7 +87,7 @@ func TestTimeReadCurrentTime(t *testing.T) {
 	if !strings.Contains(out, "+00:00") {
 		t.Fatalf("UTC offset missing: %q", out)
 	}
-	// Epoch seconds are part of the default output per §03 scenario 1.
+	// Epoch seconds are part of the default output per scenario 1.
 	parts := strings.Split(out, "epoch: ")
 	if len(parts) != 2 {
 		t.Fatalf("epoch seconds missing from default output: %q", out)

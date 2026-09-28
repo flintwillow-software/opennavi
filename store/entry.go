@@ -18,8 +18,8 @@ const (
 )
 
 // SessionEntry is one record in a session's conversation history
-// (spec 03-session-context/01-session-management.md §01). It mirrors the
-// SQLite `messages` row shape (§02) so the SQLite store (#163) can map
+// It mirrors the
+// SQLite `messages` row shape so the SQLite store (#163) can map
 // entries to rows directly.
 type SessionEntry struct {
 	ID   string // UUID
@@ -40,7 +40,7 @@ type SessionEntry struct {
 	Label    string // user-assigned label
 
 	// IsCompacted marks a compaction summary entry (original messages
-	// are preserved, not deleted — spec §06).
+	// are preserved, not deleted —).
 	IsCompacted bool
 }
 

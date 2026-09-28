@@ -1,4 +1,4 @@
-// Package bridge connects the public tool registry (S130400) to the
+// Package bridge connects the public tool registry to the
 // agent runtime's ToolExecutor. The registry owns the LLM-facing tool
 // metadata and dispatch enforcement (schema validation, argument
 // preparation, active-set membership); the executor owns the run loop's
@@ -14,7 +14,7 @@
 //
 // Per-tool Mode metadata is not yet enforced by the executor (it runs
 // all tools per its own configured mode); per-mode scheduling lands
-// with the S010400 recovery work.
+// with the recovery work.
 package bridge
 
 import (
@@ -46,7 +46,7 @@ type Options struct {
 	// Policy applies allowed/blocked lists and timeout overrides.
 	Policy Policy
 	// Access, when non-empty, limits binding to tools whose access
-	// level is listed (S040200 enforcement seam: IAM grants map onto
+	// level is listed (enforcement seam: IAM grants map onto
 	// these levels; until IAM lands, callers filter directly).
 	Access []registry.ToolAccess
 }
@@ -61,7 +61,7 @@ type Options struct {
 // override) even against handlers that ignore ctx cancellation: the
 // call is aborted with a timeout error while the abandoned handler
 // drains into a buffered channel. Hard-kill semantics (recovering
-// partial output from the abandoned handler, S010400) land with the
+// partial output from the abandoned handler) land with the
 // recovery work.
 func Bind(ex *agent.ToolExecutor, reg *registry.Registry, opts Options) ([]string, error) {
 	if ex == nil {

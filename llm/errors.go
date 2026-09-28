@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ProviderError classifies a provider failure (spec §05/§6.1).
+// ProviderError classifies a provider failure.
 type ProviderError struct {
 	Provider    string
 	Code        int // HTTP status or provider-specific code
@@ -39,7 +39,7 @@ func IsRetryableErr(err error) bool {
 }
 
 // NewProviderError builds a classified ProviderError, setting
-// IsRetryable from the provider family (spec §6.1).
+// IsRetryable from the provider family.
 func NewProviderError(provider string, code int, message string) *ProviderError {
 	pe := &ProviderError{Provider: provider, Code: code, Message: message}
 	switch providerFamily(provider) {
@@ -65,7 +65,7 @@ func providerFamily(provider string) string {
 }
 
 // IsAnthropicRetryable reports whether an Anthropic error is retryable
-// (spec §6.1: 429, 500, 503, or a rate_limit message).
+// (429, 500, 503, or a rate_limit message).
 func IsAnthropicRetryable(code int, message string) bool {
 	switch code {
 	case 429, 500, 503:
@@ -75,7 +75,7 @@ func IsAnthropicRetryable(code int, message string) bool {
 }
 
 // IsOpenAIRetryable reports whether an OpenAI-compatible error is
-// retryable (spec §6.1: 429, 500, 502, 503, 504).
+// retryable (429, 500, 502, 503, 504).
 func IsOpenAIRetryable(code int) bool {
 	switch code {
 	case 429, 500, 502, 503, 504:
@@ -85,7 +85,7 @@ func IsOpenAIRetryable(code int) bool {
 }
 
 // IsNetworkTimeout reports whether err is a network timeout (always
-// retryable per spec §6.2).
+// retryable ).
 func IsNetworkTimeout(err error) bool {
 	if err == nil {
 		return false

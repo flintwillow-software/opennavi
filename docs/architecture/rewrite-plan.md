@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-28'
 tags:
   - architecture
   - plan
@@ -16,13 +16,11 @@ tags:
 
 ## Target
 
-Current: `cmd/navi` + `internal/daemon.Assemble` hardcode the runtime; `sdk/`
-is a validation stub that nothing bridges to.
-
-Target: a public `navi` composition root over public contract packages
-(`tool`, `thought`, `connector`, `portal`, `model`, `skill`), with
-implementations behind them, `cmd/navi` reduced to a reference navi, and the
-starter templates as real out-of-repo-style navis.
+**Shipped.** The rewrite is complete: a public `navi` composition root over
+public contract packages (`tool`, `thought`, `connector`, `portal`, `model`,
+`skill`), with implementations behind them, `cmd/navi` reduced to a reference
+navi, and the starter templates as real out-of-repo-style navis. `sdk/` — the
+old authoring stub — is retired.
 
 See [overview.md](./overview.md), [runtime.md](./runtime.md),
 [security.md](./security.md), [extension-model.md](./extension-model.md).
@@ -90,14 +88,16 @@ explicitly via `connector.SendTool()` (no auto-registration).
 
 ### M6 — guardrail
 
-- The current `S000805` guardrail builds the two in-tree templates. Extend it
-  with a synthetic external navi module and an external component module that
-  import only public contract packages.
+- The starter-template guardrail (CI job `templates`) builds the two in-tree
+  templates against the checkout.
+- A separate CI job (`external-consumer`) builds two synthetic out-of-repo
+  modules — `tools/external-navi` and `tools/external-component` — that import
+  only public contract packages, and asserts the component's import boundary.
 
 ## Explicitly out of scope
 
-- Runtime plugins (S000600) — deferred (ADR 0005).
-- Cloud platform / marketplace components (S000900).
+- Runtime plugins — deferred (ADR 0005).
+- Cloud platform / marketplace components.
 - Memory subsystem rewrite; this plan moves visibility, not semantics. The
   *model* is still documented in [memory.md](./memory.md), and delivery is
   NAVI-350 (long-term) and NAVI-351 (short-term).

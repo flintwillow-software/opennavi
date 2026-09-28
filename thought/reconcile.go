@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// ── Store-reconcile loop (S010002 external-writer reconciliation,
+// ── Store-reconcile loop (external-writer reconciliation,
 // NAVI-336) ───────────────────────────────────────────────────────────
 //
 // The queue is the runtime's main loop, but the store is the
@@ -137,7 +137,7 @@ func (q *Queue) reconcileOnce() {
 			q.paused = append(q.paused, t)
 			adopted++
 		case ThoughtFailed:
-			// Failed joins pending awaiting Retry (S010002 retry-in-place):
+			// Failed joins pending awaiting Retry (retry-in-place):
 			// the row stays Status=failed, so Dequeue's transition gate
 			// skips it — adoption just makes it visible to Retry/observers
 			// without dodging the failure record.

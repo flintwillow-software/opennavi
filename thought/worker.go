@@ -22,7 +22,7 @@ type Runner interface {
 	Run(ctx context.Context, t *Thought) error
 }
 
-// Pool is a bounded worker pool over a Queue (spec: one worker
+// Pool is a bounded worker pool over a Queue (one worker
 // per thought, isolated processing). Workers claim thoughts via
 // Dequeue and run them through the Runner.
 type Pool struct {

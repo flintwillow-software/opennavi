@@ -1,4 +1,4 @@
-// Package gateway implements the HTTP portal gateway (S000407): a
+// Package gateway implements the HTTP portal gateway: a
 // portal.Portal that serves the bounded observation stream and control
 // channel over HTTP, so a remote front-end can observe and steer a navi.
 //

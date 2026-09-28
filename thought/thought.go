@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-// ThoughtStatus is the lifecycle state of a thought (spec §2.1).
+// ThoughtStatus is the lifecycle state of a thought.
 type ThoughtStatus string
 
 const (
@@ -63,16 +63,16 @@ type Thought struct {
 	// Mode names the capability profile this thought runs under (empty =
 	// the navi's default; ADR 0007).
 	Mode string
-	// DeferUntil is the not-before timestamp (S130600 §02): the thought
+	// DeferUntil is the not-before timestamp: the thought
 	// is queued — and persisted — immediately but is not claimable until
 	// this time passes. Zero = claimable now. Durability is real state
-	// (S010002), not an in-memory timer: crash recovery preserves it.
+	// not an in-memory timer: crash recovery preserves it.
 	DeferUntil time.Time
 	// SessionID links the thought to its persisted transcript, when one
 	// exists.
 	SessionID string
 	// Foreground marks this thought as the binary run's interactive work
-	// (S010003): it may claim the queue's reserved foreground slots and
+	// it may claim the queue's reserved foreground slots and
 	// competes by the same priority/preemption rules as everything else.
 	Foreground bool
 	// CreatedAt / UpdatedAt are store-managed timestamps.
@@ -98,16 +98,16 @@ type Thought struct {
 }
 
 // OriginSelf / OriginTool tag thoughts the navi scheduled for itself
-// (S130600 §1.2 "origin tagging"): self-directed work is distinguishable
+// ("origin tagging"): self-directed work is distinguishable
 // from connector-sourced work in dashboards, and the queue clamps its
-// priority to the conservative band. The spec uses `origin: self`; the
+// priority to the conservative band. The queue's spelling is `origin: self`; the
 // thought-tool layers tag `origin: tool` — both spellings count as
 // self-scheduled.
 const OriginSelf = "self"
 const OriginTool = "tool"
 
 // SelfScheduledHighBound is the default priority floor for self-scheduled
-// thoughts (S130600 §1.2 "priority clamp"): any priority above it
+// thoughts ("priority clamp"): any priority above it
 // (numerically lower) is clamped down, so self-directed work can never
 // preempt external work (preemption needs priority ≤
 // HighPriorityThreshold) or squat the reserved slots unless runtime
@@ -126,7 +126,7 @@ var (
 	ErrThoughtProtected = errors.New("thought protected from deletion")
 )
 
-// validTransitions is the lifecycle state machine (spec §2.2).
+// validTransitions is the lifecycle state machine.
 var validTransitions = map[ThoughtStatus][]ThoughtStatus{
 	ThoughtPending:   {ThoughtRunning, ThoughtCancelled},
 	ThoughtRunning:   {ThoughtComplete, ThoughtPaused, ThoughtFailed},
@@ -138,7 +138,7 @@ var validTransitions = map[ThoughtStatus][]ThoughtStatus{
 
 // Note on paused → pending: resume re-queues a paused thought; the
 // pending → running transition happens when a worker claims it and a
-// slot is allocated (spec §2.2 "resume requested, slot available").
+// slot is allocated ("resume requested, slot available").
 
 // Transition validates and applies a status change.
 func (t *Thought) Transition(to ThoughtStatus) error {
@@ -195,7 +195,7 @@ func (t *Thought) EffectivePriority() int {
 }
 
 // EffectiveSelfPriority clamps a self-scheduled thought's priority to the
-// conservative band (S130600 §1.2): the navi cannot schedule itself ahead
+// conservative band: the navi cannot schedule itself ahead
 // of external work by default. The queue applies this inside Enqueue for
 // origin-tagged thoughts; the tool layer may also pre-clamp before
 // enqueue.
@@ -208,7 +208,7 @@ func (t *Thought) EffectiveSelfPriority() int {
 }
 
 // Due reports whether the thought is claimable by the pool at time now:
-// no deferral, or the not-before time has passed (S130600 §02).
+// no deferral, or the not-before time has passed.
 func (t *Thought) Due(now time.Time) bool {
 	if t.DeferUntil.IsZero() {
 		return true
@@ -228,11 +228,11 @@ const (
 	EventFailed    EventKind = "failed"
 	EventCancelled EventKind = "cancelled"
 	EventPreempted EventKind = "preempted"
-	// EventMessageRouted is the routing delivery ack (S010312),
+	// EventMessageRouted is the routing delivery ack,
 	// carrying the injection path in Delivery.
 	EventMessageRouted EventKind = "message_routed"
 	// EventDeleted fires when a thought record is removed entirely
-	// (Queue.Delete, S130600 §04) — distinct from EventCancelled:
+	// (Queue.Delete) — distinct from EventCancelled:
 	// removal is not cancellation, and the audit/ack trail
 	// distinguishes them. Detail carries the PRIOR status so metrics
 	// observers (which only see events) can decrement the right
@@ -248,8 +248,8 @@ type Event struct {
 	Kind      EventKind
 	ThoughtID string
 	Detail    string
-	// Delivery is the routing path for message_routed acks (S010312:
-	// "context-append" | "steering" | "resume-with-message" | "").
+	// Delivery is the routing path for message_routed acks
+	// ("context-append" | "steering" | "resume-with-message" | "").
 	// Empty on lifecycle events.
 	Delivery string
 	At       time.Time
@@ -267,8 +267,8 @@ type Event struct {
 type ThoughtSystem interface {
 	// Enqueue schedules a thought (deferral rides the Thought).
 	Enqueue(t *Thought) error
-	// RouteMessage delivers a message to a thought (S010312
-	// lifecycle-dependent delivery).
+	// RouteMessage delivers a message to a thought
+	// (lifecycle-dependent delivery).
 	RouteMessage(id, text string) error
 	Pause(id string) error
 	Resume(id string) error

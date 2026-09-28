@@ -89,7 +89,7 @@ func readNotes(t *testing.T, reg *registry.Registry, args string) []map[string]a
 }
 
 // ---------------------------------------------------------------------------
-// Registration metadata (S130400 complete ToolDefinition).
+// Registration metadata (complete ToolDefinition).
 
 func TestRegisterMetadata(t *testing.T) {
 	ss := newTestStore(t)
@@ -131,7 +131,7 @@ func TestRegisterMetadata(t *testing.T) {
 	if writeDef.Mode != registry.ToolModeSequential {
 		t.Errorf("note_write mode = %s, want sequential", writeDef.Mode.String())
 	}
-	// Recovery metadata per S130500 §04–05.
+	// Recovery metadata
 	if readDef.Recovery != "none" || writeDef.Recovery != "atomic_transaction" {
 		t.Errorf("recovery mismatch: read=%q write=%q", readDef.Recovery, writeDef.Recovery)
 	}
@@ -159,7 +159,7 @@ func TestRegisterValidation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// note_read scenarios (S130500 §04): by id, by tag, literal substring.
+// note_read scenarios: by id, by tag, literal substring.
 
 func TestReadByIDReturnsFullNote(t *testing.T) {
 	ss := newTestStore(t)
@@ -254,7 +254,7 @@ func TestReadLimitAndSelectorCardinality(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// note_write scenarios (S130500 §05): create, update, caps, remove.
+// note_write scenarios: create, update, caps, remove.
 
 func TestWriteAssignsIDAndUpdatePreservesCreatedAt(t *testing.T) {
 	ss := newTestStore(t)
@@ -379,7 +379,7 @@ func TestWriteInputSchemaEnforced(t *testing.T) {
 	ss := newTestStore(t)
 	reg := newRegistry(t, "navi-a", ss)
 	// Required title+body for create/update (handler-enforced so that
-	// remove-only calls stay schema-legal per S130500 §05).
+	// remove-only calls stay schema-legal ).
 	if _, err := reg.Dispatch(context.Background(), "note_write", json.RawMessage(`{"title":"only"}`)); err == nil {
 		t.Error("note_write without body accepted")
 	}
@@ -392,7 +392,7 @@ func TestWriteInputSchemaEnforced(t *testing.T) {
 func TestReadTruncationAtReadCap(t *testing.T) {
 	ss := newTestStore(t)
 	// Write with generous defaults, read through a tighter cap: stored
-	// over-cap bodies are cut with a notice (S130500 §04).
+	// over-cap bodies are cut with a notice.
 	reg := newRegistry(t, "navi-a", ss)
 	id := writeNote(t, reg, `{"title":"long","body":"abcdefghij"}`)
 

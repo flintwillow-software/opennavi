@@ -98,7 +98,7 @@ func happenings(doc map[string]any) ([]string, int) {
 
 // TestPortalEndpointServesLiveStream: an assembled runtime with
 // PortalAddr set streams the thought lifecycle + per-thought agent
-// events over the serve path. Observation is an attachment (S000407),
+// events over the serve path. Observation is an attachment,
 // so the allow-all authorizer seam is wired for the happy path;
 // control still fails closed for the unauthorizing metrics-style stub.
 func TestPortalEndpointServesLiveStream(t *testing.T) {
@@ -226,7 +226,7 @@ func TestPortalEndpointServesLiveStream(t *testing.T) {
 
 // TestPortalObservationFailClosedWithoutAuthorizer: with NO authorizer
 // wired, observation AND control are attachments that fail closed
-// (S040200) — the stream (prompt content, tool-input snippets) is
+// — the stream (prompt content, tool-input snippets) is
 // never served to an unauthorized identity, and control is never
 // defaulted open.
 func TestPortalObservationFailClosedWithoutAuthorizer(t *testing.T) {

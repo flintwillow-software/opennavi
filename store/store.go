@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ListOptions filters session listings (spec §04).
+// ListOptions filters session listings.
 type ListOptions struct {
 	Profile string
 	AgentID string

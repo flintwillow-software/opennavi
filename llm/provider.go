@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Provider is the unified LLM provider contract (spec §01): every
+// Provider is the unified LLM provider contract: every
 // provider adapter (Ollama, OpenAI, Anthropic, ...) implements it.
 type Provider interface {
 	// Stream sends the conversation and returns a channel of stream
@@ -36,15 +36,15 @@ type Provider interface {
 }
 
 // TokenCounter counts tokens for a message sequence or plain text
-// (spec §4.2). Per-provider implementations: exact API-reported counts
+// Per-provider implementations: exact API-reported counts
 // where available, tiktoken for OpenAI-compatible models (deferred —
-// new dependency), heuristic estimation otherwise (§4.3).
+// new dependency), heuristic estimation otherwise.
 type TokenCounter interface {
 	CountTokens(messages []Message) int
 	CountText(text string) int
 }
 
-// HeuristicTokenCounter estimates tokens (spec §4.3): ~4 characters
+// HeuristicTokenCounter estimates tokens: ~4 characters
 // per token for ordinary text (counted in RUNES — bytes overestimate
 // multibyte content ~3x for CJK), ~3 characters per token for
 // structured tool output (JSON-shaped text compresses better than
@@ -84,14 +84,14 @@ func (c HeuristicTokenCounter) CountTokens(messages []Message) int {
 		}
 		total += countRunes(msg.Content)
 		for _, tc := range msg.ToolCalls {
-			// Spec §4.3 mandates the 3-chars/token rule for tool OUTPUT;
+			// Spec mandates the 3-chars/token rule for tool OUTPUT;
 			// tool call ARGUMENTS are the same shape (model-generated
 			// structured JSON), so the same ratio is applied there —
 			// documented judgment call.
 			total += toolChars(utf8.RuneCountInString(string(tc.Arguments)))
 		}
 		for _, tr := range msg.ToolResults {
-			// Tool output: 3 chars/token per spec §4.3.
+			// Tool output: 3 chars/token
 			total += toolChars(utf8.RuneCountInString(tr.Content))
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // applies them through the thought-system handle, binding both at Start
 // from Deps. The gateway frames it over HTTP; the in-process TUI controls
 // the thought system directly. Authorization fails closed with no
-// authorizer wired (S040200): IAM lands later.
+// authorizer wired: IAM lands later.
 
 // Action enumerates portal control operations for authorization.
 type Action string

@@ -25,7 +25,7 @@ import (
 	"time"
 )
 
-// ToolAccess is the access level a tool call requires (S130000 §01).
+// ToolAccess is the access level a tool call requires.
 // The zero value is "any" for filters; definitions must set a real level.
 type ToolAccess int
 
@@ -40,7 +40,7 @@ const (
 	AccessExecute
 )
 
-// String returns the spec-facing access name.
+// String returns the canonical access name.
 func (a ToolAccess) String() string {
 	switch a {
 	case AccessReadOnly:
@@ -67,7 +67,7 @@ const (
 	ToolModeSequential
 )
 
-// String returns the spec-facing mode name.
+// String returns the canonical mode name.
 func (m ToolMode) String() string {
 	switch m {
 	case ToolModeParallel:
@@ -79,7 +79,7 @@ func (m ToolMode) String() string {
 	}
 }
 
-// ToolOrigin records who provided a tool (S130400 §01 provenance).
+// ToolOrigin records who provided a tool (provenance).
 type ToolOrigin int
 
 const (
@@ -91,11 +91,11 @@ const (
 	OriginSDK
 	// OriginAuthor tools are registered by a navi author.
 	OriginAuthor
-	// OriginExtension tools arrive via the extension contract (S000600).
+	// OriginExtension tools arrive via the extension contract.
 	OriginExtension
 )
 
-// String returns the spec-facing origin name.
+// String returns the canonical origin name.
 func (o ToolOrigin) String() string {
 	switch o {
 	case OriginBuiltin:
@@ -111,7 +111,7 @@ func (o ToolOrigin) String() string {
 	}
 }
 
-// SourceInfo records a tool's provenance (S130400 §01): where the
+// SourceInfo records a tool's provenance: where the
 // tool came from plus optional location metadata for audit and
 // filtering.
 type SourceInfo struct {
@@ -122,13 +122,13 @@ type SourceInfo struct {
 }
 
 // PrepareArguments migrates older argument shapes to the current
-// schema before validation (S130400 §06). The contract types the hook;
+// schema before validation. The contract types the hook;
 // the M4 port attaches it by registration option (see the package
 // note on the Def omission).
 type PrepareArguments func(args map[string]any) (map[string]any, error)
 
 // Schema is the JSON Schema tool-call arguments are validated against
-// before dispatch (S130400 §06) — a pragmatic stdlib-encoded subset,
+// before dispatch — a pragmatic stdlib-encoded subset,
 // constructed via ParseSchema (mirrors tools/registry.Schema).
 type Schema struct {
 	raw json.RawMessage
@@ -196,7 +196,7 @@ type Def struct {
 }
 
 // Namespace returns the namespace of the tool name: the segment before
-// the first underscore (S130400 §04).
+// the first underscore.
 func (d Def) Namespace() string {
 	name, _, _ := strings.Cut(d.Name, "_")
 	return name

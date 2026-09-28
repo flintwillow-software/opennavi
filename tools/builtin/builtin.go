@@ -1,12 +1,12 @@
 // Package builtin registers the compiled-in builtin tools (file_read,
-// shell_exec) into the public tool registry (S130400) with complete
+// shell_exec) into the public tool registry with complete
 // metadata descriptors. This is the daemon's registry-first tool path:
 // the registry owns the LLM-facing metadata and dispatch enforcement,
 // and tools/bridge binds the active set into the agent executor — so
 // builtin tools are governed by the same policy and active-set rules
 // as catalog and author tools.
 //
-// When the full tool catalog lands (S130000, NAVI-59), catalog tools
+// When the full tool catalog lands (, NAVI-59), catalog tools
 // register through the same shape; this package remains the home of
 // the two always-compiled builtins.
 package builtin
@@ -68,7 +68,7 @@ func Tools(workDir string) ([]tool.Tool, error) {
 }
 
 // definition renders a builtin's executor descriptor as a complete
-// ToolDefinition with catalog metadata (S130400 §01).
+// ToolDefinition with catalog metadata.
 func definition(t agent.AgentTool) (registry.ToolDefinition, error) {
 	schema, err := registry.ParseSchema(t.Parameters)
 	if err != nil {

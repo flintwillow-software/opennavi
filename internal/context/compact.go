@@ -22,7 +22,7 @@ type Summarizer interface {
 }
 
 // BuildCompactionPrompt builds the summarization prompt for the given
-// transcript (spec §3.3): preserve key decisions and outcomes, important
+// transcript: preserve key decisions and outcomes, important
 // context and constraints, and action items or next steps.
 func BuildCompactionPrompt(transcript []TranscriptMessage) string {
 	var sb strings.Builder

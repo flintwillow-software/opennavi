@@ -57,7 +57,7 @@ func TestDue(t *testing.T) {
 	}
 }
 
-// ── defer_until queue mechanism (S130600 §02) ───────────────────────────
+// ── defer_until queue mechanism ───────────────────────────
 
 func TestQueueDefersUntilDue(t *testing.T) {
 	q, err := NewQueue(Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
@@ -102,7 +102,7 @@ func TestQueueDefersUntilDue(t *testing.T) {
 }
 
 func TestQueueDeferralSurvivesRestart(t *testing.T) {
-	// Durability (S010002): the deferral is persisted, so a rebuilt
+	// Durability: the deferral is persisted, so a rebuilt
 	// queue over the same store still skips the thought until due.
 	store := NewMemoryStore()
 	cfg := Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue, FlushInterval: -1} // legacy sync: the restart test needs persisted rows
@@ -163,7 +163,7 @@ func TestEnqueueClampsSelfScheduledPriority(t *testing.T) {
 		t.Errorf("self priority = %d, want clamp band %d", got.EffectivePriority(), SelfScheduledHighBound)
 	}
 
-	// The spec spelling origin: self clamps the same way.
+	// The `origin: self` spelling clamps the same way.
 	self2 := newThought("self2", 1)
 	self2.Metadata = map[string]string{"origin": OriginSelf}
 	if err := q.Enqueue(self2); err != nil {
@@ -429,7 +429,7 @@ func TestQueueCancelLifecycle(t *testing.T) {
 		t.Fatalf("claimed %v, want r running", claimed)
 	}
 
-	// Cancelling a running thought requires pause first (spec §2.2).
+	// Cancelling a running thought requires pause first.
 	if err := q.Cancel("r"); err == nil {
 		t.Fatal("cancel of running thought should fail")
 	}

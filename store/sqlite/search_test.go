@@ -337,7 +337,7 @@ func TestExportJSON(t *testing.T) {
 	if doc.SessionID != s.ID || doc.Name != s.Name || len(doc.Messages) != len(s.Entries) {
 		t.Fatalf("json export = %+v", doc)
 	}
-	// Tool message carries tool_name per spec §07.2.
+	// Tool message carries tool_name
 	found := false
 	for _, m := range doc.Messages {
 		if m.Role == "assistant" && m.ToolName == "file_read" {

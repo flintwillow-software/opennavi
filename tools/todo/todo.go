@@ -1,4 +1,4 @@
-// Package todo implements the durable todo tools (S130500 §00–02):
+// Package todo implements the durable todo tools:
 // `todo_read`, `todo_write`, and `todo_update`. The tools give a navi
 // a persistent plan — read the current items, atomically replace the
 // whole plan, or apply partial updates by id.
@@ -24,7 +24,7 @@ import (
 )
 
 // Statuses accepted by todo_read's optional status filter and
-// todo_update's status transitions (S130500 §00/§02).
+// todo_update's status transitions.
 const (
 	StatusPending    = "pending"
 	StatusInProgress = "in_progress"
@@ -32,14 +32,14 @@ const (
 )
 
 // Definitions returns the complete ToolDefinition descriptors for the
-// three todo tools (S130500 §00–02). Handlers are bound to the given
+// three todo tools. Handlers are bound to the given
 // registry at registration time.
 func Definitions() []registry.ToolDefinition {
 	return []registry.ToolDefinition{readDef(), writeDef(), updateDef()}
 }
 
 // RegisterTools registers all three todo tools on reg for the navi
-// identity naviID, persisting through state (S130500 §07 seam).
+// identity naviID, persisting through state (seam).
 func RegisterTools(reg *registry.Registry, naviID string, state store.StatefulToolStore) error {
 	if reg == nil {
 		return errors.New("todo: registry is required")
@@ -222,7 +222,7 @@ func updateDef() registry.ToolDefinition {
 	}
 }
 
-// handleRead implements todo_read (S130500 §00): list items ordered
+// handleRead implements todo_read: list items ordered
 // by priority then most recent activity, optionally filtered by
 // status, optionally capped.
 func handleRead(ctx context.Context, args map[string]any, state registry.StateContext) (string, error) {
@@ -249,7 +249,7 @@ func handleRead(ctx context.Context, args map[string]any, state registry.StateCo
 	return marshalTodos(items)
 }
 
-// handleWrite implements todo_write (S130500 §01): atomic full-replace
+// handleWrite implements todo_write: atomic full-replace
 // of the todo list; returns the persisted items with assigned ids.
 func handleWrite(ctx context.Context, args map[string]any, state registry.StateContext) (string, error) {
 	rawItems, ok := args["items"].([]any)
@@ -293,7 +293,7 @@ func handleWrite(ctx context.Context, args map[string]any, state registry.StateC
 	return marshalTodos(persisted)
 }
 
-// handleUpdate implements todo_update (S130500 §02): partial updates
+// handleUpdate implements todo_update: partial updates
 // by id, applied atomically; an unknown id rejects the whole batch
 // (surfaced from the store's ErrTodoNotFound wrap).
 func handleUpdate(ctx context.Context, args map[string]any, state registry.StateContext) (string, error) {

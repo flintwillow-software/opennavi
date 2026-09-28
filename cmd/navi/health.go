@@ -22,7 +22,7 @@ type healthResult struct {
 	Todos    *todoHealth `json:"todos,omitempty"`
 }
 
-// todoHealth is the navi's current todo state (S130500 §07): counts
+// todoHealth is the navi's current todo state: counts
 // by status surfaced in the health view.
 type todoHealth struct {
 	Pending    int    `json:"pending"`
@@ -74,7 +74,7 @@ func runHealth(args []string) error {
 		store.Close()
 	}
 
-	// Todo state (S130500 §07): counts by status for the navi. A
+	// Todo state: counts by status for the navi. A
 	// probe failure is reported but does not fail the health command —
 	// todo storage may legitimately be untouched (no tool activity
 	// yet); only store-level failures surface.

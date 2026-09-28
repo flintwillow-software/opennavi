@@ -6,7 +6,7 @@ import (
 )
 
 // TodoStatus is the lifecycle state of a durable todo item
-// (S130500 §00–02). The zero value is not a valid status; a status
+// The zero value is not a valid status; a status
 // must always be set explicitly.
 type TodoStatus string
 
@@ -28,7 +28,7 @@ func (s TodoStatus) Valid() bool {
 	return false
 }
 
-// Todo is one durable todo item (S130500 §00). IDs are stable
+// Todo is one durable todo item. IDs are stable
 // across partial updates; a full-replace write reassigns them.
 type Todo struct {
 	// ID is the stable item id, assigned on persist.
@@ -47,7 +47,7 @@ type Todo struct {
 }
 
 // TodoUpdate is a partial update applied to one todo item by id
-// (S130500 §02). Pointer fields are only applied when non-nil; Remove
+// Pointer fields are only applied when non-nil; Remove
 // deletes the item instead.
 type TodoUpdate struct {
 	ID       string
@@ -57,7 +57,7 @@ type TodoUpdate struct {
 	Remove   bool
 }
 
-// Note is one verbatim scratchpad entry (S130500 §04–05). Bodies are
+// Note is one verbatim scratchpad entry. Bodies are
 // stored verbatim — no semantic processing (semantic recall belongs to
 // the memory system, not notes).
 type Note struct {
@@ -100,7 +100,7 @@ var (
 )
 
 // StatefulToolStore persists stateful catalog tool state
-// (S130500 §07): todo and note state for tools registered through the
+// todo and note state for tools registered through the
 // stateful registration variant (tools/registry.RegisterStateful).
 //
 // Per-navi scoping is part of the contract: naviID is the first

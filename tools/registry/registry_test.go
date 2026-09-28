@@ -77,7 +77,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateTool) {
 		t.Fatalf("duplicate registration error = %v, want ErrDuplicateTool", err)
 	}
-	// The original registration remains intact (S130400 §02).
+	// The original registration remains intact.
 	got, ok := r.Get("file_read")
 	if !ok || got.Access != AccessReadOnly {
 		t.Error("original registration not intact after duplicate rejection")
@@ -89,7 +89,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 
 func TestIncompleteDefinitionRejected(t *testing.T) {
 	r := New()
-	// Minimal descriptor: name + description only (spec scenario).
+	// Minimal descriptor: name + description only.
 	d := ToolDefinition{Name: "file_write", Description: "Write a file."}
 	err := r.Register(d, okHandler)
 	if err == nil {
@@ -206,7 +206,7 @@ func TestRegisteredVsActive(t *testing.T) {
 	mustRegister(t, r, def("shell_exec"))
 
 	// Nothing active yet: the LLM-facing list is empty even though the
-	// registry holds both tools (S130400 §03 registered vs active).
+	// registry holds both tools (registered vs active).
 	if got := r.ActiveNames(); len(got) != 0 {
 		t.Errorf("ActiveNames() = %v before SetActive, want empty", got)
 	}
@@ -292,7 +292,7 @@ func TestDispatchInvalidArgumentsRejectedWithoutHandler(t *testing.T) {
 		t.Fatalf("SetActive: %v", err)
 	}
 
-	// Missing required property (S130400 §06 invalid-arguments error).
+	// Missing required property (invalid-arguments error).
 	if _, err := r.Dispatch(context.Background(), "file_read", json.RawMessage(`{}`)); err == nil {
 		t.Error("Dispatch accepted arguments missing required path")
 	} else if !strings.Contains(err.Error(), "invalid arguments") {

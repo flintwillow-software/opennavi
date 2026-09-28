@@ -91,7 +91,7 @@ func TestRuntimeE2EKill9Recovery(t *testing.T) {
 	rt1.Store.Close()
 
 	// Phase 2: restart — fresh assemble over the same DB. The queue's
-	// crash recovery transitions running → pending (spec §3.5), and
+	// crash recovery transitions running → pending, and
 	// the pool (started by Run) processes it.
 	rt2, err := Assemble(RuntimeParams{
 		SessionDB: dbPath,

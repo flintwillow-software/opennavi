@@ -10,7 +10,7 @@ import (
 )
 
 // buildRegistry converts the declared Tools collection into the runtime
-// tool registry (S130400). The registry owns metadata, validation,
+// tool registry. The registry owns metadata, validation,
 // active-set membership, and dispatch; the runner binds a mode-selected
 // subset of it into each thought's agent executor via tools/bridge.
 //

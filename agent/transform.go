@@ -9,7 +9,7 @@ import (
 )
 
 // TransformContext converts agent state messages into the LLM-facing
-// format via the context transformation pipeline (spec section 06):
+// format via the context transformation pipeline:
 //
 //  1. Convert agent messages to LLM messages
 //  2. Filter UI-only messages

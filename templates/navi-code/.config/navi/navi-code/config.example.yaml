@@ -1,4 +1,4 @@
-# Runtime config for navi-code (S000200 §04).
+# Runtime config for navi-code.
 #
 # This is the operator/end-user deployment surface — it never modifies the
 # compiled navi definition, and it can only NARROW the compiled policy.

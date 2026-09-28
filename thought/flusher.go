@@ -26,7 +26,7 @@ import (
 //     write would make adopted work invisible)
 //   - Delete — record removal is the observable effect
 //
-// Loss window (documented honestly, S010002 delta): a kill -9 loses
+// Loss window (documented honestly, delta): a kill -9 loses
 // at most ONE flush interval of non-checkpoint mutations (by default
 // 250ms). Checkpoint/park writes are synchronous, so interrupt
 // durability is unchanged.

@@ -8,7 +8,7 @@ import (
 	"github.com/flintwillow-software/opennavi/store"
 )
 
-// exportMessage is one line/element of the export format (spec §07.2).
+// exportMessage is one line/element of the export format.
 type exportMessage struct {
 	Role       string `json:"role"`
 	Content    string `json:"content"`
@@ -18,7 +18,7 @@ type exportMessage struct {
 	ToolInput  string `json:"tool_input,omitempty"`
 }
 
-// exportDocument is the top-level JSON export structure (spec §07.2).
+// exportDocument is the top-level JSON export structure.
 type exportDocument struct {
 	SessionID string          `json:"session_id"`
 	Name      string          `json:"name"`
@@ -63,7 +63,7 @@ func exportMessages(sess *store.Session) ([]exportMessage, error) {
 }
 
 // ExportJSON writes the session to path in the machine-readable JSON
-// format from spec §07.2.
+// format from
 func (s *Store) ExportJSON(sess *store.Session, path string) error {
 	msgs, err := exportMessages(sess)
 	if err != nil {
@@ -87,7 +87,7 @@ func (s *Store) ExportJSON(sess *store.Session, path string) error {
 }
 
 // ExportJSONL writes the session as newline-delimited JSON: line one is
-// the session header, then one message object per line (spec §01.2 —
+// the session header, then one message object per line (—
 // the human-readable, portable backup format that ImportJSONL reads).
 func (s *Store) ExportJSONL(sess *store.Session, path string) error {
 	f, err := os.Create(path)

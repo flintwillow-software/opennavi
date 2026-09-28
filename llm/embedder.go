@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Embedder produces embeddings for text (spec §05 Tier 5: knowledge
+// Embedder produces embeddings for text (Tier 5: knowledge
 // base / semantic search). Implementations: OllamaEmbedder (local,
 // no keys) now; API-based embedders later (gated on keys).
 type Embedder interface {
@@ -24,7 +24,7 @@ type Embedder interface {
 }
 
 // DefaultEmbedModel is the default local embedding model (768-dim
-// nomic-embed-text class, per spec §05).
+// nomic-embed-text class, ).
 const DefaultEmbedModel = "nomic-embed-text"
 
 // OllamaEmbedder implements Embedder via Ollama's /api/embeddings

@@ -1,5 +1,5 @@
 // Package session keeps the session *behavior* internal (manager,
-// compaction strategy, agent snapshot sync) per S000800 §01. The
+// compaction strategy, agent snapshot sync) per The
 // session *data model* — Session, SessionEntry, the Store contract,
 // and MemoryStore — is public in github.com/flintwillow-software/
 // opennavi/store (NAVI-276); the aliases below keep internal consumers

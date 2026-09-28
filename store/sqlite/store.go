@@ -1,5 +1,5 @@
 // Package sqlite is the public SQLite implementation of store.Store
-// (S000800 §01): sessions, thoughts, and memory share one encrypted
+// sessions, thoughts, and memory share one encrypted
 // database. Open with Open/OpenDB; encryption is selected via
 // CipherFromEnv or an explicit Cipher.
 //

@@ -7,7 +7,7 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// This file is the portal observation contract (NAVI-352, S000407): a
+// This file is the portal observation contract (NAVI-352): a
 // bounded, cursor-ed view of everything a running navi emits, so a
 // portal can render a running thought's output through the public
 // contract alone — no runtime hook, no import of internal/.
@@ -24,7 +24,7 @@ const (
 	// CategoryQueue is a thought-system lifecycle transition
 	// (enqueued/started/paused/.../persist_failed).
 	CategoryQueue Category = "queue"
-	// CategoryAck is a message-routing delivery ack (S010312), carrying
+	// CategoryAck is a message-routing delivery ack, carrying
 	// the routing path in Delivery.
 	CategoryAck Category = "ack"
 	// CategoryAgent is a per-thought agent event (content deltas, tool
@@ -45,7 +45,7 @@ type Event struct {
 	ThoughtID string
 	// Detail is a human-short summary (truncated; never raw credentials).
 	Detail string
-	// Delivery is the routing path for acks (S010312); empty otherwise.
+	// Delivery is the routing path for acks; empty otherwise.
 	Delivery string
 	// At is the event time.
 	At time.Time

@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-28'
 tags:
   - architecture
   - extensions
@@ -55,22 +55,35 @@ github.com/acme/navi-jira/
 ```go
 package jira
 
-import "github.com/flintwillow-software/opennavi/tool"
+import (
+    "context"
+    "encoding/json"
+    "time"
+
+    "github.com/flintwillow-software/opennavi/tool"
+)
 
 func IssueRead(c Config) tool.Tool {
-    return tool.New(
-        tool.Def{
-            Name:        "jira_issue_read",
-            Description: "Read a Jira issue by key.",
-            InputSchema: tool.Schema(`{...}`),
-            Access:      tool.ReadOnly,
-            Timeout:     10 * time.Second,
-            Recovery:    "retry_once",
-            Mode:        tool.Sequential,
-            Source:      tool.Source{Module: "github.com/acme/navi-jira", Version: "v1.2.0"},
+    schema, _ := tool.ParseSchema(json.RawMessage(`{...}`))
+    return tool.Tool{
+        Def: tool.Def{
+            Name:          "jira_issue_read",
+            Description:   "Read a Jira issue by key.",
+            InputSchema:   schema,
+            OutputFormat:  "text",
+            Access:        tool.AccessReadOnly,
+            Timeout:       10 * time.Second,
+            Recovery:      "retry_once",
+            Mode:          tool.ToolModeSequential,
+            Version:       "1.2.0",
+            PromptSnippet: "Read a Jira issue by key",
+            SourceInfo: tool.SourceInfo{
+                Origin: tool.OriginAuthor,
+                Path:   "github.com/acme/navi-jira",
+            },
         },
-        func(ctx context.Context, args map[string]any) (string, error) { ... },
-    )
+        Handler: func(ctx context.Context, args map[string]any) (string, error) { ... },
+    }
 }
 ```
 
@@ -78,7 +91,7 @@ func IssueRead(c Config) tool.Tool {
 |---|---|---|
 | Tool | `func Foo(cfg) tool.Tool` | Full metadata descriptor |
 | Skill | `//go:embed *.md` + accessor | Content travels with the module, compiles in |
-| Model | `func Foo(...) model.Model` | Provider descriptor; key resolved at runtime |
+| Model | `func Foo(...) model.Provider` | Provider descriptor; the credential is a reference resolved at runtime |
 | Connector | implements `connector.Connector` | Receives thought/model handles via `Deps` |
 | Portal | implements `portal.Portal` | List/schedule/steer thoughts via `Deps` |
 
@@ -94,15 +107,21 @@ on top.
 var content embed.FS
 
 func main() {
+    persona, _ := fs.ReadFile(content, "persona.md")
     n := navi.New("oncall-bot",
         navi.WithVersion(version),
-        navi.WithPersonalityFS(content, "persona.md"),
+        navi.WithPersonality(string(persona)),
     )
-    n.Skills.AddFS(content, "skills")
+    n.Skills.Add(skill.Skill{
+        Name:    "triage",
+        Content: mustRead(content, "skills/triage.md"),
+    })
     n.Tools.Add(jira.IssueRead(jira.Config{Credential: "JIRA_TOKEN"}))
     n.Models.Add(model.Ollama("qwen3.8:27b", model.Default()))
-    n.Connectors.Add(connectors.Cron())
-    n.Portals.Add(portals.TUI())
+    n.Connectors.Add(cron.New(cron.Config{Schedules: []cron.Schedule{
+        {Name: "health", Expr: "*/30 * * * *", Prompt: "Report runtime health."},
+    }}))
+    n.Portals.Add(tui.NewPortal())
     if err := n.Run(context.Background()); err != nil {
         log.Fatal(err)
     }
@@ -114,12 +133,12 @@ record of what the binary can do.
 
 ## Build-time vs runtime
 
-| | Build-time module | Runtime plugin (deferred, S000600) |
+| | Build-time module | Runtime plugin (deferred) |
 |---|---|---|
 | Typed | yes | via schema/JSON-RPC |
 | Isolation | none | subprocess, sandboxed |
 | Rebuild required | yes | no |
-| Trust | covered by the navi signature; module graph | explicit allow-signers |
+| Trust | module graph (artifact signing deferred) | explicit allow-signers |
 | Registry origin | `author` / `sdk` / `builtin` | `extension` |
 
 Build-time is the primary path (ADR 0005). Runtime plugins, if introduced,
@@ -133,7 +152,9 @@ register into the same tool registry at a distinct trust level.
   compatibility record.
 - CI builds **synthetic out-of-repo modules** — an external navi and an external
   component module — against `main` and every release tag, in addition to the
-  in-tree starter templates. `tools/sdk-consumer` is the seed for this.
+  in-tree starter templates. `tools/external-navi` and
+  `tools/external-component` are those modules; the `external-consumer` CI job
+  builds them and asserts the component's import boundary.
 - `SourceInfo` is populated from build info so provenance is auditable at
   runtime.
 

@@ -1,43 +1,32 @@
-# internal/agent — layout map
+# agent — layout map
 
-This package implements the agent runtime (see
-[`docs/architecture/runtime.md`](../docs/architecture/runtime.md)). The original
-§09 file-structure sketch predates the implementation; the layout below is the
-actual one, which diverged during implementation (#148, PR #217). The review
-concluded the actual layout is better kept — this document maps the two for
-historical reference without renaming working code.
+The public agent runtime: the think → act → observation loop, its streaming
+event bus, and tool execution. See
+[`docs/architecture/runtime.md`](../docs/architecture/runtime.md) for how it
+fits the navi composition root.
 
-## Spec §09 → actual files
-
-| Spec §09 entry | Actual location | Notes |
-|---|---|---|
-| `agent.go` — Agent struct, NewAgent, public API | `agent.go` | matches; also hosts the `ProviderInterface` seam |
-| `state.go` — AgentState, copy-on-write mutations | **folded into `agent.go`** | no separate state file; `Agent` holds state directly — a distinct file only paid off once state outgrew the struct, and it hasn't |
-| `events.go` — Event types, EventBus, AgentEndBarrier | `events.go` | matches |
-| `loop.go` — Core execution loop | `loop.go` | matches (`runLoop`, spec section 07) |
-| `tools.go` — ToolExecutor, before/after hooks | **split**: `executor.go` + `tools.go` | see below |
-| `queue.go` — SteeringQueue, FollowUpQueue | `queue.go` | matches |
-| `transform.go` — Context transformation pipeline | `transform.go` | matches (`TransformContext`, spec section 06) |
-| `types.go` — AgentMessage, AgentEvent, AgentTool, AgentConfig | `types.go` | matches, plus `Role` and related enums |
-
-## Files the spec didn't anticipate
+## Files
 
 | File | Role |
 |---|---|
-| `executor.go` | `ToolExecutor` — tool-call dispatch with parallel/sequential modes and a parallelism limit. Split out of `tools.go` because dispatch semantics (mode, maxParallel, hooks) are independent of which tools exist |
+| `agent.go` | `Agent` struct, `NewAgent`, and the public runtime API (`Prompt`, `Continue`, `Abort`, `Subscribe`, `State`); also hosts the `ProviderInterface` seam |
+| `types.go` | `AgentMessage`, `AgentEvent`, `AgentTool`, `AgentConfig`, `AgentState`, `Role`, and related enums |
+| `events.go` | Event types, the event bus, and the agent-end barrier |
+| `loop.go` | The core execution loop (`runLoop`) |
+| `transform.go` | The context transformation pipeline (`TransformContext`) |
+| `executor.go` | `ToolExecutor` — tool-call dispatch with parallel/sequential modes and a parallelism limit |
 | `tools.go` | Built-in tool implementations (`file_read`, `shell_exec`) with byte caps, plus `RegisterBuiltinTools` binding them to a working directory |
+| `queue.go` | `SteeringQueue`, `FollowUpQueue` |
 | `compaction.go` | Context-window compaction: LLM summaries replace older messages near the token budget, with a tool-call-integrity-preserving cut point |
-| `provider.go` | Adapter seam between the agent's Message/Event types and the concrete LLM provider layer (`internal/llm`, #187). The run loop is untouched by provider changes — only this file moves |
+| `provider.go` | Adapter seam between the agent's `Message`/`Event` types and the concrete provider layer |
 
-## Rationale for the deviations
+## Notes
 
-1. **No `state.go`** — the copy-on-write state file was speculative; the
-   `Agent` struct carries state fine at current size. Reintroduce a state
-   file if mutation logic grows.
-2. **Executor/tool split** — "what runs tools" and "which tools exist" are
-   different axes; the split keeps the executor testable with mock tools
-   (`mock_test.go`) and lets the tool catalog (S130400 registry) slot in
-   without touching dispatch.
-3. **Compaction and provider files** — §09 predates the session-context and
-   provider-layer work; both are clean single-concern files that earned
-   their place.
+- **State lives on `Agent`** — there is no separate state file. Copy-on-write
+  mutation is a method on `Agent` (`State()`, `setState`); a distinct state
+  file only pays off once mutation logic outgrows the struct.
+- **Executor and tools are split** — "what runs tools" and "which tools exist"
+  are different axes; the split keeps the executor testable with mock tools
+  (`mock_test.go`) and lets the tool catalog slot in without touching dispatch.
+- **Compaction and provider are single-concern files** — context budgeting and
+  provider translation are independent of the loop, so they live on their own.

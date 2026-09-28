@@ -1,18 +1,18 @@
 // Package thoughts implements the thought-management tools
-// (S130600–130604): the navi's door into its own thought queue —
+// the navi's door into its own thought queue —
 // observe what is queued (thoughts_read), schedule follow-up or
 // deferred work (thoughts_create), reshape queued work
 // (thoughts_update), and remove records (thoughts_delete).
 //
 // The tools are queue-attached catalog tools: registered through
-// thought.RegisterQueueTools (S130600 §00), every handler receives
+// thought.RegisterQueueTools, every handler receives
 // the navi's own queue handle per dispatch and operates through the
 // queue's public API only — mutations never touch GetThought clones
 // (the queue owns its records). Snapshot reads (GetThoughts/GetThought)
 // observe; lifecycle mutations go through BumpPriority/Pause/Resume/
 // Cancel/Delete.
 //
-// Safety rails (S130600 §1.2): thoughts created through
+// Safety rails: thoughts created through
 // thoughts_create are tagged `origin: tool` so self-directed work is
 // distinguishable from connector-sourced work, and the queue clamps
 // their priority to the conservative band (EffectiveSelfPriority —
@@ -37,17 +37,17 @@ import (
 )
 
 // promptSummaryMax caps the prompt summary in thoughts_read output
-// (S130601: "prompt summary" — full prompts can be large).
+// ("prompt summary" — full prompts can be large).
 const promptSummaryMax = 200
 
 // Definitions returns the complete ToolDefinition descriptors for the
-// four thought-management tools (S130601–130604).
+// four thought-management tools.
 func Definitions() []registry.ToolDefinition {
 	return []registry.ToolDefinition{readDef(), createDef(), updateDef(), deleteDef()}
 }
 
 // Register registers all four tools on reg, bound to the queue the
-// navi runs on (S130600 §00 queue-attached registration).
+// navi runs on (queue-attached registration).
 func Register(reg *registry.Registry, q *thought.Queue) error {
 	if reg == nil {
 		return errors.New("thoughts: registry is required")
@@ -211,7 +211,7 @@ func deleteDef() registry.ToolDefinition {
 
 // ── handlers ─────────────────────────────────────────────────────────
 
-// handleRead implements thoughts_read (S130601): queue snapshot,
+// handleRead implements thoughts_read: queue snapshot,
 // optional status filter, ordered by priority then most recent
 // activity.
 func handleRead(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
@@ -253,9 +253,9 @@ func handleRead(ctx context.Context, args map[string]any, handle thought.QueueHa
 	return marshalThoughts(out)
 }
 
-// handleCreate implements thoughts_create (S130602): enqueue a durable
+// handleCreate implements thoughts_create: enqueue a durable
 // thought tagged origin:tool — the queue clamps self-scheduled
-// priority at Enqueue (S130600 §1.2). Optional defer_until makes the
+// priority at Enqueue. Optional defer_until makes the
 // thought durable-but-not-claimable until the timestamp passes.
 func handleCreate(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
 	prompt, err := stringField(args, "prompt")
@@ -318,7 +318,7 @@ func handleCreate(ctx context.Context, args map[string]any, handle thought.Queue
 	return marshalCreated(t)
 }
 
-// handleUpdate implements thoughts_update (S130603): partial updates
+// handleUpdate implements thoughts_update: partial updates
 // by id — clamped priority, lifecycle transitions, context append.
 // Mutations go through the queue's public API; snapshot reads provide
 // the values the clamp needs (GetThought returns clones).
@@ -335,7 +335,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle thought.Queue
 		if err != nil {
 			return "", fmt.Errorf("thoughts_update: invalid priority: %w", err)
 		}
-		// Clamp (S130600 §1.2): self-scheduled work never outranks
+		// Clamp: self-scheduled work never outranks
 		// external work. Apply the same band Enqueue applies.
 		if snap, gerr := q.GetThought(id); gerr == nil {
 			if origin, ok := snap.Metadata["origin"]; ok && (origin == thought.OriginSelf || origin == thought.OriginTool) {
@@ -356,7 +356,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle thought.Queue
 		}
 		switch s {
 		case "pause":
-			// Park-with-checkpoint semantics apply (S010002); the
+			// Park-with-checkpoint semantics apply; the
 			// checkpoint is supplied by the runner's cooperative
 			// park path. Only running thoughts pause — the queue
 			// rejects others with the lifecycle error.
@@ -397,7 +397,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle thought.Queue
 	return marshalSnapshotted(snap)
 }
 
-// handleDelete implements thoughts_delete (S130604): record removal —
+// handleDelete implements thoughts_delete: record removal —
 // running thoughts protected (cancel first via thoughts_update).
 func handleDelete(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
 	id, err := stringField(args, "id")
@@ -453,7 +453,7 @@ func marshalString(s string) string {
 }
 
 // marshalThoughts renders the read snapshot: prompt summarized
-// (S130601), timestamps, metadata, defer_until when set.
+// timestamps, metadata, defer_until when set.
 func marshalThoughts(items []thought.Thought) (string, error) {
 	views := make([]thoughtView, 0, len(items))
 	for _, t := range items {

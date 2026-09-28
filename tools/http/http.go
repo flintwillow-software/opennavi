@@ -1,7 +1,7 @@
-// Package http implements the http_request tool (S130500 §06): a
+// Package http implements the http_request tool: a
 // stateless outbound HTTP client for the LLM, restricted to CRUD
 // methods, with a DNS-pinned SSRF guard, per-navi allow/deny lists,
-// server-side credential references (S100400 stub, fail-closed), and
+// server-side credential references (stub, fail-closed), and
 // response truncation at a byte cap with a partial-output notice.
 //
 // The tool is deliberately stateless — it registers through
@@ -28,24 +28,24 @@ import (
 )
 
 // DefaultMaxResponseBytes caps the response body returned to the LLM
-// (S130500 §06): 256 KiB. Bodies over the cap are truncated and the
+// 256 KiB. Bodies over the cap are truncated and the
 // output is marked partial with a truncation notice.
 const DefaultMaxResponseBytes = 256 * 1024
 
-// DefaultTimeout is the per-call timeout in seconds (S130500 §06:
-// 30s). Per-call overrides are clamped to this ceiling — the bridge's
+// DefaultTimeout is the per-call timeout in seconds (default 30s).
+// Per-call overrides are clamped to this ceiling — the bridge's
 // registry envelope enforces the definition's Timeout anyway, so a
 // longer per-call value could only silently shrink.
 const DefaultTimeout = 30
 
 // MaxRedirects bounds how many redirect hops http_request follows per
-// call (S130500 §06: "max 3"). Every hop is re-validated against the
+// call ("max 3"). Every hop is re-validated against the
 // SSRF policy before it is dialed — both in the redirect hook and,
 // authoritatively, at dial time via the pinned dialer.
 const MaxRedirects = 3
 
-// AllowedMethods is the CRUD method set the tool accepts (S130500
-// §06). The input schema enforces it; the handler re-checks as
+// AllowedMethods is the CRUD method set the tool accepts.
+// The input schema enforces it; the handler re-checks as
 // defense in depth.
 var AllowedMethods = map[string]bool{
 	"GET":    true,
@@ -56,7 +56,7 @@ var AllowedMethods = map[string]bool{
 }
 
 // AuthResolver resolves a credential reference (authRef) to a raw
-// credential value at call time. S100400 (credential references) is
+// credential value at call time. (credential references) is
 // planned but not landed, so the package defines only this interface
 // stub with NO bundled implementation; the wiring step injects a
 // resolver on compatible deployments. Until then every authRef call
@@ -90,7 +90,7 @@ type Options struct {
 	Auth AuthResolver
 }
 
-// SchemaJSON is the spec input schema (S130500 §06), strict.
+// SchemaJSON is the strict input schema.
 var SchemaJSON = json.RawMessage(`{
 	"type": "object",
 	"required": ["method", "url"],
@@ -237,7 +237,7 @@ func inDeniedRange(ip net.IP) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
-// validateTarget applies the SSRF policy (S130500 §06) to one outbound
+// validateTarget applies the SSRF policy to one outbound
 // target. Deny hits: denylisted host or address (deny wins), or an
 // address in a denied range not carved out by the allowlist. The host
 // is resolved through DNS and EVERY resolved address is checked — one
@@ -473,7 +473,7 @@ func requestHandler(o Options) registry.Handler {
 		}
 
 		// Filtered headers: credential and cookie echoes never reach
-		// the LLM (S130500 §06).
+		// the LLM.
 		headers := map[string]string{}
 		for k, vals := range resp.Header {
 			lk := strings.ToLower(k)

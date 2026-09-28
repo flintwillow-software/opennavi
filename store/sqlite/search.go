@@ -7,8 +7,8 @@ import (
 	"github.com/flintwillow-software/opennavi/store"
 )
 
-// Search performs full-text search across all sessions via FTS5 (spec
-// §04), returning SessionInfo ordered by relevance (best bm25 rank per
+// Search performs full-text search across all sessions via FTS5,
+// returning SessionInfo ordered by relevance (best bm25 rank per
 // session).
 //
 // Encrypted message content is stored as ciphertext and therefore not

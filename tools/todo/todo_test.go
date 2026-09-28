@@ -19,7 +19,7 @@ type memStatefulStore struct {
 	todos map[string][]store.Todo
 	seq   int
 	// failReplace makes ReplaceTodos fail mid-write (after clearing),
-	// simulating a store error partway through (S130500 §01 rollback
+	// simulating a store error partway through (rollback
 	// scenario). The registry-level mem store used elsewhere commits
 	// only at the end, so a mid-write failure with intact prior state
 	// needs this seam-level simulation.
@@ -298,7 +298,7 @@ func TestTodoWriteRollbackOnStoreFailure(t *testing.T) {
 		t.Fatalf("failure reason not surfaced: %v", err)
 	}
 
-	// Previous list intact (S130500 §01 rollback scenario).
+	// Previous list intact (rollback scenario).
 	after, err := dispatch(t, reg, "todo_read", "")
 	if err != nil {
 		t.Fatalf("todo_read after failure: %v", err)

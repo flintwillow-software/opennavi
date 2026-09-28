@@ -8,7 +8,7 @@ import (
 )
 
 func TestStreamEventConstantsMatchSpec(t *testing.T) {
-	// Spec §01 names these exactly; renaming breaks the wire contract.
+	// Spec names these exactly; renaming breaks the wire contract.
 	want := map[StreamEventType]string{
 		StreamEventMessageStart:  "message_start",
 		StreamEventContentDelta:  "content_delta",
@@ -103,7 +103,7 @@ func TestHeuristicTokenCounter(t *testing.T) {
 	if got := tc.CountText(strings.Repeat("a", 8)); got != 2 {
 		t.Fatalf("8 chars = %d, want 2", got)
 	}
-	// Rune-based: multibyte content counts runes, not bytes (spec §4.3).
+	// Rune-based: multibyte content counts runes, not bytes.
 	cjk := strings.Repeat("\u4e2d", 12) // 36 bytes, 12 runes
 	if got := tc.CountText(cjk); got != 3 {
 		t.Fatalf("12 CJK runes = %d tokens, want 3 (rune-based, not bytes)", got)

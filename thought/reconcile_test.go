@@ -249,7 +249,7 @@ func TestReconcileRunningAdoptsAsPending(t *testing.T) {
 }
 
 // TestReconcileFailedAdoptsAwaitingRetry: externally-persisted failed
-// thoughts join pending awaiting Retry (S010002) — adopting them as
+// thoughts join pending awaiting Retry — adopting them as
 // claimable pending would dodge the failure record.
 func TestReconcileFailedAdoptsAwaitingRetry(t *testing.T) {
 	st := newExtStore()

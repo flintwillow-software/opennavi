@@ -8,8 +8,7 @@ import (
 	wincontext "github.com/flintwillow-software/opennavi/internal/context"
 )
 
-// Context window compaction (spec 03-session-context/
-// 02-context-window-management.md §3.3): when the conversation
+// Context window compaction: when the conversation
 // approaches the token budget, older messages are replaced with an LLM
 // summary. The compaction cut point preserves tool-call integrity —
 // an assistant message carrying tool calls is never separated from its
@@ -136,7 +135,7 @@ func transcriptFromMessages(messages []AgentMessage) []wincontext.TranscriptMess
 }
 
 // providerSummarizer adapts the agent's LLM provider onto the context
-// package's Summarizer interface (spec §3.3 callLLMForSummary).
+// package's Summarizer interface (callLLMForSummary).
 type providerSummarizer struct {
 	a *Agent
 }

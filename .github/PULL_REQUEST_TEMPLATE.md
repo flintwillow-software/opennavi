@@ -6,7 +6,7 @@ body:
       value: |
         ### Before submitting
         - [ ] I've read the [CONTRIBUTING.md](./CONTRIBUTING.md)
-        - [ ] My changes follow the [conventions](../docs/conventions.md)
+        - [ ] My changes follow the [conventions](../CONTRIBUTING.md)
   - type: dropdown
     id: type
     attributes:

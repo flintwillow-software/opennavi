@@ -1,5 +1,5 @@
 // Package sqlite implements the session.Store interface on top of
-// SQLite (spec 03-session-context/01-session-management.md §02), using
+// SQLite, using
 // the pure-Go modernc.org/sqlite driver (no CGO) and app-level
 // AES-256-GCM encryption for sensitive columns.
 package sqlite
@@ -13,7 +13,7 @@ import (
 // Migrations are tracked in schema_migrations so future changes append
 // as new numbered statements.
 var migrations = []string{
-	// 1: initial schema (spec §02).
+	// 1: initial schema.
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id TEXT PRIMARY KEY,
 		name TEXT,
@@ -54,7 +54,7 @@ var migrations = []string{
 	`CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, entry_index)`,
 	`CREATE INDEX IF NOT EXISTS idx_messages_compacted ON messages(is_compacted)`,
-	// FTS5 full-text search across sessions (spec §02). The Search
+	// FTS5 full-text search across sessions. The Search
 	// method lands with #163; the table and sync triggers exist from
 	// the start so messages written now are searchable then.
 	`CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -117,7 +117,7 @@ var migrations = []string{
 		VALUES (new.rowid, new.content, new.session_id);
 	END`,
 	`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`,
-	// 3: thought queue persistence (#151) — spec §3.4/§3.5. Queue
+	// 3: thought queue persistence (#151) — Queue
 	// state lives in the same SQLite DB as sessions (per the #151
 	// handoff: reuse the store layer, don't invent parallel storage);
 	// the spec's queue.yaml/running.yaml files are superseded. Crash
@@ -139,8 +139,8 @@ var migrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_thoughts_status ON thoughts(status)`,
 	`CREATE INDEX IF NOT EXISTS idx_thoughts_priority ON thoughts(priority)`,
-	// 4: memory store (#181) — four-scope memory (spec 06-memory/
-	// 00-memory-system.md): user/navi are document scopes (one row per
+	// 4: memory store (#181) — four-scope memory:
+	// user/navi are document scopes (one row per
 	// subject); memories is the long-term entry archive with FTS5
 	// search. The session tier maps to the #149 session system, not
 	// this table. Expiry pruning deletes rows where expires_at < now.
@@ -192,7 +192,7 @@ var migrations = []string{
 		dims INTEGER NOT NULL,
 		created_at DATETIME NOT NULL
 	)`,
-	// 6: stateful tool storage seam (S130500 §07) — durable todo and
+	// 6: stateful tool storage seam — durable todo and
 	// note state for stateful catalog tools (todo_*, note_*), scoped
 	// per navi identity (navi_id on every row; all access is
 	// navi-filtered at the store layer). State survives restarts:
@@ -220,11 +220,11 @@ var migrations = []string{
 		PRIMARY KEY (navi_id, id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notes_activity ON notes(navi_id, updated_at)`,
-	// 7: defer_until queue mechanism (S130600 §02) — not-before
-	// timestamp on thoughts for durable deferred pickup (S010002):
+	// 7: defer_until queue mechanism — not-before
+	// timestamp on thoughts for durable deferred pickup:
 	// deferred thoughts are real queue records that survive restarts.
 	`ALTER TABLE thoughts ADD COLUMN defer_until DATETIME`,
-	// 8: per-thought provider/model overrides (S010104) — optional
+	// 8: per-thought provider/model overrides — optional
 	// durable provider + model for a thought; empty keeps the runtime
 	// primary (and its fallback chain) and runtime model.
 	`ALTER TABLE thoughts ADD COLUMN provider TEXT`,

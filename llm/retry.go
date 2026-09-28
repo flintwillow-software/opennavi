@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// RetryConfig governs provider retry behaviour (spec §05/§6.2).
+// RetryConfig governs provider retry behaviour.
 type RetryConfig struct {
 	MaxRetries    int           `json:"max_retries"`
 	InitialDelay  time.Duration `json:"initial_delay"`
@@ -28,7 +28,7 @@ var DefaultRetryConfig = RetryConfig{
 // ShouldRetry reports whether the error is retryable at the given
 // attempt index (0-based; attempt >= MaxRetries means exhausted).
 // ProviderError classification applies per provider family; network
-// timeouts are always retryable (spec §6.2).
+// timeouts are always retryable.
 func (c *RetryConfig) ShouldRetry(err error, attempt int) bool {
 	if err == nil || attempt >= c.MaxRetries {
 		return false
@@ -46,7 +46,7 @@ func (c *RetryConfig) ShouldRetry(err error, attempt int) bool {
 		}
 	}
 
-	// Network timeouts are always retryable (spec §6.2); delegate to
+	// Network timeouts are always retryable; delegate to
 	// the shared detector (handles wrapped url.Error chains).
 	return IsNetworkTimeout(err)
 }

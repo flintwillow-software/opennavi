@@ -1,4 +1,4 @@
-// Package portal implements the navi's portal control plane (S000407):
+// Package portal implements the navi's portal control plane:
 // transport-agnostic observation and control of a navi's thought process,
 // authorized fail-closed.
 //

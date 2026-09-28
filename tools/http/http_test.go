@@ -61,7 +61,7 @@ func statusOf(doc map[string]any) int {
 }
 
 // ---------------------------------------------------------------------------
-// Registration metadata (S130400).
+// Registration metadata.
 
 func TestRegisterMetadata(t *testing.T) {
 	reg := registerHttp(t)
@@ -91,7 +91,7 @@ func TestRegisterMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Core request/response semantics (S130500 §06).
+// Core request/response semantics.
 
 func TestSuccessReturnsStatusHeadersBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +246,7 @@ func repeat(s string, n int) string {
 }
 
 // ---------------------------------------------------------------------------
-// Truncation (S130500 §06 response truncation).
+// Truncation (response truncation).
 
 func TestTruncationWithNotice(t *testing.T) {
 	payload := repeat("z", 300)
@@ -282,7 +282,7 @@ func TestTruncationWithNotice(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SSRF guard (S130500 §06).
+// SSRF guard.
 
 func TestSSRFDeniesPrivateRanges(t *testing.T) {
 	// No allowlist: loopback registry — every denied range must be
@@ -443,7 +443,7 @@ func TestRedirectHopLimit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Credential references (S100400 stub, fails closed).
+// Credential references (stub, fails closed).
 
 func TestAuthRefFailsClosedWithoutResolver(t *testing.T) {
 	// An allowlisted (guard-passing) target so the request reaches the

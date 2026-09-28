@@ -1,5 +1,5 @@
-// Package memory implements the four-scope memory store (spec
-// 06-memory/00-memory-system.md). The session tier maps to the session
+// Package memory implements the four-scope memory store.
+// The session tier maps to the session
 // system (#149) and is intentionally absent here; user and navi are
 // document scopes (one document per subject); memories is the
 // long-term entry archive with FTS5 search and expiry pruning.
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Scope is one of the memory tiers servable by this store (spec §00).
+// Scope is one of the memory tiers servable by this store.
 // The session tier is deliberately absent: it is the #149 session
 // system.
 type Scope string
@@ -28,7 +28,7 @@ func (s Scope) Valid() bool {
 }
 
 // Entry is one memory record. For user/navi scopes it represents the
-// whole document for a subject (spec: one markdown file per subject —
+// whole document for a subject (one markdown file per subject —
 // here one row); for the memories scope it is one archive entry with
 // metadata.
 type Entry struct {

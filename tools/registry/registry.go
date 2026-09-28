@@ -1,4 +1,4 @@
-// Package registry implements the public tool registry (S130400): the
+// Package registry implements the public tool registry: the
 // single, in-binary record of every tool available to an agent. Each
 // tool — catalog, author, or extension — registers a self-describing
 // ToolDefinition plus its handler; the registry stores both and exposes
@@ -7,7 +7,7 @@
 // metadata.
 //
 // The registry is purely local metadata and dispatch validation: it is
-// not a sharing or marketplace component (see S000600).
+// not a sharing or marketplace component.
 package registry
 
 import (
@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-// ToolAccess is the access level a tool call requires (S130000 §01).
+// ToolAccess is the access level a tool call requires.
 // The zero value is "any" for filters; definitions must set a real level.
 type ToolAccess int
 
@@ -36,7 +36,7 @@ const (
 	AccessExecute
 )
 
-// String returns the spec-facing access name.
+// String returns the canonical access name.
 func (a ToolAccess) String() string {
 	switch a {
 	case AccessReadOnly:
@@ -63,7 +63,7 @@ const (
 	ToolModeSequential
 )
 
-// String returns the spec-facing mode name.
+// String returns the canonical mode name.
 func (m ToolMode) String() string {
 	switch m {
 	case ToolModeParallel:
@@ -75,7 +75,7 @@ func (m ToolMode) String() string {
 	}
 }
 
-// ToolOrigin records who provided a tool (S130400 §01 provenance).
+// ToolOrigin records who provided a tool (provenance).
 type ToolOrigin int
 
 const (
@@ -87,11 +87,11 @@ const (
 	OriginSDK
 	// OriginAuthor tools are registered by a navi author.
 	OriginAuthor
-	// OriginExtension tools arrive via the extension contract (S000600).
+	// OriginExtension tools arrive via the extension contract.
 	OriginExtension
 )
 
-// String returns the spec-facing origin name.
+// String returns the canonical origin name.
 func (o ToolOrigin) String() string {
 	switch o {
 	case OriginBuiltin:
@@ -107,7 +107,7 @@ func (o ToolOrigin) String() string {
 	}
 }
 
-// SourceInfo records a tool's provenance (S130400 §01): where the tool
+// SourceInfo records a tool's provenance: where the tool
 // came from plus optional location metadata for audit and filtering.
 type SourceInfo struct {
 	// Origin is the provenance class; required on every definition.
@@ -117,29 +117,29 @@ type SourceInfo struct {
 }
 
 // ToolDefinition is the complete, self-describing metadata descriptor
-// every tool declares (S130400 §01). Registration IS the metadata
+// every tool declares. Registration IS the metadata
 // declaration: the descriptor is the single source of truth for the
 // LLM-facing tool list, system-prompt assembly, and execution
 // enforcement.
 type ToolDefinition struct {
 	// Name is unique per binary and follows the namespace_action
 	// pattern (`file_read`, `github_issue_read`); the namespace is
-	// the segment before the first underscore (S130400 §04).
+	// the segment before the first underscore.
 	Name string
 	// Description states, in LLM-readable terms, what the tool does
-	// and its subject domain (S130400 §04).
+	// and its subject domain.
 	Description string
 	// InputSchema is the JSON Schema tool-call arguments are
-	// validated against before dispatch (S130400 §06).
+	// validated against before dispatch.
 	InputSchema Schema
 	// OutputFormat is the rendering hint for results: one of
 	// "text", "json", "diff", "markdown".
 	OutputFormat string
 	// Access is the access level enforcement is based on.
 	Access ToolAccess
-	// Timeout is the per-call timeout applied by the runtime (S010400).
+	// Timeout is the per-call timeout applied by the runtime.
 	Timeout time.Duration
-	// Recovery is the recovery strategy id from S010400 applied when
+	// Recovery is the recovery strategy id from applied when
 	// a call fails or times out.
 	Recovery string
 	// Mode declares parallel or sequential execution capability.
@@ -160,7 +160,7 @@ type ToolDefinition struct {
 	SourceInfo SourceInfo
 
 	// prepareArguments migrates older argument shapes to the current
-	// schema before validation (S130400 §06); set via WithPrepareArguments.
+	// schema before validation; set via WithPrepareArguments.
 	prepareArguments PrepareArguments
 }
 
@@ -169,14 +169,14 @@ type ToolDefinition struct {
 type Option func(*registration)
 
 // WithPrepareArguments attaches an argument-preparation hook that runs
-// before schema validation on every dispatch (S130400 §06) — used to
+// before schema validation on every dispatch — used to
 // migrate arguments from older schema versions (e.g. resumed sessions).
 func WithPrepareArguments(prepare PrepareArguments) Option {
 	return func(reg *registration) { reg.def.prepareArguments = prepare }
 }
 
 // Namespace returns the namespace of the tool name: the segment before
-// the first underscore. Derived, never set directly (S130400 §04).
+// the first underscore. Derived, never set directly.
 func (d ToolDefinition) Namespace() string {
 	name, _, _ := strings.Cut(d.Name, "_")
 	return name
@@ -187,7 +187,7 @@ func (d ToolDefinition) Namespace() string {
 type Handler func(ctx context.Context, args map[string]any) (string, error)
 
 // PrepareArguments migrates older argument shapes to the current schema
-// before validation (S130400 §06) — e.g. arguments stored by an old
+// before validation — e.g. arguments stored by an old
 // session. Declared per tool; the public schema stays strict and
 // compatibility lives in the hook.
 type PrepareArguments func(args map[string]any) (map[string]any, error)
@@ -198,7 +198,7 @@ type registration struct {
 	handler Handler
 }
 
-// Registry is the in-binary tool registry (S130400 §00). It is safe
+// Registry is the in-binary tool registry. It is safe
 // for concurrent use. The zero value is not usable; construct with New.
 type Registry struct {
 	mu            sync.RWMutex
@@ -219,11 +219,11 @@ func New() *Registry {
 }
 
 // ErrDuplicateTool is returned when a registration reuses an existing
-// tool name; the original registration remains intact (S130400 §02).
+// tool name; the original registration remains intact.
 var ErrDuplicateTool = errors.New("tool already registered")
 
 // Register stores a tool's metadata descriptor and binds its handler
-// (S130400 §02). The descriptor is validated for completeness first;
+// The descriptor is validated for completeness first;
 // an incomplete definition is rejected with an error naming the missing
 // fields. Duplicate names are rejected and the original stays intact.
 func (r *Registry) Register(def ToolDefinition, handler Handler, opts ...Option) error {
@@ -249,7 +249,7 @@ func (r *Registry) Register(def ToolDefinition, handler Handler, opts ...Option)
 }
 
 // validateDefinition enforces the complete metadata descriptor
-// requirement (S130400 §01: "Minimal descriptor incompleteness").
+// requirement ("Minimal descriptor incompleteness").
 func validateDefinition(def ToolDefinition) error {
 	var missing []string
 	if def.Name == "" {
@@ -292,7 +292,7 @@ func validateDefinition(def ToolDefinition) error {
 	return nil
 }
 
-// validToolName enforces the namespace_action pattern (S130400 §04):
+// validToolName enforces the namespace_action pattern:
 // at least one underscore; namespace and action are non-empty segments.
 func validToolName(name string) bool {
 	ns, action, ok := strings.Cut(name, "_")
@@ -307,7 +307,7 @@ func validOutputFormat(f string) bool {
 	return false
 }
 
-// Get returns the definition registered under name (S130400 §03).
+// Get returns the definition registered under name.
 func (r *Registry) Get(name string) (ToolDefinition, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -318,7 +318,7 @@ func (r *Registry) Get(name string) (ToolDefinition, bool) {
 	return reg.def, true
 }
 
-// List returns all registered tools in registration order (S130400 §03).
+// List returns all registered tools in registration order.
 func (r *Registry) List() []ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -330,7 +330,7 @@ func (r *Registry) List() []ToolDefinition {
 }
 
 // AllNames returns the names of all registered tools in registration
-// order (S130400 §03) — useful for LLM-facing tool lists.
+// order — useful for LLM-facing tool lists.
 func (r *Registry) AllNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -338,9 +338,9 @@ func (r *Registry) AllNames() []string {
 }
 
 // FindFilter selects tools by namespace, access, mode, tags, and/or
-// origin (S130400 §03). Zero-value enum fields match anything; all
+// origin. Zero-value enum fields match anything; all
 // Tags must match. MaxAccess additionally caps the access level
-// returned (S130400 §03 "Discovery Result Consistency"): an agent with
+// returned ("Discovery Result Consistency"): an agent with
 // read-only permission sets MaxAccess to AccessReadOnly and never sees
 // write/execute tools.
 type FindFilter struct {
@@ -353,7 +353,6 @@ type FindFilter struct {
 }
 
 // Find returns tools matching the filter, in registration order
-// (S130400 §03).
 func (r *Registry) Find(filter FindFilter) []ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -398,7 +397,7 @@ func (f FindFilter) matches(def ToolDefinition) bool {
 }
 
 // Active returns the current active set — the tools offered to the LLM
-// — in registration order (S130400 §03).
+// — in registration order.
 func (r *Registry) Active() []ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -425,7 +424,7 @@ func (r *Registry) ActiveNames() []string {
 }
 
 // SetActive adjusts the active set at runtime without re-registration
-// (S130400 §03). Names are sorted internally so membership, not call
+// Names are sorted internally so membership, not call
 // order, determines the result. Unknown names are rejected: the active
 // set may only reference registered tools.
 func (r *Registry) SetActive(names []string) error {
@@ -447,7 +446,7 @@ func (r *Registry) SetActive(names []string) error {
 
 // Dispatch validates args against the named tool's input schema
 // (running its PrepareArguments hook first, when declared) and only
-// then invokes the handler (S130400 §06). Inactive tools are not
+// then invokes the handler. Inactive tools are not
 // dispatchable through the registry — dispatch requires active
 // membership, matching the LLM-facing surface.
 func (r *Registry) Dispatch(ctx context.Context, name string, rawArgs json.RawMessage) (string, error) {

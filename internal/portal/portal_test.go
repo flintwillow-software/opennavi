@@ -179,7 +179,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	// RouteMessage on a pending thought takes the context-append path
-	// (S010312) and emits the delivery-ack event.
+	// and emits the delivery-ack event.
 	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil {
 		t.Fatalf("RouteMessage: %v", err)
@@ -287,7 +287,7 @@ func TestControlActionsApplyAndEmit(t *testing.T) {
 func TestUnauthorizedControlRefused(t *testing.T) {
 	q := newQueue(t)
 
-	// No authorizer: every action fails closed (S040200).
+	// No authorizer: every action fails closed.
 	p, _ := newBrokerHub(t, q, nil)
 	if err := p.Attach("u"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach: %v, want ErrPortalUnauthorized", err)

@@ -23,7 +23,7 @@ type ToolExecutor struct {
 // NewToolExecutor creates a ToolExecutor with the given mode and parallel limit.
 func NewToolExecutor(mode string, maxParallel int) *ToolExecutor {
 	if maxParallel <= 0 {
-		maxParallel = 4 // spec default
+		maxParallel = 4 // default
 	}
 	return &ToolExecutor{
 		tools:       make(map[string]*toolEntry),

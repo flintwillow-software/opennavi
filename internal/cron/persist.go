@@ -10,7 +10,7 @@ import (
 
 // StateStore persists schedule TICK STATE (last_fired/next_due/
 // fire_count — not definitions; schedule definitions are runtime
-// config under .config/navi/ (S000200 §04). Backed by the shared SQLite DB
+// config under.config/navi/. Backed by the shared SQLite DB
 // (migration v6).
 type StateStore struct {
 	db *sql.DB

@@ -10,7 +10,7 @@ import (
 )
 
 // Put stores (or replaces) a document for a subject in a user/navi
-// scope — whole-document semantics per spec §02: the caller owns
+// scope — whole-document semantics : the caller owns
 // consolidation; the store never auto-compacts. For the memories scope
 // use AddEntry instead.
 func (s *Store) Put(e Entry) error {
@@ -46,7 +46,7 @@ func (s *Store) Put(e Entry) error {
 }
 
 // AddEntry stores a new memories-scope archive entry with metadata
-// (spec §04: date, source, tags, importance, expiration).
+// (date, source, tags, importance, expiration).
 func (s *Store) AddEntry(e Entry) (Entry, error) {
 	if e.Scope != ScopeMemories {
 		return Entry{}, fmt.Errorf("%w: AddEntry is for the memories scope only (use Put for user/navi)", ErrInvalidScope)
@@ -177,7 +177,7 @@ func (s *Store) listEntriesAll() ([]Entry, error) {
 	return out, rows.Err()
 }
 
-// Search runs an FTS5 full-text query over the memories scope (spec:
+// Search runs an FTS5 full-text query over the memories scope (
 // on-demand retrieval — only the memories tier is searchable; user/navi
 // documents are always-in-context). Terms are ORed; FTS5 operator
 // syntax is rejected.

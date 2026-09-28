@@ -10,7 +10,7 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// ── Binary-run support (S010003 §06) ─────────────────────────────────
+// ── Binary-run support ─────────────────────────────────
 //
 // A navi run without connectors drives the same thought queue
 // in-process: the session's current thought occupies a foreground
@@ -20,7 +20,7 @@ import (
 //
 //   - inFlightAgents: the steering bridge's lookup — maps a running
 //     thought id to its in-flight agent so RouteMessage can inject at
-//     the turn boundary (S010312 running path, S010310).
+// the turn boundary (running path).
 //   - RunForeground: the binary-run lifecycle — pool up, wait for the
 //     session to end AND the queue to drain, park in-flight work on
 //     interrupt (never kill-and-lose), exit.
@@ -59,7 +59,7 @@ func (t *inFlightAgents) track(thoughtID string, a *agent.Agent) (unregister fun
 }
 
 // steer injects a message into the thought's in-flight agent (agent
-// steering queue, consumed at the next turn boundary — S010310).
+// steering queue, consumed at the next turn boundary —).
 // Satisfies thought.SteeringRouter.
 func (t *inFlightAgents) steer(thoughtID, msg string) error {
 	a, ok := t.lookup(thoughtID)
@@ -97,7 +97,7 @@ func (t *inFlightAgents) steeringSnapshot(thoughtID string) []string {
 	}
 }
 
-// RunForeground drives a binary run (S010003): the same queue, pool,
+// RunForeground drives a binary run: the same queue, pool,
 // and registry-governed tools as the daemon — no connectors. The
 // session's current thought occupies a foreground slot (the runtime
 // was assembled with RuntimeParams.Foreground). Exits when the session
@@ -119,7 +119,7 @@ func (d *Runtime) RunForeground(ctx context.Context, sessionDone <-chan struct{}
 	}
 	defer func() {
 		// StopAndWait parks in-flight thoughts with checkpoints —
-		// interrupt semantics: park, never kill-and-lose (S010003).
+		// interrupt semantics: park, never kill-and-lose.
 		if d.Pool != nil {
 			d.Pool.StopAndWait()
 		}
@@ -158,7 +158,7 @@ func (d *Runtime) RunForeground(ctx context.Context, sessionDone <-chan struct{}
 			if d.Logger != nil {
 				d.Logger.Info("binary run interrupted — parking in-flight thoughts", nil)
 			}
-			// Interrupt semantics (S010003 §06): park, never
+			// Interrupt semantics: park, never
 			// kill-and-lose. Cancel each running thought — the runner
 			// snapshots its checkpoint and returns ctx.Err(); the worker
 			// parks it via Pause (running → paused). StopAndWait in the

@@ -1,33 +1,40 @@
 # navi-daemon
 
-Starter template for a **daemon-style navi** — the OpenClaw/Hermes
-pattern: an always-on background agent that consumes its thought
-queue, wakes on cron schedules, and serves the HTTP gateway. Ships
-alongside `navi-code` as a `navi init` choice
-(`--template daemon`).
+Starter template for a **daemon-style navi**: an always-on background agent
+that consumes its thought queue, wakes on cron schedules, and serves the HTTP
+portal gateway.
 
-## Layout (S000100)
+This is a real out-of-repo-style navi module — it imports the public
+`github.com/flintwillow-software/opennavi` module and composes a navi through
+`navi.New`, declaring its tools, model, connector, and portal in Go. There is
+no YAML definition file and no separate build step: `go build` produces the
+whole binary.
+
+## Layout
 
 ```
 navi-daemon/
-├── cmd/navi-daemon/main.go      # entry point: sdk.Build(...) + tool registration
-├── .config/navi/navi-daemon/
-│   └── config.example.yaml      # runtime config example (operator settings)
+├── cmd/navi-daemon/main.go      # the navi definition and entry point
 ├── go.mod                       # nested module, pinned to the published SDK
 └── README.md
 ```
 
-## What's in the definition vs. runtime config
+## What the navi declares
 
-The Go definition in `cmd/navi-daemon/main.go` is the **static half**
-(Go-only, S000207): name, version, personality, gateway + cron
-interfaces, and the permission policy. One author tool (`queue_status`)
-is registered through the tool registry (S130400); catalog builtins
-join the active set once the tool catalog ships (NAVI-59).
+Everything in `cmd/navi-daemon/main.go` is the compiled-in definition:
 
-The **deployment half** is runtime config owned by the operator under
-`.config/navi/navi-daemon/` (S000200 §04): provider endpoints, cron
-schedules, work-discovery sources. See `config.example.yaml`.
+- **Identity** — name, version, and personality (`navi.WithPersonality`).
+- **Tool** — one author tool (`queue_status`) reporting uptime, memory, and
+  goroutine count.
+- **Model** — one Ollama provider marked default (ADR 0009).
+- **Connector** — `connector/cron`, turning schedule definitions into thoughts
+  (a thought factory).
+- **Portal** — `portal/gateway`, the HTTP observation surface. Control is
+  authorizer-gated and fails closed, so the starter binds an observation-only
+  gateway.
+
+Deployment-time settings (provider endpoints, credential references, schedule
+overrides) come from the runtime config file named by `NAVI_CONFIG`, if set.
 
 ## Build & run
 
@@ -35,13 +42,11 @@ schedules, work-discovery sources. See `config.example.yaml`.
 go build ./cmd/navi-daemon
 ```
 
-The template's `go.mod` pins a published SDK version
-(`github.com/flintwillow-software/opennavi`). When developing against
-a local checkout of the SDK, use a `go.work` file — never add a
-`replace` directive to this `go.mod`:
+The template's `go.mod` requires the published module. When developing against
+a local checkout, use a `go.work` file — never add a `replace` directive to
+this `go.mod`:
 
 ```
 go work init . ../..
-# pin the workspace replace to the version required above:
 # replace github.com/flintwillow-software/opennavi v0.1.0 => ../..
 ```

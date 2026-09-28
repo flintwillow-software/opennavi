@@ -2,7 +2,7 @@
 // assembles through navi.New, declares its tools/skills/model, and runs
 // the TUI.
 //
-// Authoring model (S000200 §04): everything below is the static,
+// Authoring model: everything below is the static,
 // compiled-in definition — Go only, no YAML definition file. Runtime
 // settings (provider endpoints, credential references) come from the
 // config file named by NAVI_CONFIG, if set.
