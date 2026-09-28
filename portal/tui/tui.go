@@ -387,9 +387,14 @@ type tuiModel struct {
 	// prompt as the opening user turn, assistant deltas accumulated,
 	// tool blocks, lifecycle system lines, steers as user turns.
 	// Presentation-only — the stream stays the source of truth.
-	turns      []turn
-	liveScroll int // 0 = tail-follow; >0 = lines scrolled back
-	input      string
+	turns []turn
+	// transcripts accumulates each thought's conversation from the event
+	// stream, regardless of which view is open, so a thought enqueued
+	// from the list still shows its response when opened after it ran.
+	// In-session only; durable restore is NAVI-353.
+	transcripts map[string][]turn
+	liveScroll  int // 0 = tail-follow; >0 = lines scrolled back
+	input       string
 	// active reports the running thought's inference activity in the
 	// home view status line (NAVI-335).
 	active   string
@@ -410,10 +415,11 @@ type tuiModel struct {
 // NewModel builds the model over a transport.
 func NewModel(tr Transport) *tuiModel {
 	return &tuiModel{
-		transport: tr,
-		feed:      tr.Feed(),
-		byID:      make(map[string]int),
-		mode:      ModeList,
+		transport:   tr,
+		feed:        tr.Feed(),
+		byID:        make(map[string]int),
+		transcripts: make(map[string][]turn),
+		mode:        ModeList,
 	}
 }
 
@@ -610,10 +616,10 @@ func (m *tuiModel) ackEvent(ev portal.Event) {
 }
 
 func (m *tuiModel) agentEvent(ev portal.Event) {
-	if m.mode == ModeLive && ev.ThoughtID == m.liveID {
-		m.chatAgentEvent(ev)
-		return
-	}
+	// Accumulate the conversation for every thought (bounded), not only
+	// the live one, so opening a completed thought's live view shows its
+	// response (in-session; durable restore is NAVI-353).
+	m.chatAgentEvent(ev)
 	// Home view (NAVI-335): consume agent events for RUNNING thoughts —
 	// latest tool call or delta snippet on the row, plus the status
 	// activity line.
@@ -622,29 +628,40 @@ func (m *tuiModel) agentEvent(ev portal.Event) {
 	}
 }
 
-// chatAgentEvent feeds an agent event into the live chat window turns
-// (NAVI-330). Only called for the live view's own thought.
+// chatAgentEvent feeds an agent event into its thought's accumulated
+// transcript, and into the rendered turns when that thought is live.
 func (m *tuiModel) chatAgentEvent(ev portal.Event) {
+	tr := m.transcripts[ev.ThoughtID]
+	add := func(t turn) {
+		tr = append(tr, t)
+		if len(tr) > maxLiveTurns {
+			tr = tr[len(tr)-maxLiveTurns:]
+		}
+	}
 	switch ev.Kind {
 	case "content_delta":
 		// Accumulate deltas into ONE assistant turn.
-		if n := len(m.turns); n > 0 && m.turns[n-1].role == TurnAssistant {
-			m.turns[n-1].text += ev.Detail
+		if n := len(tr); n > 0 && tr[n-1].role == TurnAssistant {
+			tr[n-1].text += ev.Detail
 		} else {
-			m.addTurn(turn{role: TurnAssistant, text: ev.Detail})
+			add(turn{role: TurnAssistant, text: ev.Detail})
 		}
 	case "turn_start", "agent_start":
-		m.addTurn(turn{role: TurnSystem, text: ev.Kind})
+		add(turn{role: TurnSystem, text: ev.Kind})
 	case "tool_call":
-		m.addTurn(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), toolIn: ""})
+		add(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), toolIn: ""})
 	case "tool_result":
-		m.addTurn(turn{role: TurnTool, tool: "result", toolOut: m.clip(ev.Detail, 60)})
+		add(turn{role: TurnTool, tool: "result", toolOut: m.clip(ev.Detail, 60)})
 	case "agent_end":
-		m.addTurn(turn{role: TurnSystem, text: "agent ended"})
+		add(turn{role: TurnSystem, text: "agent ended"})
 	case "error":
-		m.addTurn(turn{role: TurnSystem, text: "error: " + m.clip(ev.Detail, 60)})
+		add(turn{role: TurnSystem, text: "error: " + m.clip(ev.Detail, 60)})
 	default:
-		m.addTurn(turn{role: TurnSystem, text: ev.Kind})
+		add(turn{role: TurnSystem, text: ev.Kind})
+	}
+	m.transcripts[ev.ThoughtID] = tr
+	if m.liveID == ev.ThoughtID {
+		m.turns = tr
 	}
 }
 
@@ -678,6 +695,9 @@ func (m *tuiModel) addTurn(t turn) {
 	m.turns = append(m.turns, t)
 	if len(m.turns) > maxLiveTurns {
 		m.turns = m.turns[len(m.turns)-maxLiveTurns:]
+	}
+	if m.liveID != "" && m.transcripts != nil {
+		m.transcripts[m.liveID] = m.turns
 	}
 }
 
@@ -737,24 +757,45 @@ func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
 	m.liveScroll = 0
-	m.turns = []turn{}
+	// Prefer the conversation accumulated from the event stream (this
+	// session): a thought that already finished still shows its response
+	// when opened after the fact. The prompt is prepended when the
+	// transcript has no opening user turn.
+	if tr := m.transcripts[thoughtID]; len(tr) > 0 {
+		if tr[0].role != TurnUser {
+			tr = append(m.promptTurns(thoughtID), tr...)
+			m.transcripts[thoughtID] = tr
+		}
+		m.turns = tr
+		return
+	}
+	m.turns = m.promptTurns(thoughtID)
+	m.transcripts[thoughtID] = m.turns
+}
+
+// promptTurns seeds the live view from the queue snapshot: the thought's
+// prompt as the opening user turn plus its Context appends as steering
+// turns.
+func (m *tuiModel) promptTurns(thoughtID string) []turn {
+	var out []turn
 	if thoughts, err := m.transport.Snapshot(); err == nil {
 		for _, t := range thoughts {
 			if t.ID != thoughtID {
 				continue
 			}
-			m.turns = append(m.turns, turn{role: TurnUser, text: t.Prompt})
+			out = append(out, turn{role: TurnUser, text: t.Prompt})
 			for _, line := range strings.Split(t.Context, "\n") {
 				if strings.TrimSpace(line) != "" {
-					m.turns = append(m.turns, turn{role: TurnUser, text: line})
+					out = append(out, turn{role: TurnUser, text: line})
 				}
 			}
 			break
 		}
 	}
-	if len(m.turns) == 0 {
-		m.turns = append(m.turns, turn{role: TurnUser, text: thoughtID})
+	if len(out) == 0 {
+		out = append(out, turn{role: TurnUser, text: thoughtID})
 	}
+	return out
 }
 
 // key handles a key press; returns true when the user quits.

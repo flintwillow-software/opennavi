@@ -831,3 +831,47 @@ func TestEnqueueInputAcceptsCommandLetters(t *testing.T) {
 		t.Fatalf("prompt %q was not enqueued intact", prompt)
 	}
 }
+
+// TestCompletedThoughtResponseVisible is the regression for a response
+// that "isn't in the TUI": a thought enqueued from the list view
+// accumulates its agent events, so opening it after completion shows the
+// answer (in-session; durable replay is NAVI-353).
+func TestCompletedThoughtResponseVisible(t *testing.T) {
+	q := newQueue(t)
+	tport, broker := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	if err := q.Enqueue(th("late", 4)); err != nil {
+		t.Fatal(err)
+	}
+	drain(m) // the row lands in the list
+
+	// The agent answers while the user is still in the list view.
+	observe(broker, "late", agent.AgentEvent{
+		Type:    agent.AgentEventContentDelta,
+		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "the answer is 42"},
+	})
+	drain(m)
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	if err := q.Complete("late", "the answer is 42"); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+
+	// Open the completed thought; prompt + response must both be there.
+	m.sel = 0
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ModeLive || m.liveID != "late" {
+		t.Fatalf("did not enter live (mode=%q id=%q)", m.mode, m.liveID)
+	}
+	view := m.View()
+	if !strings.Contains(view, "the answer is 42") {
+		t.Fatalf("response missing from live view:\n%s", view)
+	}
+	if !strings.Contains(view, "task late") {
+		t.Fatalf("prompt missing from live view:\n%s", view)
+	}
+}
