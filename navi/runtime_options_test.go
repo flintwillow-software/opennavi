@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/llm"
@@ -165,4 +166,45 @@ func TestCompactionConfig(t *testing.T) {
 	if c == nil || !c.Enabled || c.MaxTokens != 4096 {
 		t.Fatalf("compaction config = %+v", c)
 	}
+}
+
+// TestDurableFlusherPersists pins the background persistence loop: a navi
+// with a durable store and a positive flush interval actually persists
+// thoughts (the flusher/reconcile loops start in serve).
+func TestDurableFlusherPersists(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "flush.db"), sqlite.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ts, err := sqlite.NewThoughtStore(st.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := New("flush",
+		WithThoughtStore(ts),
+		WithQueueConfig(thought.Config{
+			MaxConcurrent:     1,
+			SlotExhaustion:    thought.PolicyQueue,
+			ReconcileInterval: -1,
+			FlushInterval:     10 * time.Millisecond,
+		}),
+		WithProvider(llm.NewMockProvider(streamEvents("ok"))),
+		WithWorkers(1),
+	)
+	cancel, done := startServing(t, n)
+	defer stopServing(t, cancel, done)
+
+	if err := n.Thoughts.Enqueue(&thought.Thought{ID: "flush-1", Prompt: "persist", Priority: 4}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := ts.LoadThought("flush-1"); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("flusher never persisted the thought")
 }
