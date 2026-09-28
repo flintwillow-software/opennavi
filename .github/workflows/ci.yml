@@ -36,8 +36,8 @@ jobs:
       - name: Test (race detector)
         run: go test -race -timeout 10m ./...
 
-  guardrail:
-    name: guardrail — templates + external modules (S000805)
+  templates:
+    name: starter templates (S000805 guardrail)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +47,11 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      # In-tree starter templates: nested modules pinned to the published
-      # SDK (no replace directive shipped, S000313). The go.work here is
-      # CI-only: it builds the templates against the SDK in this checkout,
-      # so a change that breaks the public authoring surface fails on the
-      # PR.
+      # The templates are nested modules pinned to the published SDK
+      # (no replace directive shipped, S000313). The go.work here is
+      # CI-only: it builds the templates against the SDK in this
+      # checkout, so a change that breaks the public authoring surface
+      # fails this job on the PR.
       - name: Build starter templates against SDK
         run: |
           cat > go.work <<'EOF'
@@ -67,10 +67,21 @@ jobs:
           EOF
           (cd templates/navi-code && go build ./... && go vet ./...)
           (cd templates/navi-daemon && go build ./... && go vet ./...)
-          # The synthetic external modules below build standalone, via the
-          # replace directives in their own go.mod — never the template
-          # workspace.
-          rm -f go.work
+
+  external-consumer:
+    name: external modules — out-of-repo navi + component
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # Both modules below carry their own replace directive, exactly as a
+      # downstream repo does — no CI workspace is created for them, so the
+      # build exercises the same go.mod a real consumer would ship.
 
       # tools/external-component is a synthetic OUT-OF-REPO component
       # module (ADR 0004, docs/architecture/extension-model.md). Its own
