@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 func newRegistry(t *testing.T, workDir string) *registry.Registry {

@@ -7,12 +7,12 @@ import (
 
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/builtin"
-	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
-	"github.com/flintwillow-software/opennavi/tools/note"
-	"github.com/flintwillow-software/opennavi/tools/thoughts"
-	timepkg "github.com/flintwillow-software/opennavi/tools/time"
-	"github.com/flintwillow-software/opennavi/tools/todo"
+	"github.com/flintwillow-software/opennavi/tool/builtin"
+	toolhttp "github.com/flintwillow-software/opennavi/tool/http"
+	"github.com/flintwillow-software/opennavi/tool/note"
+	"github.com/flintwillow-software/opennavi/tool/thoughts"
+	timepkg "github.com/flintwillow-software/opennavi/tool/time"
+	"github.com/flintwillow-software/opennavi/tool/todo"
 )
 
 // daemonDefaultActiveSet is the daemon's default 13-tool active set

@@ -1,10 +1,10 @@
-// Package tool is the public tool contract (ADR 0004: contract
+// Package tool is the public tool component (ADR 0004: component
 // packages are public and dependency-light; ADR 0010: tools are
 // agent-callable actions that run inside a thought). Stdlib-only: it
 // must never import store/sqlite, llm/* adapters, internal/*, or navi
 // — an extension author imports THIS package, not the runtime.
 //
-// Def mirrors tools/registry's ToolDefinition FIELD-FOR-FIELD (the
+// Def mirrors tool/registry's ToolDefinition FIELD-FOR-FIELD (the
 // M4 catalog port must be mechanical): Name, Description, InputSchema,
 // OutputFormat, Access, Timeout, Recovery, Mode, Tags, Version,
 // PromptSnippet, PromptGuidelines, SourceInfo{Origin, Path}.
@@ -14,7 +14,7 @@
 // concern, not descriptor ABI. Def leaves it out (the public
 // descriptor is the 13 fields below); the M4 port expresses argument
 // preparation through the registry's registration option, keeping the
-// contract ABI free of an implementation migration detail.
+// component ABI free of an implementation migration detail.
 package tool
 
 import (
@@ -129,7 +129,7 @@ type PrepareArguments func(args map[string]any) (map[string]any, error)
 
 // Schema is the JSON Schema tool-call arguments are validated against
 // before dispatch — a pragmatic stdlib-encoded subset,
-// constructed via ParseSchema (mirrors tools/registry.Schema).
+// constructed via ParseSchema (mirrors tool/registry.Schema).
 type Schema struct {
 	raw json.RawMessage
 }

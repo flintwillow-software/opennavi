@@ -101,7 +101,7 @@ var (
 
 // StatefulToolStore persists stateful catalog tool state
 // todo and note state for tools registered through the
-// stateful registration variant (tools/registry.RegisterStateful).
+// stateful registration variant (tool/registry.RegisterStateful).
 //
 // Per-navi scoping is part of the contract: naviID is the first
 // parameter of every method and implementations MUST scope all reads

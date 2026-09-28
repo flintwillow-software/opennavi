@@ -32,7 +32,7 @@ import (
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // ErrNoName is returned by Run for a navi declared without a name.

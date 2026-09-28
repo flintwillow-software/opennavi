@@ -1,6 +1,6 @@
-// Package model is the public model contract (ADR 0004, ADR 0009):
+// Package model is the public model component (ADR 0004, ADR 0009):
 // model selection is provider-set with per-thought selection, and the
-// contract carries DESCRIPTORS, never secrets (ADR 0008 — secrets are
+// descriptors carry no secrets (ADR 0008 — secrets are
 // interpolated at runtime, never literal in descriptor/definition
 // text). Stdlib-only.
 package model

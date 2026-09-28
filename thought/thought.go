@@ -1,5 +1,5 @@
 // Package thought is the public thought system (ADR 0003: the thought
-// system is first-class; ADR 0004: contract packages are public and
+// system is first-class; ADR 0004: component packages are public and
 // dependency-light).
 //
 // It holds three things, deliberately together: the Thought value and its

@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // Policy is the runtime tool policy (the public counterpart of

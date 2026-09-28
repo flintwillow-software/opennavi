@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // route builds a queue wired to the in-memory store for tool tests.

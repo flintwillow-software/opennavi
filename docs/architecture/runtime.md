@@ -184,7 +184,7 @@ slowing the queue.
   connector's live client and are added **explicitly** by the author as
   ordinary tools — never auto-registered, so the capability surface stays
   visible in `main.go`. (A `connector.SendTool()` helper is planned; binding
-  the tool registry is not part of the contract ABI yet.)
+  the tool registry is not part of the component ABI yet.)
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
   same queue and running-agent events a connector can observe — through
   `Deps.Observation`, whose bounded mailboxes keep a slow front-end from
@@ -203,7 +203,7 @@ slowing the queue.
   another process.
 
 The composition root package is named `navi`; connectors and portals never
-import it — they depend only on the contract packages.
+import it — they depend only on the component packages.
 
 ## Agent and tools
 

@@ -3,7 +3,7 @@
 // a persistent plan — read the current items, atomically replace the
 // whole plan, or apply partial updates by id.
 //
-// All three register through tools/registry.RegisterStateful: each
+// All three register through tool/registry.RegisterStateful: each
 // handler receives a per-navi store handle at dispatch and persists
 // through store.StatefulToolStore, so todo state survives restarts
 // and is scoped per navi identity. Register the package with
@@ -20,7 +20,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // Statuses accepted by todo_read's optional status filter and
@@ -78,7 +78,7 @@ func RegisterOne(reg *registry.Registry, naviID string, state store.StatefulTool
 	}
 }
 
-// Tools returns the three todo tools as public contract tools bound to
+// Tools returns the three todo tools as public component tools bound to
 // naviID and state — the collection form of RegisterTools for the navi
 // composition root.
 func Tools(naviID string, state store.StatefulToolStore) ([]tool.Tool, error) {

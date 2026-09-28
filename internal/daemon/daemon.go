@@ -24,14 +24,14 @@ import (
 	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
-	"github.com/flintwillow-software/opennavi/tools/builtin"
-	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
-	"github.com/flintwillow-software/opennavi/tools/note"
-	"github.com/flintwillow-software/opennavi/tools/registry"
-	"github.com/flintwillow-software/opennavi/tools/thoughts"
-	timepkg "github.com/flintwillow-software/opennavi/tools/time"
-	"github.com/flintwillow-software/opennavi/tools/todo"
+	"github.com/flintwillow-software/opennavi/tool/bridge"
+	"github.com/flintwillow-software/opennavi/tool/builtin"
+	toolhttp "github.com/flintwillow-software/opennavi/tool/http"
+	"github.com/flintwillow-software/opennavi/tool/note"
+	"github.com/flintwillow-software/opennavi/tool/registry"
+	"github.com/flintwillow-software/opennavi/tool/thoughts"
+	timepkg "github.com/flintwillow-software/opennavi/tool/time"
+	"github.com/flintwillow-software/opennavi/tool/todo"
 )
 
 // Runtime is the assembled daemon: everything long-running needs.
@@ -198,7 +198,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	// Tool registry: builtins register with full metadata;
 	// catalog/author/stateful tools join here as they land. The active
 	// set is composed from the runtime ToolPolicy — the LLM-facing
-	// surface is registry-first, and tools/bridge binds it into the
+	// surface is registry-first, and tool/bridge binds it into the
 	// agent executor per thought run.
 	reg := registry.New()
 	if err := builtin.Register(reg, params.WorkDir); err != nil {
@@ -466,7 +466,7 @@ func agentDetail(ev agent.AgentEvent) string {
 
 // bindOptions maps the runtime ToolPolicy onto the bridge's bind-time
 // policy: allowed/blocked name lists (deny wins) and per-tool timeout
-// overrides (internal/config ToolPolicy ↔ tools/bridge Policy).
+// overrides (internal/config ToolPolicy ↔ tool/bridge Policy).
 func bindOptions(tp config.ToolPolicy) bridge.Options {
 	timeouts := make(map[string]time.Duration, len(tp.Timeout))
 	for name, d := range tp.Timeout {

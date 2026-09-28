@@ -36,7 +36,7 @@ The SDK provides:
 
 - **Composition root** (`navi/`) — typed collections for skills, tools,
   models, connectors, and portals, with eager validation and freeze-on-`Run`.
-- **Contract packages** (`tool`, `thought`, `connector`, `portal`, `model`,
+- **Component packages** (`tool`, `thought`, `connector`, `portal`, `model`,
   `skill`) — the dependency-light public surface components and navis are
   written against.
 - **Thought-based runtime** — the navi's main loop is the thought system
@@ -50,8 +50,9 @@ The SDK provides:
 - **Provider layer** (`llm/`) — Ollama and OpenRouter with a fallback chain.
 - **Session store** (`store/`, `store/sqlite/`) — conversations, thoughts, and
   memory in one SQLite database.
-- **Tool catalog** (`tools/`) — the registry, builtins, and the agent utility
-  tools (todo, note, time, http, thoughts).
+- **Tool system** (`tool/`) — the `Tool` type, the registry and bridge, and
+  the shipped catalog: builtins (`file_read`, `shell_exec`) plus the todo,
+  note, time, http, and thoughts tools.
 - **Starter modules** (`templates/`) — `navi-code` (a CLI coding agent) and
   `navi-daemon` (an always-on daemon).
 
@@ -77,13 +78,14 @@ Work and planning are tracked in Huly; durable design lives in this repo.
 opennavi/
 ├── cmd/navi/       # reference navi binary (run, enqueue, health)
 ├── navi/           # composition root
-├── tool/ thought/ connector/ portal/ model/ skill/   # public contract packages
+├── tool/ thought/ connector/ portal/ model/ skill/   # public component packages
+├── tool/           # the tool system: Tool type, registry, bridge, catalog
 ├── agent/          # public agent loop and tool executor
 ├── llm/            # public provider layer (Ollama, OpenRouter, fallback)
 ├── store/          # public session store interface + SQLite implementation
-├── tools/          # public tool registry and catalog
 ├── internal/       # runtime implementation (daemon, scheduler, config)
 ├── templates/      # starter navi modules (CI guardrail)
+├── testdata/       # synthetic out-of-repo modules (CI fixtures)
 └── docs/
     ├── architecture/   # current architecture
     └── adr/            # decision records

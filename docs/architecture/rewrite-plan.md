@@ -17,7 +17,7 @@ tags:
 ## Target
 
 **Shipped.** The rewrite is complete: a public `navi` composition root over
-public contract packages (`tool`, `thought`, `connector`, `portal`, `model`,
+public component packages (`tool`, `thought`, `connector`, `portal`, `model`,
 `skill`), with implementations behind them, `cmd/navi` reduced to a reference
 navi, and the starter templates as real out-of-repo-style navis. `sdk/` — the
 old authoring stub — is retired.
@@ -30,7 +30,7 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 | ID | Goal | Depends on | Verification gate | Huly |
 |---|---|---|---|---|
 | **M0** | Freeze design + decisions | — | ADRs accepted ✅ (2026-09-24) | NAVI-344 |
-| **M1** | Create leaf contract packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
+| **M1** | Create leaf component packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
 | **M2** | Build the `navi` composition root: `New`, `With*` options, collections, `Add` validation, freeze-on-`Run`, cross-cutting validation | M1 | Run a mock-provider navi end-to-end in a test | NAVI-343 |
 | **M3** | Promote `internal/thought` → public `thought/`; split `internal/interfaces` into `connector`/`portal`; keep queue semantics | M1 | Existing queue/routing/recovery tests green | NAVI-348 |
 | **M4** | Port the catalog to the collection model: builtin tools, todo/note/time/http/thoughts tools, skills, providers, cron connector, TUI/gateway portals | M2, M3 | Catalog parity with today's tool set and active-set behavior | NAVI-342 |
@@ -48,13 +48,13 @@ the composition-root package is named `navi`; connectors/portals receive a
 per-domain `Deps` struct and never import `navi`; and egress tools are added
 explicitly via `connector.SendTool()` (no auto-registration).
 
-### M1 — contract packages
+### M1 — component packages
 
 - Define types by *consumption*: `connector.Deps` and `portal.Deps` expose
   `thought.ThoughtSystem`, `model.Registry`, `*slog.Logger`.
-- Keep `tool` aligned with the existing `tools/registry` descriptor so the
+- Keep `tool` aligned with the existing `tool/registry` descriptor so the
   catalog port is mechanical.
-- Contract packages must not import `store/sqlite`, `llm/*` adapters, or
+- Component packages must not import `store/sqlite`, `llm/*` adapters, or
   `internal/*`.
 - Memory is deliberately **not** part of M1. Short-term memory is
   navi-internal — the navi's own working state rather than an extension-surface
@@ -91,8 +91,8 @@ explicitly via `connector.SendTool()` (no auto-registration).
 - The starter-template guardrail (CI job `templates`) builds the two in-tree
   templates against the checkout.
 - A separate CI job (`external-consumer`) builds two synthetic out-of-repo
-  modules — `tools/external-navi` and `tools/external-component` — that import
-  only public contract packages, and asserts the component's import boundary.
+  modules — `testdata/external-navi` and `testdata/external-component` — that import
+  only public component packages, and asserts the component's import boundary.
 
 ## Explicitly out of scope
 

@@ -10,8 +10,8 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
-	"github.com/flintwillow-software/opennavi/tools/builtin"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/builtin"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 func TestAssembleWiresRegistryAndStatefulStore(t *testing.T) {

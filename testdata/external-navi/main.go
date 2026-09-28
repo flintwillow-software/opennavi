@@ -1,6 +1,6 @@
 // Command external-navi is a synthetic OUT-OF-REPO navi (ADR 0002, ADR 0004):
 // application code that imports the public composition root (navi) and
-// contract packages, and composes a third-party component module.
+// component packages, and composes a third-party component module.
 //
 // CI builds and runs it to prove a navi authored outside this repository
 // needs only the public surface — no internal/, no in-tree special casing.

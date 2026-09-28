@@ -1,11 +1,11 @@
 // Package component is a synthetic OUT-OF-REPO component module
 // (ADR 0004, ADR 0005): it publishes a tool, a connector, and a portal
-// while importing ONLY the public contract packages — tool, thought,
+// while importing ONLY the public component packages — tool, thought,
 // connector, portal, model, skill. It never imports the composition root
 // (navi) or runtime internals.
 //
 // CI builds this module and asserts the import boundary so a change that
-// leaks a runtime type into a contract package, or that makes a component
+// leaks a runtime type into a component package, or that makes a component
 // pull in the runtime, fails on the PR. See
 // docs/architecture/extension-model.md.
 package component

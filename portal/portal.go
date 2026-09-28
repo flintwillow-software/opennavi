@@ -1,4 +1,4 @@
-// Package portal is the public portal contract (ADR 0004/0010): a
+// Package portal is the public portal component (ADR 0004/0010): a
 // portal is a human observation and control surface (CLI, TUI,
 // WebUI) — bidirectional, list/schedule/steer. It receives its
 // dependencies through portal.Deps and NEVER imports navi (rule 2:

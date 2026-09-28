@@ -13,7 +13,7 @@ tags:
 > How tools, skills, models, connectors, and portals are written and distributed
 > from outside the core repository, and how navis themselves are authored
 > outside it. Decisions: ADR
-> [0004](../adr/0004-contract-packages-public-implementations-private.md),
+> [0004](../adr/0004-component-packages-public-implementations-private.md),
 > [0005](../adr/0005-build-time-modules-are-the-extension-path.md).
 
 ## Two things extend the system
@@ -24,7 +24,7 @@ tags:
   a navi. Nothing in the core repo is special.
 
 Both are ordinary Go modules. The unit of distribution is the module; the unit
-of versioning is semver on the contract packages.
+of versioning is semver on the component packages.
 
 ## Dependency rule
 
@@ -38,8 +38,8 @@ opennavi/tool  opennavi/thought  opennavi/connector  opennavi/portal  opennavi/m
 acme/navi-jira, acme/navi-kit, acme/oncall-bot
 ```
 
-Components import **contract packages only**, never `navi`. This keeps the graph
-acyclic and prevents an extension from dragging runtime internals into
+Out-of-repo modules import **component packages only**, never `navi`. This keeps
+the graph acyclic and prevents an extension from dragging runtime internals into
 consumers.
 
 ## Writing a component
@@ -146,14 +146,14 @@ register into the same tool registry at a distinct trust level.
 
 ## Versioning and guardrails
 
-- Contract packages (`tool`, `thought`, `connector`, `portal`, `model`,
+- Component packages (`tool`, `thought`, `connector`, `portal`, `model`,
   `skill`, `navi`) are the semver surface. Breaking them is a major bump.
 - Navi repos and component repos pin versions in `go.mod`; that pin is the
   compatibility record.
 - CI builds **synthetic out-of-repo modules** — an external navi and an external
   component module — against `main` and every release tag, in addition to the
-  in-tree starter templates. `tools/external-navi` and
-  `tools/external-component` are those modules; the `external-consumer` CI job
+  in-tree starter templates. `testdata/external-navi` and
+  `testdata/external-component` are those modules; the `external-consumer` CI job
   builds them and asserts the component's import boundary.
 - `SourceInfo` is populated from build info so provenance is auditable at
   runtime.
@@ -161,7 +161,7 @@ register into the same tool registry at a distinct trust level.
 ## Anti-patterns
 
 - Extensions importing `opennavi/navi` (coupling, cycles).
-- Contract packages importing SQLite, HTTP clients, or provider SDKs.
+- Component packages importing SQLite, HTTP clients, or provider SDKs.
 - `init()`-based registration in component modules.
 - Using Go's `plugin` package.
 

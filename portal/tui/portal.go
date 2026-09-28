@@ -16,7 +16,7 @@ import (
 // the handles it receives through Deps (NAVI-352) — control via the
 // thought-system handle, observation via the bounded subscription — so it
 // no longer needs the concrete queue at construction, and its public API
-// depends only on contract packages.
+// depends only on component packages.
 
 // NewDepsTransport builds the Deps-backed transport a TUI portal uses.
 // It is live-only; transcript restore applies to every portal and is

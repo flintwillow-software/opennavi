@@ -55,14 +55,14 @@ Always in context. Injected into the prompt for every thought, with no tool call
 required. The navi may write to it during a thought, and those writes are
 visible to subsequent thoughts.
 
-**It is navi-internal, not a public contract package.** It is the navi's own
+**It is navi-internal, not a public component package.** It is the navi's own
 working state rather than a capability an extension supplies, and ADR 0010's
 three capability layers — [tools, connectors, portals](../adr/0010-three-capability-layers.md)
 — do not include it. So it is absent from `connector.Deps` and `portal.Deps`;
 M1 (NAVI-345) publishes no memory contract.
 
 One consequence is accepted deliberately: an `internal/` package is importable
-by the runtime and by in-repo `tools/`, but **not** by out-of-repo extension
+by the runtime and by in-repo `tool/`, but **not** by out-of-repo extension
 modules. Third-party tools therefore cannot read or write short-term memory.
 Reversing that later means publishing a public handle.
 
@@ -123,7 +123,7 @@ when implementing either side.
 - **Not the thought transcript.** Sessions record history — what happened.
   Memory records what the navi chose to keep. See
   [Intentional, not incidental](#intentional-not-incidental).
-- **Not `note`.** [`tools/note`](../../tools/note/) is a per-navi verbatim
+- **Not `note`.** [`tool/note`](../../tool/note/) is a per-navi verbatim
   scratchpad, and its own documentation calls it "deliberately distinct from
   semantic memory". Notes are written and read back exactly; memory is curated
   and searched.

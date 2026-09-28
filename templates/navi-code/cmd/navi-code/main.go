@@ -27,7 +27,7 @@ import (
 	"github.com/flintwillow-software/opennavi/portal/tui"
 	"github.com/flintwillow-software/opennavi/skill"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/builtin"
+	"github.com/flintwillow-software/opennavi/tool/builtin"
 )
 
 //go:embed coding-conventions.md
@@ -102,7 +102,7 @@ func run() error {
 	return n.Run(ctx)
 }
 
-// repoStatsTool declares repo_stats as a public contract tool.
+// repoStatsTool declares repo_stats as a public component tool.
 func repoStatsTool() tool.Tool {
 	schema, _ := tool.ParseSchema(json.RawMessage(`{
 		"type": "object",

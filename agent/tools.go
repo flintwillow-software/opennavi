@@ -31,7 +31,7 @@ type BuiltinTool struct {
 // BuiltinTools returns the builtin tools (file_read, shell_exec)
 // bound to the given working directory. Used both by
 // RegisterBuiltinTools and by registry-based registration
-// (tools/builtin).
+// (tool/builtin).
 func BuiltinTools(workDir string) []BuiltinTool {
 	tr, hr := makeFileRead(workDir)
 	ts, hs := makeShellExec(workDir)

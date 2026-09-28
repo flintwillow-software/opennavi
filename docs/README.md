@@ -38,7 +38,7 @@ add a new ADR that supersedes the old one.
 | [0001](./adr/0001-documentation-model.md) | Documentation model: docs-as-code + ADRs + Huly | accepted |
 | [0002](./adr/0002-navi-is-a-composition-root.md) | The navi is a composition root with typed collections | accepted |
 | [0003](./adr/0003-thought-system-first-class.md) | The thought system is first-class and public | accepted |
-| [0004](./adr/0004-contract-packages-public-implementations-private.md) | Contract packages public; implementations private | accepted |
+| [0004](./adr/0004-component-packages-public-implementations-private.md) | Component packages public; implementations private | accepted |
 | [0005](./adr/0005-build-time-modules-are-the-extension-path.md) | Build-time modules are the extension path | accepted |
 | [0006](./adr/0006-compile-time-omission-plus-runtime-ceiling.md) | Compile-time omission + runtime ceiling security model | accepted |
 | [0007](./adr/0007-thought-modes.md) | Thought modes | accepted |

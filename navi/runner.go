@@ -15,7 +15,7 @@ import (
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
+	"github.com/flintwillow-software/opennavi/tool/bridge"
 )
 
 // Runner executes one thought to a terminal state. It is a seam: the
@@ -107,7 +107,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
 
 	// Registry-first tool surface: the executor is rebuilt from the
-	// registry's active set through tools/bridge, narrowed by the
+	// registry's active set through tool/bridge, narrowed by the
 	// thought's mode and the compiled ceiling. This replaces the builtins
 	// NewAgent seeded, so the LLM-facing list is exactly the permitted
 	// surface.
@@ -224,7 +224,7 @@ func userPrompt(t *thought.Thought) string {
 }
 
 // bindTools rebuilds the agent's executor from the registry's active set
-// via tools/bridge, narrowed by the thought's mode and the compiled
+// via tool/bridge, narrowed by the thought's mode and the compiled
 // ceiling. The registry stays authoritative for metadata, validation, and
 // dispatch; the executor only carries the resolved surface and timeout
 // envelopes.

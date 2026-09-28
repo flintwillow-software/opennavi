@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // registerHttp builds a registry with http_request registered (opts

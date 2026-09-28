@@ -14,8 +14,8 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/session"
 	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/bridge"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // checkpointPrefix is the self-describing magic for the checkpoint
@@ -123,7 +123,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	a.Provider = agentProviderAdapter{chain: chain}
 
 	// Registry-first tool surface (NAVI-272): the executor is
-	// rebuilt from the registry's active set via tools/bridge, so the
+	// rebuilt from the registry's active set via tool/bridge, so the
 	// LLM-facing tool list is exactly the permitted active set and
 	// policy (allowed/blocked, timeout overrides) governs it. This
 	// replaces the executor NewAgent seeded with raw builtins — when
@@ -314,7 +314,7 @@ func (r *AgentRunner) persistConversation(t *thought.Thought, msgs []agent.Agent
 }
 
 // bindTools rebuilds the agent's executor from the registry's active
-// set via tools/bridge (registry authority: only active, permitted
+// set via tool/bridge (registry authority: only active, permitted
 // tools are bound — inactive builtins disappear). No-op without a
 // registry (agents keep NewAgent's builtin seeding).
 func (r *AgentRunner) bindTools(a *agent.Agent) error {

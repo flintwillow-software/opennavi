@@ -50,7 +50,7 @@ func toolCallStream(name, args string) []llm.StreamEvent {
 
 // TestAgentRunnerDispatchesThroughTheRegistry is the increment-1 gate: a
 // declared tool reaches the agent executor through the registry and
-// tools/bridge, the model's call really invokes the handler, and the
+// tool/bridge, the model's call really invokes the handler, and the
 // final assistant turn becomes the thought's result.
 func TestAgentRunnerDispatchesThroughTheRegistry(t *testing.T) {
 	var mu sync.Mutex

@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // DefaultMaxResponseBytes caps the response body returned to the LLM
@@ -168,11 +168,11 @@ func definition() (registry.ToolDefinition, error) {
 			"Private/loopback addresses are denied by default; only allowlisted internal services are reachable.",
 			"Redirects are followed and re-validated per hop (max 3).",
 		},
-		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/http/http.go"},
+		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tool/http/http.go"},
 	}, nil
 }
 
-// Tool returns http_request as a public contract tool — the collection
+// Tool returns http_request as a public component tool — the collection
 // form of Register for the navi composition root.
 func Tool(opts ...Options) (tool.Tool, error) {
 	o := mergeOptions(opts...)
@@ -180,11 +180,11 @@ func Tool(opts ...Options) (tool.Tool, error) {
 	if err != nil {
 		return tool.Tool{}, err
 	}
-	contract, err := registry.ToDef(def)
+	tdef, err := registry.ToDef(def)
 	if err != nil {
 		return tool.Tool{}, fmt.Errorf("http: %w", err)
 	}
-	return tool.Tool{Def: contract, Handler: tool.Handler(requestHandler(o))}, nil
+	return tool.Tool{Def: tdef, Handler: tool.Handler(requestHandler(o))}, nil
 }
 
 // ── SSRF guard ─────────────────────────────────────────────────────────

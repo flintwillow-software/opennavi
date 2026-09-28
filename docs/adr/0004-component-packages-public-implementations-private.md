@@ -9,7 +9,7 @@ tags:
   - layering
 ---
 
-# 0004 — Contract packages are public and dependency-light; implementations are private
+# 0004 — Component packages are public and dependency-light; implementations are private
 
 ## Context
 
@@ -23,8 +23,8 @@ clients) into every consumer.
 
 ## Decision
 
-Split contract from implementation and keep the contract packages free of heavy
-dependencies:
+Split the component packages from their implementations and keep them free of
+heavy dependencies:
 
 ```
 tool/          ← Tool, Def, Handler, Schema, Access   (stdlib-only)
@@ -40,14 +40,14 @@ llm/ollama/    ← implementation
 
 Three rules:
 
-1. **Extensions import contract packages, never `navi`.** `acme/navi-jira`
+1. **Extensions import component packages, never `navi`.** `acme/navi-jira`
    requires `opennavi/tool`, not `opennavi/navi`. The graph stays acyclic and
    the extension does not depend on runtime internals.
 2. **Interfaces are defined by the consumer/leaf and satisfied structurally.**
    `connector.Deps` exposes `thought.ThoughtSystem`, `memory.API`,
    `model.Registry`; `navi.Navi` satisfies them without the connector naming
    `navi`.
-3. **Contract packages stay dependency-light.** No SQLite, no HTTP client, no
+3. **Component packages stay dependency-light.** No SQLite, no HTTP client, no
    provider SDKs behind `tool` or `thought`.
 
 ## Consequences

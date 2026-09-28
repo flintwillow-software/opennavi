@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 func newToolRegistry(t *testing.T) *registry.Registry {

@@ -75,7 +75,7 @@ func run() error {
 	return n.Run(ctx)
 }
 
-// queueStatusTool declares queue_status as a public contract tool.
+// queueStatusTool declares queue_status as a public component tool.
 func queueStatusTool() tool.Tool {
 	schema, _ := tool.ParseSchema(json.RawMessage(`{"type": "object"}`))
 	return tool.Tool{

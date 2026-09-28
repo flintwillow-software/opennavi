@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/store/sqlite"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // newTestStore opens a scratch SQLite stateful store per test.

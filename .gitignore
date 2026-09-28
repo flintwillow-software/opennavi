@@ -5,7 +5,7 @@
 /templates/navi-daemon/navi-daemon
 /cmd/navi/navi.db
 /cmd/navi/navi.log
-/tools/external-navi/external-navi
-/tools/external-component/check
+/testdata/external-navi/external-navi
+/testdata/external-component/check
 /navi.db
 /navi.log

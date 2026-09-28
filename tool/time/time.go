@@ -23,7 +23,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // DefaultZone is the navi's configured zone default:
@@ -67,7 +67,7 @@ func RegisterTools(reg *registry.Registry) error {
 	return nil
 }
 
-// Tool returns time_read as a public contract tool for the navi
+// Tool returns time_read as a public component tool for the navi
 // composition root — the collection form of RegisterTools.
 func Tool() (tool.Tool, error) {
 	def, err := registry.ToDef(Definition())

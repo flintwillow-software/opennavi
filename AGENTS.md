@@ -7,18 +7,20 @@ conventions live in the engineering-workspace `AGENTS.md`.
 
 OpenNAVI is the Go SDK for building **navis** — thought-based agent binaries.
 A navi is a composition root (`navi/`) over typed collections, and components
-are written against the public contract packages. Durable design lives in
+are written against the public component packages. Durable design lives in
 `docs/architecture/` and `docs/adr/`; work state lives in Huly (project
 **NAVI**). GitHub issues are public intake only.
 
 ## Layout
 
 - `navi/` — composition root; `tool/` `thought/` `connector/` `portal/`
-  `model/` `skill/` — public contract packages
-- `agent/` `llm/` `store/` `tools/` — public implementations
+  `model/` `skill/` — public component packages
+- `tool/registry`, `tool/bridge`, `tool/{builtin,http,note,thoughts,time,todo}`
+  — the tool system: registry, executor bridge, and shipped catalog
+- `agent/` `llm/` `store/` — public implementations
 - `internal/` — runtime wiring (config, cron, context, ops)
 - `cmd/navi/` — the reference navi; `templates/` — starter navi modules
-- `tools/external-*` — synthetic out-of-repo modules for the CI guardrail
+- `testdata/external-*` — synthetic out-of-repo modules for the CI guardrail
 - `docs/architecture/`, `docs/adr/` — durable design; `CHANGELOG.md` — release history
 
 ## Conventions

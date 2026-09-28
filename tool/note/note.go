@@ -23,7 +23,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // DefaultMaxBodyBytes is the per-note body cap: 64 KiB.
@@ -140,7 +140,7 @@ func definitions() (registry.ToolDefinition, registry.ToolDefinition, error) {
 			"Searches are literal substrings, not semantic; use memory for recall.",
 			"Bodies may be truncated at the note size cap (truncated: true).",
 		},
-		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/note/note.go"},
+		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tool/note/note.go"},
 	}
 	write := registry.ToolDefinition{
 		Name:          "note_write",
@@ -158,12 +158,12 @@ func definitions() (registry.ToolDefinition, registry.ToolDefinition, error) {
 			"Use remove: true with an existing id to delete a note.",
 			"Bodies are capped at 64 KiB per note and 10 MiB total per navi.",
 		},
-		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tools/note/note.go"},
+		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK, Path: "tool/note/note.go"},
 	}
 	return read, write, nil
 }
 
-// Tools returns note_read and note_write as public contract tools bound
+// Tools returns note_read and note_write as public component tools bound
 // to naviID and state — the collection form of Register for the navi
 // composition root.
 func Tools(naviID string, state store.StatefulToolStore, opts ...Options) ([]tool.Tool, error) {

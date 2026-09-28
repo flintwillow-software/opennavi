@@ -2,7 +2,7 @@
 // shell_exec) into the public tool registry with complete
 // metadata descriptors. This is the daemon's registry-first tool path:
 // the registry owns the LLM-facing metadata and dispatch enforcement,
-// and tools/bridge binds the active set into the agent executor — so
+// and tool/bridge binds the active set into the agent executor — so
 // builtin tools are governed by the same policy and active-set rules
 // as catalog and author tools.
 //
@@ -18,12 +18,12 @@ import (
 
 	"github.com/flintwillow-software/opennavi/agent"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // Register registers file_read and shell_exec into the registry,
 // bound to workDir. Handlers run through the registry's dispatch
-// validation; the runtime (tools/bridge) applies timeout envelopes
+// validation; the runtime (tool/bridge) applies timeout envelopes
 // and policy at bind time.
 func Register(reg *registry.Registry, workDir string) error {
 	for _, bt := range agent.BuiltinTools(workDir) {
@@ -42,7 +42,7 @@ func Register(reg *registry.Registry, workDir string) error {
 	return nil
 }
 
-// Tools returns file_read and shell_exec as public contract tools bound
+// Tools returns file_read and shell_exec as public component tools bound
 // to workDir — the collection form of Register for the navi composition
 // root.
 func Tools(workDir string) ([]tool.Tool, error) {
@@ -52,13 +52,13 @@ func Tools(workDir string) ([]tool.Tool, error) {
 		if err != nil {
 			return nil, err
 		}
-		contract, err := registry.ToDef(def)
+		tdef, err := registry.ToDef(def)
 		if err != nil {
 			return nil, fmt.Errorf("builtin: %w", err)
 		}
 		run := bt.Run
 		out = append(out, tool.Tool{
-			Def: contract,
+			Def: tdef,
 			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				return run(args)
 			},

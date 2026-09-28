@@ -1,4 +1,4 @@
-// Package connector is the public connector contract (ADR 0004/0005):
+// Package connector is the public connector component (ADR 0004/0005):
 // a connector is a transport integration that brings work IN to the
 // navi — gateway webhooks, Discord/Slack/MQTT/email adapters,
 // schedules — modelled as a thing that spawns/attaches/steers
@@ -11,7 +11,7 @@
 // EXPLICITLY by the connector author via connector.SendTool() — never
 // auto-registered — so the capability surface stays visible in
 // main.go. The exact SendTool signature binds the tool registry, which
-// is not a contract package yet (the registry alignment lands at M4);
+// is not a component package yet (the registry alignment lands at M4);
 // M1 therefore documents the rule here and leaves the helper out of
 // the ABI until then.
 package connector

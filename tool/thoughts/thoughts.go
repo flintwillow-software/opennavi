@@ -33,7 +33,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // promptSummaryMax caps the prompt summary in thoughts_read output
@@ -65,7 +65,7 @@ func Register(reg *registry.Registry, q *thought.Queue) error {
 	return thought.RegisterQueueTools(reg, handle, tools)
 }
 
-// Tools returns the four thought-management tools as public contract
+// Tools returns the four thought-management tools as public component
 // tools bound to the navi's queue — the collection form of Register for
 // the navi composition root.
 func Tools(q *thought.Queue) ([]tool.Tool, error) {

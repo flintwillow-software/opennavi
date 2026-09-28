@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // QueueHandle is the per-dispatch handle handed to queue-attached tool

@@ -86,28 +86,30 @@ See [runtime.md](./runtime.md) for the full model.
 
 ## Package layout
 
-Public contract and implementation are split so third-party components can be
+Public component packages and implementations are split so third-party components can be
 written in their own modules without pulling in the runtime:
 
 ```
-tool/          public  Tool, Def, Handler, Schema, Access, provenance
-thought/       public  Thought, thought-system handle, events, the queue
-connector/     public  Connector interface + Deps (thought/model handles)
-connector/cron public  cron connector (schedules as a thought factory)
-portal/        public  Portal interface + Deps, bounded observation contract
-portal/gateway public  HTTP portal gateway (observation + control framing)
-model/         public  Model + provider descriptor
-skill/         public  Skill value (embedded content)
-navi/          public  composition root; imports the above
-agent/         public  agent loop, events, tool executor
-llm/           public  Provider interface + adapters
-store/         public  Store interface + implementations
-tools/         public  catalog (builtin, http, note, thoughts, time, todo)
-tools/registry public  tool registry: metadata, active set, dispatch
-tools/bridge/  public  binds a registry active set into the agent executor
-internal/      private daemon wiring, compaction, metrics, CLI plumbing
-cmd/navi/      reference navi (was the only runnable binary)
-templates/     starter navi modules (guardrail)
+tool/                 public  Tool, Def, Handler, Schema, Access, provenance
+tool/registry         public  tool registry: metadata, active set, dispatch
+tool/bridge           public  binds a registry active set into the agent executor
+tool/{builtin,http,note,thoughts,time,todo}  public  the shipped tool catalog
+thought/              public  Thought, thought-system handle, events, the queue
+connector/            public  Connector interface + Deps (thought/model handles)
+connector/cron        public  cron connector (schedules as a thought factory)
+portal/               public  Portal interface + Deps, bounded observation contract
+portal/gateway        public  HTTP portal gateway (observation + control framing)
+portal/tui            public  terminal portal
+model/                public  Model + provider descriptor
+skill/                public  Skill value (embedded content)
+navi/                 public  composition root; imports the above
+agent/                public  agent loop, events, tool executor
+llm/                  public  Provider interface + adapters
+store/                public  Store interface + implementations
+internal/             private daemon wiring, compaction, metrics, CLI plumbing
+cmd/navi/             reference navi (was the only runnable binary)
+templates/            starter navi modules (guardrail)
+testdata/             synthetic out-of-repo modules (CI fixtures)
 ```
 
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
@@ -120,7 +122,7 @@ acyclic and components independently testable.
 |---|---|
 | Build-time vs runtime | Capability (tools, connectors, models) is compiled in; credentials, endpoints, and schedules are runtime config that may only narrow behavior |
 | Compiled policy vs runtime policy | Runtime config may only tighten the compiled permission ceiling |
-| Contract vs implementation | Contract packages are public and dependency-light; implementations are swappable |
+| Component vs implementation | Component packages are public and dependency-light; implementations are swappable |
 | Repo vs tracker | Durable design lives in `docs/`; work state lives in Huly |
 | Core vs extension | Core ships in the SDK; extensions are ordinary Go modules or (later) signed runtime plugins |
 
@@ -128,7 +130,7 @@ acyclic and components independently testable.
 
 The rewrite is complete (M0–M7). `navi.New` assembles typed collections,
 validates and freezes them, and runs a real agent runner (`navi.AgentRunner`)
-that dispatches through `tools/registry` and `tools/bridge` with a
+that dispatches through `tool/registry` and `tool/bridge` with a
 mode-selected tool surface (ADR 0007). The catalog is ported onto `tool.Def`
 collections, `model_list` exposes the declared provider set (ADR 0009), cron
 ships as the `connector/cron` connector, and portals observe queue and
@@ -141,7 +143,7 @@ compaction included), cron, and portals; `daemon` mode serves the HTTP portal
 gateway so remote front-ends attach and control across processes. `navi-code`
 and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
 authoring stub is retired, and the out-of-repo extension path is guarded by CI
-(`tools/external-navi`, `tools/external-component`). The old `internal/daemon`
+(`testdata/external-navi`, `testdata/external-component`). The old `internal/daemon`
 run path is dead code, tracked for removal (NAVI-354); transcript replay for
 portals is tracked as NAVI-353.
 

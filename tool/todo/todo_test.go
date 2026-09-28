@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/store"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // memStatefulStore is a minimal in-memory StatefulToolStore mirroring
