@@ -169,5 +169,5 @@ register into the same tool registry at a distinct trust level.
 
 - [overview.md](./overview.md) — package layout
 - [security.md](./security.md) — trust boundary
-- [runtime.md](./runtime.md) — connector/portal contracts
+- [runtime.md](./runtime.md) — connector/portal interfaces
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones

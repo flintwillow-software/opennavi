@@ -1,6 +1,6 @@
 // Package llm implements the unified LLM provider layer (spec
 // /): provider-agnostic
-// message/tool/config types, the Provider contract, and token
+// message/tool/config types, the Provider interface, and token
 // counting. Provider adapters (Ollama, OpenAI, Anthropic, ...) build on
 // these types; the agent runtime adapts its own types onto them.
 //

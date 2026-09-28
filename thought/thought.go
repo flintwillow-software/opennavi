@@ -6,7 +6,7 @@
 // lifecycle, the ThoughtSystem handle components operate through, and the
 // priority Queue that runs them.
 //
-// The first two are the component contract. The Queue is the *runtime*
+// The first two are the component interface. The Queue is the *runtime*
 // handle: the composition root and its workers hold the concrete type,
 // while components receive only ThoughtSystem through Deps — so a
 // component cannot take work off the queue, and slot accounting stays out
@@ -257,7 +257,7 @@ type Event struct {
 
 // ThoughtSystem is the handle components (connectors, portals) operate
 // through: scheduling, steering, lifecycle controls, and observation. A
-// navi satisfies it structurally (ADR 0004 rule 2); the contract never
+// navi satisfies it structurally (ADR 0004 rule 2); the interface never
 // names the composition root.
 //
 // Everything here is *control* or *reporting*. Nothing here claims work:

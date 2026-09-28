@@ -85,7 +85,7 @@ type Thought struct {
 The public value carries what a *component* acts on. Scheduler
 bookkeeping — slot and worker assignment, preemption requests, the park
 checkpoint, log paths — stays inside the runtime and is not part of this
-contract. `Mode` is persisted with the thought (the durable thought
+interface. `Mode` is persisted with the thought (the durable thought
 store carries a `mode` column) and consumed by the runner, which resolves
 the tool surface, permission ceiling, and optional model from it; an
 empty mode selects the navi's default surface.
@@ -142,7 +142,7 @@ can only restrict relative to the compiled policy — never escalate (ADR 0006).
 
 ## Connectors and portals
 
-Both are lifecycle components attached to a navi with a dependency contract:
+Both are lifecycle components attached to a navi with a Deps interface:
 
 ```go
 type Connector interface {
@@ -193,10 +193,10 @@ slowing the queue.
   that frames the bounded observation stream and control channel over HTTP
   and delegates authorization to the control portal (the `Hub`), so there is
   one authorization path and a remote front-end attaches through the same
-  contract as every other portal. The TUI is likewise a public
+  interface as every other portal. The TUI is likewise a public
   `portal.Portal` component built from `Deps`, registered by the reference
   navi through `n.Portals`.
-- **Control** is a contract capability too: `portal.Control` authorizes
+- **Control** is an interface capability too: `portal.Control` authorizes
   attach/control through a `portal.Authorizer` and applies the actions
   through the thought system it receives at `Start`. The gateway delegates
   to it, so a remote front-end can queue, steer, and manage thoughts in

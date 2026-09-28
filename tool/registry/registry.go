@@ -87,7 +87,7 @@ const (
 	OriginSDK
 	// OriginAuthor tools are registered by a navi author.
 	OriginAuthor
-	// OriginExtension tools arrive via the extension contract.
+	// OriginExtension tools arrive via the extension interface.
 	OriginExtension
 )
 

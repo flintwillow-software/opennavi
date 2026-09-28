@@ -9,7 +9,7 @@ import (
 )
 
 // agentProviderAdapter adapts the daemon's llm.Provider (possibly a
-// fallback chain) onto the agent's ProviderInterface contract. The
+// fallback chain) onto the agent's ProviderInterface. The
 // agent's LLM-facing Message type is converted to the llm layer's.
 type agentProviderAdapter struct {
 	chain llm.Provider

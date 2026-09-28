@@ -59,7 +59,7 @@ visible to subsequent thoughts.
 working state rather than a capability an extension supplies, and ADR 0010's
 three capability layers — [tools, connectors, portals](../adr/0010-three-capability-layers.md)
 — do not include it. So it is absent from `connector.Deps` and `portal.Deps`;
-M1 (NAVI-345) publishes no memory contract.
+M1 (NAVI-345) publishes no memory interface.
 
 One consequence is accepted deliberately: an `internal/` package is importable
 by the runtime and by in-repo `tool/`, but **not** by out-of-repo extension
@@ -130,7 +130,7 @@ when implementing either side.
 - **Not the retired `internal/memory` package.** It implemented three of the
   four scopes and dropped the load-timing dimension entirely, and it was never
   wired into anything — deleted in the M7 cleanup. Its surface is not the
-  contract — see [Provenance](#provenance).
+  interface — see [Provenance](#provenance).
 
 ## Open questions
 

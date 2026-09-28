@@ -91,7 +91,7 @@ const (
 	OriginSDK
 	// OriginAuthor tools are registered by a navi author.
 	OriginAuthor
-	// OriginExtension tools arrive via the extension contract.
+	// OriginExtension tools arrive via the extension interface.
 	OriginExtension
 )
 
@@ -122,7 +122,7 @@ type SourceInfo struct {
 }
 
 // PrepareArguments migrates older argument shapes to the current
-// schema before validation. The contract types the hook;
+// schema before validation. The interface types the hook;
 // the M4 port attaches it by registration option (see the package
 // note on the Def omission).
 type PrepareArguments func(args map[string]any) (map[string]any, error)

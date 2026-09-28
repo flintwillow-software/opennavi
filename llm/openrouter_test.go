@@ -12,7 +12,7 @@ import (
 
 func TestOpenRouterStreamContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Headers are part of the contract.
+		// Headers are part of the interface.
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}

@@ -27,7 +27,7 @@ var ErrUnauthorized = errors.New("portal: unauthorized")
 // bounded observation stream, and the logger. NO memory handle —
 // short-term memory is navi-internal working state (not an extension
 // surface) and long-term memory search is a tool against the M4
-// contract (same rationale as connector.Deps).
+// interface (same rationale as connector.Deps).
 type Deps struct {
 	// ThoughtSystem is the navi's queue handle.
 	ThoughtSystem thought.ThoughtSystem

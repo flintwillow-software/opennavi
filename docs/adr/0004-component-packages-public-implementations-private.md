@@ -14,7 +14,7 @@ tags:
 ## Context
 
 For a third-party tool, connector, or portal to be written in its own repository,
-the contract it satisfies must be importable without pulling in the runtime.
+the interface it satisfies must be importable without pulling in the runtime.
 Today the reverse holds: the composition logic is private (`internal/daemon`)
 while the pieces are public. An external author can import `agent`, `llm`,
 `store`, and `tools/registry`, but cannot assemble a navi, and any extension

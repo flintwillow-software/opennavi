@@ -26,7 +26,7 @@ func (a denyAuth) Authorize(action PortalAction, identity string) error {
 	return errors.New("denied by test authorizer")
 }
 
-// newQueue builds a queue over an in-memory store for contract tests.
+// newQueue builds a queue over an in-memory store for conformance tests.
 func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())

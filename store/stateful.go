@@ -103,7 +103,7 @@ var (
 // todo and note state for tools registered through the
 // stateful registration variant (tool/registry.RegisterStateful).
 //
-// Per-navi scoping is part of the contract: naviID is the first
+// Per-navi scoping is part of the interface: naviID is the first
 // parameter of every method and implementations MUST scope all reads
 // and writes to that identity — two navis on the same host never see
 // each other's state. State persists across restarts: implementations

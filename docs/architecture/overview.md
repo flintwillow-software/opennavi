@@ -97,7 +97,7 @@ tool/{builtin,http,note,thoughts,time,todo}  public  the shipped tool catalog
 thought/              public  Thought, thought-system handle, events, the queue
 connector/            public  Connector interface + Deps (thought/model handles)
 connector/cron        public  cron connector (schedules as a thought factory)
-portal/               public  Portal interface + Deps, bounded observation contract
+portal/               public  Portal interface + Deps, bounded observation interface
 portal/gateway        public  HTTP portal gateway (observation + control framing)
 portal/tui            public  terminal portal
 model/                public  Model + provider descriptor
@@ -113,7 +113,7 @@ testdata/             synthetic out-of-repo modules (CI fixtures)
 ```
 
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
-portals receive handles through their `Deps` contract. This keeps the graph
+portals receive handles through their `Deps` interface. This keeps the graph
 acyclic and components independently testable.
 
 ## Boundaries
@@ -134,7 +134,7 @@ that dispatches through `tool/registry` and `tool/bridge` with a
 mode-selected tool surface (ADR 0007). The catalog is ported onto `tool.Def`
 collections, `model_list` exposes the declared provider set (ADR 0009), cron
 ships as the `connector/cron` connector, and portals observe queue and
-running-agent events through the bounded `portal.Observation` contract
+running-agent events through the bounded `portal.Observation` interface
 (NAVI-352). Durable thoughts persist their mode.
 
 `cmd/navi` is the reference navi: `run` assembles through `navi.New` with

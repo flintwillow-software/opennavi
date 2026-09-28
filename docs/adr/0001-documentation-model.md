@@ -29,7 +29,7 @@ maintenance; they go stale the moment the design moves and they give false
 confidence about what the system does.
 
 The repository is pre-1.0 with no external adopters. There is no compliance or
-contract reason to maintain a stable requirement inventory today.
+external-obligation reason to maintain a stable requirement inventory today.
 
 ## Decision
 
@@ -42,7 +42,7 @@ pipeline for this repository:
   files. Decisions are superseded, never edited.
 - **Work and planning** live in Huly — epics, issues, status, priority,
   assignee, blockers, roadmap.
-- **Public API contract** is generated from source (`go doc` / pkgsite), not
+- **Public API documentation** is generated from source (`go doc` / pkgsite), not
   mirrored in prose.
 - **Behavior** is specified by tests. Tests are the executable specification.
 - `CHANGELOG.md` stays as release history.
@@ -55,7 +55,7 @@ never lives in repo docs.
 
 - The dual-truth problem ends: one source of truth per question.
 - We give up the S-code requirement inventory. When the SDK reaches a stable
-  public contract (1.0), add a focused, test-linked contract document for that
+  public interface (1.0), add a focused, test-linked API document for that
   surface only — not a tree.
 - Documentation must move with code. A PR that changes architecture updates the
   relevant architecture doc or adds an ADR in the same review.
@@ -69,7 +69,7 @@ never lives in repo docs.
 - **Keep d3, drop only `docs/changes/`.** Leaves the speculative spec tree and
   the requirement inventory as a second source of truth. Rejected.
 - **Keep the spec tree as the durable "what", Huly for work.** This was the
-  original split, but the tree's value (traceability for a stable contract)
+  original split, but the tree's value (traceability for a stable interface)
   does not apply pre-1.0, and its cost (rot, duplication) applies today.
   Rejected for now; revisitable at 1.0.
 - **Move design prose into Huly.** Huly is built for work items, not long-form

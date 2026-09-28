@@ -111,14 +111,14 @@ capability backlog. Existing Huly work is triaged as:
 | Disposition | Issues |
 |---|---|
 | **Superseded** (canceled) | NAVI-68 (`navi.yaml` definition model), NAVI-69 (builder/compiler pipeline), NAVI-74 (build pipeline & Makefile) — children of the old NAVI-48 foundation epic |
-| **Deferred** | NAVI-72 (runtime extension contract) — ADR 0005; revisit if a no-rebuild need appears |
+| **Deferred** | NAVI-72 (runtime extension interface) — ADR 0005; revisit if a no-rebuild need appears |
 | **Reshaped** | NAVI-70 (trust/signing → `security.md`), NAVI-71 (layout → package layout), NAVI-73 (`navi init` → navi repo scaffold), NAVI-256 (config → defaults-in-code) |
-| **Re-homed** | NAVI-89 (messaging → connectors / portals / thought-system), NAVI-59 (tool catalog → `tool` contract), NAVI-97 (providers → `Models` collection) |
+| **Re-homed** | NAVI-89 (messaging → connectors / portals / thought-system), NAVI-59 (tool catalog → `tool` component), NAVI-97 (providers → `Models` collection) |
 | **Absorbed** | NAVI-339 (thought scoping) → M3/M4 |
 | **Orthogonal** (proceeds independently) | NAVI-50, NAVI-183, NAVI-79, NAVI-82, NAVI-39, and standalone follow-ups |
 
 Interface-affected epics are linked `is-blocked-by` the milestone that provides
-their new contract (NAVI-59/89/97 ← M1, NAVI-256 ← M2) and `relates-to` where they
+their new interface (NAVI-59/89/97 ← M1, NAVI-256 ← M2) and `relates-to` where they
 are merely adjacent (NAVI-266 ↔ M4).
 
 ## Tracking

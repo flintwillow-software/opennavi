@@ -22,7 +22,7 @@ func main() {
 	}
 	fmt.Printf("external tool %s -> %s\n", t.Def.Name, out)
 
-	// The interface assertions prove the module satisfies the contracts
+	// The interface assertions prove the module satisfies the interfaces
 	// structurally, without importing navi.
 	var c connector.Connector = &component.Watcher{}
 	var p portal.Portal = &component.Dashboard{}

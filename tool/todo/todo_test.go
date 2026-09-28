@@ -37,7 +37,7 @@ func (m *memStatefulStore) ListTodos(naviID string, status store.TodoStatus, lim
 			out = append(out, t)
 		}
 	}
-	// Contract ordering: priority, then most recent activity.
+	// Ordering: priority, then most recent activity.
 	for i := 0; i < len(out); i++ {
 		for j := i + 1; j < len(out); j++ {
 			if out[j].Priority < out[i].Priority || (out[j].Priority == out[i].Priority && out[j].UpdatedAt.After(out[i].UpdatedAt)) {
@@ -68,7 +68,7 @@ func (m *memStatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]st
 
 func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) ([]store.Todo, error) {
 	list := m.todos[naviID]
-	// Contract: atomic batch — validate every id BEFORE applying any
+	// Guarantee: atomic batch — validate every id BEFORE applying any
 	// update, so an unknown id leaves prior state untouched.
 	index := make(map[string]int, len(list))
 	for i, t := range list {

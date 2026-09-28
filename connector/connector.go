@@ -30,7 +30,7 @@ import (
 // NOTE — no memory handle: short-term memory is navi-internal working
 // state, not an extension surface (ADR 0010's three layers are
 // tools/connectors/portals); long-term on-demand memory search is a
-// TOOL against the M4 contract, not a Deps field.
+// TOOL against the component interface, not a Deps field.
 type Deps struct {
 	// ThoughtSystem is the navi's queue handle.
 	ThoughtSystem thought.ThoughtSystem
@@ -40,7 +40,7 @@ type Deps struct {
 	Log *slog.Logger
 }
 
-// Connector is the transport integration contract: Start begins
+// Connector is the transport integration interface: Start begins
 // ingestion and receives the navi's Deps at that point; ctx
 // cancellation requests shutdown. Stop shuts the connector down.
 //

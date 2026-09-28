@@ -441,7 +441,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 
 // agentDetail summarizes an agent event for the observation stream
 // (bounded length; never raw credentials). NAVI-352 moved the neutral
-// event type to the public contract; the agent-specific summary stays
+// event type to the public interface; the agent-specific summary stays
 // here, where the agent package is already in scope.
 func agentDetail(ev agent.AgentEvent) string {
 	if ev.Tool != nil {

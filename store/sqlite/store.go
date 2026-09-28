@@ -27,7 +27,7 @@ import (
 //
 // Public surface note: session-facing methods operate on the public
 // store data model only. ThoughtStore methods intentionally reference
-// internal queue types and are not part of the authoring contract.
+// internal queue types and are not part of the authoring surface.
 type Store struct {
 	db     *sql.DB
 	cipher Cipher

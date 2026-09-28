@@ -15,7 +15,7 @@ import (
 // content, tool input). The store applies it transparently; a Noop
 // cipher keeps values as plaintext.
 //
-// Contract for custom implementations: Encrypt output must be
+// Interface for custom implementations: Encrypt output must be
 // self-describing (the built-in AESGCM uses the "enc1:" prefix; the
 // store additionally prepends "enc1:" to any non-prefixed Encrypt
 // output). Decrypt must accept its own Encrypt output, including the

@@ -1,4 +1,4 @@
-// Package store is the public session-persistence contract
+// Package store is the public session-persistence interface
 // the session data model (Session, SessionEntry), the
 // Store interface every persistence backend implements, and the
 // in-memory MemoryStore. The SQLite implementation lives in the

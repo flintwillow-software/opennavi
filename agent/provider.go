@@ -199,7 +199,7 @@ func toLLMTools(tools []AgentTool) []llm.Tool {
 	return out
 }
 
-// Compile-time check: the adapters satisfy the agent-side contract.
+// Compile-time check: the adapters satisfy the agent-side interface.
 var (
 	_ ProviderInterface = (*OllamaProvider)(nil)
 	_ ProviderInterface = (*LLMProviderAdapter)(nil)

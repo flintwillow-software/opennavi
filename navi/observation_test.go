@@ -12,7 +12,7 @@ import (
 )
 
 // observingPortal is a minimal portal component built on the public
-// contract alone (NAVI-352): it subscribes to the observation stream it
+// interface alone (NAVI-352): it subscribes to the observation stream it
 // receives through Deps and records the events it sees. It imports
 // neither internal/ nor the navi runtime.
 type observingPortal struct {
@@ -76,7 +76,7 @@ func (p *observingPortal) saw(want string) bool {
 
 // TestPortalObservesRunningThoughtOutput is the NAVI-352 acceptance: a
 // component observes a running thought's output through the public
-// contract alone, with no runtime hook and no internal import.
+// interface alone, with no runtime hook and no internal import.
 func TestPortalObservesRunningThoughtOutput(t *testing.T) {
 	n := mockNavi(t, llm.NewMockProvider(streamEvents("portal output")))
 

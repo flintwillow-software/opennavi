@@ -19,7 +19,7 @@ path drives the agent around it. Today that queue lives in `internal/thought`
 and is assembled only by `internal/daemon`. External authors cannot embed it,
 and connectors have no supported handle to it. The queue's own API
 (`Enqueue`, `GetThoughts`, `GetThought`, `RouteMessage`, `OnEvent`,
-pause/resume/cancel/retry) already is the connector contract; it is simply
+pause/resume/cancel/retry) already is the connector interface; it is simply
 private and unnamed.
 
 The thought system is what separates a navi from a generic agent harness. It is
@@ -42,7 +42,7 @@ n.Thoughts.Pause(id) / Resume(id) / Cancel(id) / Retry(id)
 - The `thought` package becomes public and is a leaf (it must not import `navi`).
 - `navi.Navi` owns a thought system and exposes it as `n.Thoughts`.
 - Connectors and portals receive a thought-system handle through their
-  dependency contract, never through an import of `navi`.
+  Deps interface, never through an import of `navi`.
 - The existing persistence, crash recovery, slot/preemption, foreground-slot,
   and routing semantics are preserved; this is a visibility and ownership move,
   not a redesign of the queue.
@@ -52,7 +52,7 @@ n.Thoughts.Pause(id) / Resume(id) / Cancel(id) / Retry(id)
 - Connectors can spawn and manage thoughts; portals can observe and steer them.
   Both work against a stable public interface.
 - `internal/thought` moves to public `thought/`, which carries semver
-  obligations. Queue internals that are not part of the contract stay
+  obligations. Queue internals that are not part of the interface stay
   unexported; the public surface is the handle API plus event types.
 - Every navi — daemon-style or binary-style — runs through the same loop by
   construction, not by convention.

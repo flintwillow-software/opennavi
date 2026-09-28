@@ -826,6 +826,6 @@ func (q *Queue) Delete(id string) error {
 	return nil
 }
 
-// The concrete runtime handle must satisfy the component contract, since
+// The concrete runtime handle must satisfy the component interface, since
 // components receive it narrowed to ThoughtSystem through Deps.
 var _ ThoughtSystem = (*Queue)(nil)

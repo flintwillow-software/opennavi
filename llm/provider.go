@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Provider is the unified LLM provider contract: every
+// Provider is the unified LLM provider interface: every
 // provider adapter (Ollama, OpenAI, Anthropic, ...) implements it.
 type Provider interface {
 	// Stream sends the conversation and returns a channel of stream

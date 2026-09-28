@@ -7,15 +7,15 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// This file is the portal observation contract (NAVI-352): a
+// This file is the portal observation interface (NAVI-352): a
 // bounded, cursor-ed view of everything a running navi emits, so a
 // portal can render a running thought's output through the public
-// contract alone — no runtime hook, no import of internal/.
+// interface alone — no runtime hook, no import of internal/.
 //
-// The contract defines WHAT is observed; framing belongs to the wire
+// The interface defines WHAT is observed; framing belongs to the wire
 // protocol (05-messaging, not landed). The bounded mailbox lives here so
 // the slow-consumer discipline (drop-oldest + resumable cursor) is part
-// of the contract rather than re-invented by every surface.
+// of the interface rather than re-invented by every surface.
 
 // Category buckets observation events by source.
 type Category string

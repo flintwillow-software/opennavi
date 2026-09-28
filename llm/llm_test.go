@@ -8,7 +8,7 @@ import (
 )
 
 func TestStreamEventConstantsMatchSpec(t *testing.T) {
-	// Spec names these exactly; renaming breaks the wire contract.
+	// Spec names these exactly; renaming breaks the wire format.
 	want := map[StreamEventType]string{
 		StreamEventMessageStart:  "message_start",
 		StreamEventContentDelta:  "content_delta",
@@ -121,6 +121,6 @@ func TestHeuristicTokenCounter(t *testing.T) {
 	}
 }
 
-// The Provider contract: anything implementing it must satisfy the
+// The Provider interface: anything implementing it must satisfy the
 // full interface surface (compile-time check with the mock).
 var _ Provider = (*MockProvider)(nil)
