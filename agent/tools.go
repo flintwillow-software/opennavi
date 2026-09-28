@@ -188,28 +188,3 @@ func makeShellExec(workDir string) (AgentTool, func(map[string]any) (string, err
 	}
 	return descriptor, handler
 }
-
-// ── Demo tools (kept for examples and tests) ─────────────────────────────
-
-func exampleSearch(args map[string]any) (string, error) {
-	q, _ := args["query"].(string)
-	return fmt.Sprintf("search result for: %s", q), nil
-}
-
-func exampleCalc(args map[string]any) (string, error) {
-	a, _ := args["a"].(float64)
-	b, _ := args["b"].(float64)
-	return fmt.Sprintf("%.2f", a+b), nil
-}
-
-// RegisterDemoTools adds example tools to the given executor.
-func RegisterDemoTools(ex *ToolExecutor) {
-	ex.RegisterTool(AgentTool{
-		Name:        "example_search",
-		Description: "Example search tool.",
-	}, exampleSearch)
-	ex.RegisterTool(AgentTool{
-		Name:        "example_calc",
-		Description: "Example calculator tool.",
-	}, exampleCalc)
-}

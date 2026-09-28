@@ -92,7 +92,7 @@ opennavi/
 ## Development
 
 ```bash
-just build   # compile the reference navi → bin/navi
+just build   # compile the reference navi → var/bin/navi
 just test    # unit tests
 just ci      # build + vet + gofmt-check + race tests (same gates as CI)
 ```

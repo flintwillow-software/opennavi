@@ -165,13 +165,6 @@ func (a *Agent) WaitForIdle() {
 	a.EventBus.WaitDispatch()
 }
 
-// isRunning reports whether a run is currently active.
-func (a *Agent) isRunning() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.state.Status == StatusRunning
-}
-
 // LoadState replaces the agent's conversation state with the given
 // snapshot. The agent must be idle; the restored status is normalized
 // to idle (snapshots taken mid-run/paused resume as idle conversations).

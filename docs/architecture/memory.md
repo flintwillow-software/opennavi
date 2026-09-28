@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-26'
-updated: '2026-09-26'
+updated: '2026-09-28'
 tags:
   - architecture
   - memory
@@ -127,8 +127,9 @@ when implementing either side.
   scratchpad, and its own documentation calls it "deliberately distinct from
   semantic memory". Notes are written and read back exactly; memory is curated
   and searched.
-- **Not `internal/memory`'s API.** That package implemented three of the four
-  scopes and dropped the load-timing dimension entirely. Its surface is not the
+- **Not the retired `internal/memory` package.** It implemented three of the
+  four scopes and dropped the load-timing dimension entirely, and it was never
+  wired into anything — deleted in the M7 cleanup. Its surface is not the
   contract — see [Provenance](#provenance).
 
 ## Open questions
@@ -166,10 +167,10 @@ Two things went wrong, neither worth repeating:
    the thought system the navi's "short-term memory" — the queue, which is a
    different thing. With the term occupied, the original meaning had nowhere to
    live.
-2. **The tier axis never reached code.** `internal/memory` kept the scopes as a
-   `Scope` type but not the load timing that makes them two tiers, and the
-   package was then never wired into anything: zero importers, not reachable from
-   any binary.
+2. **The tier axis never reached code.** The (now-retired) `internal/memory`
+   package kept the scopes as a `Scope` type but not the load timing that makes
+   them two tiers, and it was never wired into anything: zero importers, not
+   reachable from any binary.
 
 The [rewrite plan](./rewrite-plan.md) scoped the memory subsystem *rewrite* out
 of the composition work. That meant "do not rewrite it", and was read as "do not

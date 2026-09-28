@@ -1,5 +1,4 @@
-/bin/
-/data/
+/var/
 /go.work
 /go.work.sum
 /templates/navi-code/navi-code

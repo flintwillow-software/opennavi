@@ -1,8 +1,8 @@
 # opennavi development tasks
 #
 # Artifacts and runtime state are kept out of the source tree:
-#   bin/   — compiled binaries (build artifacts)
-#   data/  — runtime state (navi.db, logs)
+#   var/bin/   — compiled binaries (build artifacts)
+#   var/data/  — runtime state (navi.db, logs)
 # Both are gitignored at the repo root (anchored patterns), so stray
 # files there can never shadow tracked source like cmd/navi/ once did
 # (NAVI-54).
@@ -16,7 +16,7 @@ default:
 
 # Build the navi CLI into bin/
 build:
-    go build -o bin/navi ./cmd/navi
+    go build -o var/bin/navi ./cmd/navi
 
 # Build, vet, gofmt-check, and race-test — same gates as CI
 ci: build vet fmt-check test-race
@@ -53,19 +53,19 @@ test-race:
 
 # Start the daemon with its database under var/
 daemon *args:
-    mkdir -p data
-    ./bin/navi daemon -db data/navi.db "$@"
+    mkdir -p var/data
+    ./var/bin/navi daemon -db var/data/navi.db "$@"
 
 # Run a health probe against the data/ database
 health *args:
-    ./bin/navi health -db data/navi.db "$@"
+    ./var/bin/navi health -db var/data/navi.db "$@"
 
 # Enqueue a thought against the data/ database
 enqueue *args:
-    ./bin/navi enqueue -db data/navi.db "$@"
+    ./var/bin/navi enqueue -db var/data/navi.db "$@"
 
 # --- cleanup ---------------------------------------------------------------
 
 # Remove build artifacts and runtime state
 clean:
-    rm -rf bin data
+    rm -rf var
