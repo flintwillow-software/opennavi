@@ -1,29 +1,38 @@
 # Runtime config for navi-daemon (S000200 §04).
-# This file is the OPERATOR's deployment settings — it never modifies
-# the compiled navi definition. Copy to .config/navi/navi-daemon/config.yaml.
+#
+# This is the operator's deployment surface — it never modifies the
+# compiled navi definition. Point navi-daemon at it with NAVI_CONFIG.
+#
+# Merge chain for the provider default: env > this file > build time
+# (NAVI_PROVIDER / NAVI_MODEL override the file; OLLAMA_HOST overrides the
+# endpoint).
 
 provider:
-  name: ollama
-  host: http://localhost:11434
+  primary: ollama
   model: llama3.1
+  # Optional fallback provider, tried when the primary fails (ADR 0009).
+  # fallback: openrouter
 
-session:
-  db_path: /var/lib/navi-daemon/daemon.db
+# Session/thought SQLite database (the daemon's durable state).
+session_db: /var/lib/navi-daemon/daemon.db
 
-# Cron schedules (S000400 cron interface).
+# Thought queue tuning.
+thought_queue:
+  max_concurrent: 2
+  priority_slots: 1
+
+# Cron schedules: each is a thought factory (ADR 0010). `expr` is a
+# 5-field cron expression; `enabled: false` registers but never fires.
 cron:
   schedules:
     - name: morning-digest
-      spec: "0 8 * * *"
+      expr: "0 8 * * *"
       prompt: "Summarize overnight queued work and surface anything blocked."
+      priority: 3
+      # tz: America/Los_Angeles
+      # enabled: true
 
-# Work discovery: where the daemon looks for incoming work.
-idle:
-  sources:
-    - type: directory
-      path: /var/spool/navi-daemon/incoming
-
+# Per-tool policy: end users may only narrow the compiled ceiling.
 tools:
-  policy:
-    # Operators can only narrow the compiled-in policy, never widen it.
-    blocked: []
+  blocked:
+    - shell_exec
