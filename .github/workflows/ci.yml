@@ -36,8 +36,8 @@ jobs:
       - name: Test (race detector)
         run: go test -race -timeout 10m ./...
 
-  templates:
-    name: starter templates (S000805 guardrail)
+  guardrail:
+    name: guardrail — templates + external modules (S000805)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +47,11 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      # The templates are nested modules pinned to the published SDK
-      # (no replace directive shipped, S000313). The go.work here is
-      # CI-only: it builds the templates against the SDK in this
-      # checkout, so a change that breaks the public authoring surface
-      # fails this job on the PR.
+      # In-tree starter templates: nested modules pinned to the published
+      # SDK (no replace directive shipped, S000313). The go.work here is
+      # CI-only: it builds the templates against the SDK in this checkout,
+      # so a change that breaks the public authoring surface fails on the
+      # PR.
       - name: Build starter templates against SDK
         run: |
           cat > go.work <<'EOF'
@@ -67,27 +67,50 @@ jobs:
           EOF
           (cd templates/navi-code && go build ./... && go vet ./...)
           (cd templates/navi-daemon && go build ./... && go vet ./...)
+          # The synthetic external modules below build standalone, via the
+          # replace directives in their own go.mod — never the template
+          # workspace.
+          rm -f go.work
 
-  sdk-consumer:
-    name: external SDK consumer (S000800 public surface)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-
-      # tools/sdk-consumer is its own Go module (the consumer injects
-      # its own replace; the shipped templates never carry one). It
-      # imports every public package — sdk, agent, llm, store,
-      # store/sqlite, tools/registry — and exercises the runtime API,
-      # so a change that leaks internal types into a public signature
-      # or breaks the authoring surface fails here, on the PR.
-      - name: Consume the public SDK from an external module
+      # tools/external-component is a synthetic OUT-OF-REPO component
+      # module (ADR 0004, docs/architecture/extension-model.md). Its own
+      # code may import only public contract packages and its dependency
+      # closure must not reach the composition root or runtime internals.
+      # This is the boundary a third-party tool/skill/model/connector/portal
+      # author relies on, so a leak fails here, on the PR.
+      - name: Check the external component's import boundary
+        working-directory: tools/external-component
         run: |
-          cd tools/sdk-consumer
+          bad="$(go list -f '{{join .Imports "\n"}}' ./... \
+            | grep '^github.com/flintwillow-software/opennavi/' \
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill)$' || true)"
+          if [ -n "$bad" ]; then
+            echo "external component imports non-contract packages:"
+            echo "$bad"
+            exit 1
+          fi
+
+          leaked="$(go list -deps -f '{{.ImportPath}}' ./... \
+            | grep -E '^github.com/flintwillow-software/opennavi/(navi|internal)(/|$)' || true)"
+          if [ -n "$leaked" ]; then
+            echo "external component leaks runtime dependencies:"
+            echo "$leaked"
+            exit 1
+          fi
+
+      - name: Build and run the external component
+        working-directory: tools/external-component
+        run: |
+          go build ./...
+          go vet ./...
+          go run ./cmd/check
+
+      # tools/external-navi is a synthetic OUT-OF-REPO navi: it imports
+      # the public composition root (navi) plus contract packages and the
+      # component module above, composes a navi, and validates it.
+      - name: Build and run the external navi
+        working-directory: tools/external-navi
+        run: |
           go build ./...
           go vet ./...
           go run .
