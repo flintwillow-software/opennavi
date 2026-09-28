@@ -366,7 +366,12 @@ func TestEnqueueThroughTransport(t *testing.T) {
 
 func keyRunes(t *testing.T, m *tuiModel, s string) {
 	t.Helper()
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: stringToRunes(s)})
+	// One KeyMsg per rune — the shape a real terminal produces. Batching a
+	// whole string into one KeyMsg made String() return the whole string,
+	// which hid command-key interception in input mode.
+	for _, r := range s {
+		_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
 }
 
 func stringToRunes(s string) []rune {
@@ -783,5 +788,46 @@ func TestTickingClockWhileRunning(t *testing.T) {
 	}
 	if _, ok := msg.(tickMsg); !ok {
 		t.Error("expected a tick message while running")
+	}
+}
+
+// TestEnqueueInputAcceptsCommandLetters is the regression for command keys
+// being swallowed while typing: a prompt containing q/n/a/p/s/r/c/l/j/k
+// must survive to the enqueued thought, and q must not quit mid-message.
+func TestEnqueueInputAcceptsCommandLetters(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	keyRunes(t, m, "n") // open the enqueue input
+	if m.mode != ModeInput {
+		t.Fatalf("mode = %q, want input", m.mode)
+	}
+
+	const prompt = "please cancel my paused quick run"
+	keyRunes(t, m, prompt)
+	if m.input != prompt {
+		t.Fatalf("input = %q, want %q (keys dropped)", m.input, prompt)
+	}
+	if m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}) {
+		t.Fatal("q while typing must not quit")
+	}
+	if m.input != prompt+"q" {
+		t.Fatalf("q was not inserted: %q", m.input)
+	}
+	m.input = prompt
+
+	keyEnter(m) // prompt
+	keyEnter(m) // default priority
+	keyEnter(m) // no deferral
+	found := false
+	for _, th := range q.GetThoughts() {
+		if th.Prompt == prompt {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("prompt %q was not enqueued intact", prompt)
 	}
 }
