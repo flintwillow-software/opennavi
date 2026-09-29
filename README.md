@@ -82,7 +82,7 @@ opennavi/
 ├── tool/ thought/ connector/ portal/ model/ skill/   # public component packages
 ├── tool/           # the tool system: Tool type, registry, catalog
 ├── store/          # public session store interface + SQLite implementation
-├── internal/       # runtime: agent loop, providers, bridge, daemon, config
+├── internal/       # runtime: agent loop, providers, bridge, config, ops
 ├── templates/      # starter navi modules (CI guardrail)
 └── docs/
     ├── architecture/   # current architecture

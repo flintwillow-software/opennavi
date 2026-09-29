@@ -7,7 +7,7 @@
 // portal (the shared Hub). That keeps one authorization path — the
 // gateway never decides who may control a thought. The real wire protocol
 // is deferred (05-messaging); until then this is the loopback-grade JSON
-// mapping the daemon shim used, now a component on the public interface.
+// mapping, now a component on the public interface.
 package gateway
 
 import (
@@ -54,9 +54,9 @@ func New(addr string, control portal.Portal) *Gateway {
 }
 
 // Handler returns the gateway HTTP surface without owning a listener, so a
-// host that already runs an HTTP server (the daemon's serve path) can
-// mount it. It subscribes one observation mailbox from obs; obs may be nil
-// (observation endpoints then answer 503).
+// host that already runs an HTTP server (the reference navi's serve path)
+// can mount it. It subscribes one observation mailbox from obs; obs may be
+// nil (observation endpoints then answer 503).
 func Handler(control portal.Portal, obs portal.Observer) http.Handler {
 	g := &Gateway{control: control}
 	if obs != nil {

@@ -15,9 +15,10 @@ import (
 )
 
 // runEnqueue is the `navi enqueue` subcommand: writes a thought
-// directly to the shared SQLite queue DB (daemon MVP step 3, #241).
-// If the daemon isn't running, the thought is enqueued and picked up
-// on next daemon start.
+// directly to the shared SQLite queue DB.
+// If no navi is running, the thought is enqueued and picked up
+// on next start (the store is the cross-process channel; the
+// reconcile loop adopts externally-written rows).
 //
 // Flags and the positional prompt can appear in any order: the args
 // are partitioned manually (flag.NewFlagSet.Parse stops at the first
@@ -131,7 +132,7 @@ func runEnqueue(args []string) error {
 	if note != "" {
 		fmt.Printf("note: %s", note)
 	}
-	fmt.Printf("enqueued %s (priority %d) — daemon picks up on next start (or NAVI-336 reconcile)\n", t.ID, *priority)
+	fmt.Printf("enqueued %s (priority %d) — picks up on next navi start (or the reconcile loop)\n", t.ID, *priority)
 	return nil
 }
 

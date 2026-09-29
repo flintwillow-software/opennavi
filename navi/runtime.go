@@ -36,9 +36,9 @@ type DefaultSelection struct {
 }
 
 // WithRuntimeConfig points the navi at a runtime config file — the same
-// YAML the daemon reads. A *path* rather than a parsed struct, so the
-// public navi package does not leak the internal config type and an
-// out-of-repo author can still supply one. Empty means no file layer.
+// YAML the reference runtime reads. A *path* rather than a parsed struct,
+// so the public navi package does not leak the internal config type and
+// an out-of-repo author can still supply one. Empty means no file layer.
 func WithRuntimeConfig(path string) Option {
 	return func(n *Navi) { n.runtimeFile = path }
 }
@@ -48,8 +48,8 @@ func WithRuntimeConfig(path string) Option {
 func (n *Navi) Default() DefaultSelection { return n.selection }
 
 // WithProvider replaces provider resolution with a single provider —
-// the same seam RuntimeParams.OverrideProvider gives the daemon path. It
-// bypasses the declared set and credential resolution entirely, so it is
+// the seam the retired daemon path exposed as RuntimeParams.OverrideProvider.
+// It bypasses the declared set and credential resolution entirely, so it is
 // for tests and embedding, not for production wiring; a production navi
 // declares providers and lets the host resolve them.
 func WithProvider(p llm.Provider) Option {
@@ -110,8 +110,8 @@ func (n *Navi) assemble() error {
 	}
 
 	// Fallback chain (ADR 0009): only for thoughts that name no provider,
-	// matching the daemon's resolution. An unknown fallback fails assembly
-	// rather than degrading silently.
+	// matching the reference runtime's resolution. An unknown fallback fails
+	// assembly rather than degrading silently.
 	if n.override == nil {
 		fbName := n.fallbackName
 		if fbName == "" && file != nil {

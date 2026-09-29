@@ -1,3 +1,14 @@
+// Package config implements the reference runtime's config surface: the
+// runtime YAML, the merge chain (build-time defaults → file → env →
+// flags), and validation.
+//
+// It stays internal (NAVI-354). The public `navi` package consumes it by
+// taking a config *path* (`WithRuntimeConfig`) rather than exposing these
+// types, so an out-of-repo navi supplies the same YAML without the internal
+// type leaking into the public surface, and the runtime config is not
+// duplicated per navi. Promoting this package to a public surface would
+// freeze the YAML schema as API; that is deliberately deferred until a
+// second consumer needs it.
 package config
 
 import (

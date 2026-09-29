@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/internal/daemon"
-	"github.com/flintwillow-software/opennavi/internal/portal"
+	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -19,14 +19,15 @@ import (
 // seam (production wires nil and fails closed until IAM).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action portal.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.Action, identity string) error {
 	return nil
 }
 
-// servePortal starts a portal shim over an assembled runtime (pool
-// NOT started, so thoughts stay pending and the enqueue is
-// deterministic). allow controls whether an authorizer is wired.
-func servePortal(t *testing.T, allow bool) (string, *daemon.Runtime) {
+// servePortal starts a portal gateway over a queue (the pool NOT started,
+// so thoughts stay pending and the enqueue is deterministic). allow
+// controls whether an authorizer is wired. Returns the gateway address
+// and the queue the running navi would expose.
+func servePortal(t *testing.T, allow bool) (string, *thought.Queue) {
 	t.Helper()
 	addr := ""
 	{
@@ -37,30 +38,30 @@ func servePortal(t *testing.T, allow bool) (string, *daemon.Runtime) {
 		addr = ln.Addr().String()
 		ln.Close()
 	}
-	var authz portal.PortalAuthorizer
+	var authz portal.Authorizer
 	if allow {
 		authz = allowAllAuth{}
 	}
-	rt, err := daemon.Assemble(daemon.RuntimeParams{
-		SessionDB:          t.TempDir() + "/enqueue-shim.db",
-		Model:              "test-model",
-		Workers:            1,
-		PortalAddr:         addr,
-		OverrideAuthorizer: authz,
-	})
-	if err != nil {
-		t.Fatal(err)
+	q, qerr := thought.NewQueue(thought.Config{MaxConcurrent: 4, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
+	if qerr != nil {
+		t.Fatal(qerr)
+	}
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	control := portal.NewControl(authz)
+	if serr := control.Start(context.Background(), portal.Deps{ThoughtSystem: q, Observation: broker}); serr != nil {
+		t.Fatal(serr)
 	}
 	sln, slerr := net.Listen("tcp", addr)
 	if slerr != nil {
 		t.Fatal(slerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: daemon.PortalHandler(rt), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(control, broker), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(sln) }()
 	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	t.Cleanup(func() { cancel(); _ = srv.Shutdown(shutdown); rt.Store.Close() })
+	t.Cleanup(func() { cancel(); _ = srv.Shutdown(shutdown) })
 	time.Sleep(150 * time.Millisecond)
-	return addr, rt
+	return addr, q
 }
 
 func dbThoughts(t *testing.T, db string) []*thought.Thought {
@@ -90,7 +91,7 @@ func TestEnqueueViaPortalReachable(t *testing.T) {
 	}
 	// Landed via the control channel: in the running navi's queue.
 	found := false
-	for _, th := range rt.Queue.GetThoughts() {
+	for _, th := range rt.GetThoughts() {
 		if th.Prompt == "portal task" {
 			found = true
 		}

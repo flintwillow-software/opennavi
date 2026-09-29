@@ -132,9 +132,9 @@ func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Ti
 // remoteTransport attaches to a gateway portal endpoint. Events arrive
 // via cursor polling (a pump goroutine keeps the feed mailbox topped
 // up; ReadAfter semantics are used at both ends, so a gap surfaces as
-// lost); control actions POST /portal/control. In dev the daemon wires
-// no authorizer, so remote observation/control fail closed (403) until
-// IAM — tests exercise the seam against the shim's authorized paths
+// lost); control actions POST /portal/control. In dev the reference navi
+// wires no authorizer, so remote observation/control fail closed (403)
+// until IAM — tests exercise the seam against the shim's authorized paths
 // with an injected authorizer.
 type remoteTransport struct {
 	base     string

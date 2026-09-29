@@ -230,9 +230,8 @@ func (q *Queue) Enqueue(t *Thought) error {
 	}
 
 	// Events collected under lock, emitted after unlock — OnEvent
-	// handlers may re-enter the queue (e.g. the daemon's RecordFire
-	// wiring calls GetThought), which would deadlock if emit ran under
-	// q.mu.
+	// handlers may re-enter the queue (reading a thought, for
+	// example), which would deadlock if emit ran under q.mu.
 	var evts []Event
 
 	q.mu.Lock()

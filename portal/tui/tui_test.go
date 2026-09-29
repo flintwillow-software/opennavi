@@ -13,9 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
-	"github.com/flintwillow-software/opennavi/internal/daemon"
-	internalportal "github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -23,7 +22,7 @@ import (
 // seam (production wires nil and fails closed).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action internalportal.PortalAction, identity string) error {
+func (a allowAllAuth) Authorize(action portal.Action, identity string) error {
 	return nil
 }
 
@@ -48,6 +47,29 @@ func newInProcess(t *testing.T, q *thought.Queue) (*inProcessTransport, *portal.
 		t.Fatalf("NewInProcess: %v", err)
 	}
 	return tport, broker
+}
+
+// portalHarness is the minimal public-surface stand-in for the retired
+// internal/daemon assembly: a queue, a control portal, and an observation
+// broker wired the way the navi composition root wires them. The pool is
+// never started, so thoughts stay pending and remote control is
+// deterministic (no runner racing the queue).
+type portalHarness struct {
+	Queue       *thought.Queue
+	Control     *portal.Control
+	Observation *portal.Broker
+}
+
+func newPortalHarness(t *testing.T, auth portal.Authorizer) *portalHarness {
+	t.Helper()
+	q := newQueue(t)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	control := portal.NewControl(auth)
+	if err := control.Start(context.Background(), portal.Deps{ThoughtSystem: q, Observation: broker}); err != nil {
+		t.Fatalf("control.Start: %v", err)
+	}
+	return &portalHarness{Queue: q, Control: control, Observation: broker}
 }
 
 // observe publishes an agent event through the broker the way the real
@@ -483,17 +505,7 @@ func portalFreePort(t *testing.T) string {
 
 func TestRemoteTransportControlAndEvents(t *testing.T) {
 	addr := portalFreePort(t)
-	rt, err := daemon.Assemble(daemon.RuntimeParams{
-		SessionDB:          t.TempDir() + "/tui-remote.db",
-		Model:              "test-model",
-		Workers:            1,
-		PortalAddr:         addr,
-		OverrideAuthorizer: allowAllAuth{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rt.Store.Close()
+	rt := newPortalHarness(t, allowAllAuth{})
 
 	// Serve the portal WITHOUT starting the runtime's pool: the
 	// thought stays pending, so remote control is deterministic (no
@@ -502,7 +514,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if lerr != nil {
 		t.Fatal(lerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: daemon.PortalHandler(rt), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	shutdown, cancelSrv := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv()
@@ -569,21 +581,12 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	// Control against a NO-authorizer shim fails closed (403 →
 	// error): same seamlnd, no Runtime.Run involved.
 	addr2 := portalFreePort(t)
-	rt2, err2 := daemon.Assemble(daemon.RuntimeParams{
-		SessionDB:  t.TempDir() + "/tui-remote2.db",
-		Model:      "test-model",
-		Workers:    1,
-		PortalAddr: addr2,
-	})
-	if err2 != nil {
-		t.Fatal(err2)
-	}
-	defer rt2.Store.Close()
+	rt2 := newPortalHarness(t, nil)
 	ln2, lerr2 := net.Listen("tcp", addr2)
 	if lerr2 != nil {
 		t.Fatal(lerr2)
 	}
-	srv2 := &http.Server{Addr: addr2, Handler: daemon.PortalHandler(rt2), ReadHeaderTimeout: 5 * time.Second}
+	srv2 := &http.Server{Addr: addr2, Handler: gateway.Handler(rt2.Control, rt2.Observation), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv2.Serve(ln2) }()
 	shutdown2, cancelSrv2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv2()

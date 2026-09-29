@@ -1,10 +1,16 @@
-// Package logging implements structured JSON logging for the opennavi
-// daemon (#191): timestamp, level, caller, message, and key-value
-// context. One JSON object per line to stderr (default) or a file.
+// Package logging implements structured logging for the reference
+// runtime (#191): timestamp, level, caller, message, and key-value
+// context. One record per line to stderr (default) or a file, rendered
+// as JSON or human-readable text (NAVI-328).
 //
-// Design: stdlib-only (no zap/logrus — the daemon's only requirement
-// is JSON lines with consistent fields, and a 40-line implementation
-// avoids a dependency for the MVP).
+// It stays internal (NAVI-354): the consumers are the reference navi
+// (`cmd/navi`) and the runtime lifecycle, not the public component
+// surface. The `navi` package receives a stdlib *slog.Logger instead, so
+// an out-of-repo navi is free to use whatever logger it likes.
+//
+// Design: stdlib-only (no zap/logrus — the runtime's only requirement
+// is consistent records, and a small implementation avoids a dependency
+// for the MVP).
 package logging
 
 import (

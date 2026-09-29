@@ -126,7 +126,7 @@ func TestRouteMessageSteersRunningThought(t *testing.T) {
 
 // TestProviderFallbackChain pins the ADR 0009 fallback layer: a configured
 // fallback wraps the default resolution, and a per-thought provider
-// override bypasses the chain (daemon parity).
+// override bypasses the chain.
 func TestProviderFallbackChain(t *testing.T) {
 	clearProviderEnv(t)
 	withFakeOpenRouterCredential(t)
