@@ -111,7 +111,12 @@ internal/testdata/    synthetic out-of-repo modules (CI fixtures)
 
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
 portals receive handles through their `Deps` interface. This keeps the graph
-acyclic and components independently testable.
+acyclic and components independently testable. The six component packages
+(`tool`, `thought`, `connector`, `portal`, `model`, `skill`) are additionally
+**stdlib-only** — their import closure pulls no implementation package
+(`store`, `tool/registry`, `internal/*`), so importing one never drags the
+runtime in; the `external-consumer` CI job asserts that closure as
+contract-purity (NAVI-355).
 
 ## Boundaries
 

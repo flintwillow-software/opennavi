@@ -109,6 +109,20 @@ jobs:
             exit 1
           fi
 
+          # NAVI-355: the closure must be CONTRACT-PURE. Importing a contract
+          # package must not transitively pull an implementation package
+          # (store, tool/registry, ...) — the contract layer is stdlib-only, and
+          # that is the invariant an out-of-repo author relies on. Before
+          # NAVI-355, `thought` imported tool/registry, so this list was non-empty.
+          impure="$(go list -deps -f '{{.ImportPath}}' ./... \
+            | grep '^github.com/flintwillow-software/opennavi/' \
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill)$' || true)"
+          if [ -n "$impure" ]; then
+            echo "external component's contract closure is not contract-pure:"
+            echo "$impure"
+            exit 1
+          fi
+
       - name: Build and run the external component
         working-directory: internal/testdata/external-component
         run: |
