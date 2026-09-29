@@ -1,6 +1,6 @@
 // Package builtin registers the compiled-in builtin tools (file_read,
 // shell_exec) into the public tool registry with complete
-// metadata descriptors. This is the daemon's registry-first tool path:
+// metadata descriptors. This is the registry-first tool path:
 // the registry owns the LLM-facing metadata and dispatch enforcement,
 // and tool/bridge binds the active set into the agent executor — so
 // builtin tools are governed by the same policy and active-set rules

@@ -13,9 +13,8 @@ import (
 // thought's agent on run start and unregisters it when the run returns, so
 // a message routed outside the run window rejects rather than vanishing.
 //
-// This is the navi-path counterpart of the daemon's tracker; it exists so
-// the composition root keeps the same routing semantics as the reference
-// runtime.
+// This replaces the retired daemon path's tracker; it keeps the same
+// routing semantics under the composition root.
 type inFlightAgents struct {
 	mu     sync.RWMutex
 	agents map[string]*agent.Agent

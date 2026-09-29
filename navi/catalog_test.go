@@ -15,10 +15,10 @@ import (
 	"github.com/flintwillow-software/opennavi/tool/todo"
 )
 
-// daemonDefaultActiveSet is the daemon's default 13-tool active set
-// (internal/daemon/wiring_test.go); catalog parity means the navi's
-// collection-assembled surface reproduces it exactly.
-var daemonDefaultActiveSet = []string{
+// defaultActiveSet is the reference navi's default 13-tool active set —
+// the catalog the retired daemon path served, reproduced exactly by the
+// navi's collection-assembled surface.
+var defaultActiveSet = []string{
 	"file_read", "shell_exec",
 	"todo_read", "todo_write", "todo_update",
 	"note_read", "note_write",
@@ -92,8 +92,8 @@ func equalNameSets(a, b []string) bool {
 }
 
 // TestCatalogParityDefaultActiveSet is the M4 gate: the catalog ported
-// onto the collections assembles the same default active set the daemon
-// does.
+// onto the collections assembles the default active set the retired
+// daemon path served.
 func TestCatalogParityDefaultActiveSet(t *testing.T) {
 	n := catalogNavi(t)
 	if err := n.Validate(); err != nil {
@@ -104,15 +104,14 @@ func TestCatalogParityDefaultActiveSet(t *testing.T) {
 	}
 
 	got := n.registry.ActiveNames()
-	if !equalNameSets(got, daemonDefaultActiveSet) {
-		t.Fatalf("navi default active set = %v, want the daemon's 13 %v", got, daemonDefaultActiveSet)
+	if !equalNameSets(got, defaultActiveSet) {
+		t.Fatalf("navi default active set = %v, want the reference 13 %v", got, defaultActiveSet)
 	}
 }
 
 // TestCatalogParityCeilingNarrowsDefault pins the compiled permission
 // ceiling behaviour: denying shell_exec at the navi drops it from the
-// default surface, exactly as the daemon's blocked-tool test does (12
-// tools).
+// default surface (12 tools).
 func TestCatalogParityCeilingNarrowsDefault(t *testing.T) {
 	n := catalogNavi(t, WithPermissions(PermissionPolicy{
 		DenyTools: []string{"shell_exec"},
@@ -130,7 +129,7 @@ func TestCatalogParityCeilingNarrowsDefault(t *testing.T) {
 			t.Fatal("ceiling-denied shell_exec is active")
 		}
 	}
-	if len(got) != len(daemonDefaultActiveSet)-1 {
+	if len(got) != len(defaultActiveSet)-1 {
 		t.Fatalf("active set = %v (len %d), want 12", got, len(got))
 	}
 }

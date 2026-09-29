@@ -79,7 +79,7 @@ separates it from the session record.
 Sessions and thought transcripts are *history*, not a datastore: they are the
 incidental artifact of a thought having run, kept for continuity, replay
 (NAVI-334), and operator inspection. The runtime already rules this way —
-[`internal/daemon/runner.go`](../../internal/daemon/runner.go) flushes the agent
+[`navi/runner.go`](../../navi/runner.go) flushes the agent
 conversation to session entries with the comment *"sessions record history"*
 (#240). Nothing chooses what lands there; it is whatever happened.
 

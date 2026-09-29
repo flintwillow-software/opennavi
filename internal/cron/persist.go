@@ -10,8 +10,15 @@ import (
 
 // StateStore persists schedule TICK STATE (last_fired/next_due/
 // fire_count — not definitions; schedule definitions are runtime
-// config under.config/navi/. Backed by the shared SQLite DB
-// (migration v6).
+// config). Backed by the shared SQLite DB (migration v6).
+//
+// PARKED (NAVI-354): nothing calls MigrateState/NewStateStore/RecordFire/
+// LastFired/MissedTick any more. The retired `internal/daemon.WireCron` was
+// their only wiring; the connector path (`connector/cron`) constructs a
+// scheduler without a state store, so the reference navi currently runs
+// schedules with no persisted tick state and no missed-tick coalescing.
+// This is retained (with its tests) because the follow-up ticket consumes it
+// unchanged — see NAVI-358.
 type StateStore struct {
 	db *sql.DB
 }
@@ -22,8 +29,7 @@ func NewStateStore(db *sql.DB) *StateStore {
 }
 
 // MigrateState applies migration v6 (idempotent): the schedule_state
-// table. Exposed separately so the daemon startup chain (step 2) can
-// control ordering.
+// table. Exposed separately so the run-startup chain can control ordering.
 func MigrateState(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schedule_state (
 		schedule_name TEXT PRIMARY KEY,

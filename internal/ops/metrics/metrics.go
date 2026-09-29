@@ -1,11 +1,18 @@
-// Package metrics implements thought-queue observability for the
-// daemon (scope, #192/NAVI-258): pure-Go Prometheus text
-// exposition — no OTel SDK, no client_golang, no new dependencies
-// (repo convention; the text format is hand-rolled at this scale).
+// Package metrics implements thought-queue observability (scope,
+// #192/NAVI-258): pure-Go Prometheus text exposition — no OTel SDK,
+// no client_golang, no new dependencies (repo convention; the text
+// format is hand-rolled at this scale).
+//
+// PARKED (NAVI-354): the package has no in-repo consumer at present.
+// It was wired only by the retired `internal/daemon` run path;
+// NAVI-357 tracks wiring it onto the reference navi behind
+// `--metrics-addr` (the flag is accepted but currently only warns).
+// It is deliberately kept — not dead code — because that ticket
+// consumes the collector and its tests unchanged.
 //
 // The collector rides the existing event seam
-// (thought.Queue.OnEvent — the same fanout WireLogging and
-// WireCron use): counters advance on enqueue/park/resume/persist-
+// (thought.Queue.OnEvent — the same fanout the runtime logger uses):
+// counters advance on enqueue/park/resume/persist-
 // failure, the in-queue gauge and per-status gauges follow the
 // lifecycle by deltas, and processing duration lands in a histogram
 // with standard buckets.

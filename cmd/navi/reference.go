@@ -1,7 +1,7 @@
 // Reference-navi assembly (M5): cmd/navi run builds a real navi through
-// navi.New and runs it. This is the migration off internal/daemon.Assemble
-// — the runtime-config merge, catalog wiring, connectors, and portals live
-// here (or in the SDK), not behind a private daemon.
+// navi.New and runs it. The retired internal/daemon.Assemble used to sit
+// behind this: the runtime-config merge, catalog wiring, connectors, and
+// portals live here (or in the SDK), not behind a private daemon.
 package main
 
 import (

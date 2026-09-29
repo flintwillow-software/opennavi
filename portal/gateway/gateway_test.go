@@ -9,14 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	internalportal "github.com/flintwillow-software/opennavi/internal/portal"
 	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
 type allowAll struct{}
 
-func (allowAll) Authorize(action internalportal.PortalAction, identity string) error { return nil }
+func (allowAll) Authorize(action pubportal.Action, identity string) error { return nil }
 
 func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
@@ -30,14 +29,14 @@ func newQueue(t *testing.T) *thought.Queue {
 	return q
 }
 
-// newGateway wires a broker + Hub + gateway over a queue, the same shape
-// the navi composition root produces.
-func newGateway(t *testing.T, auth internalportal.PortalAuthorizer) (*Gateway, *pubportal.Broker, *thought.Queue) {
+// newGateway wires a broker + control portal + gateway over a queue, the
+// same shape the navi composition root produces.
+func newGateway(t *testing.T, auth pubportal.Authorizer) (*Gateway, *pubportal.Broker, *thought.Queue) {
 	t.Helper()
 	q := newQueue(t)
 	broker := pubportal.NewBroker()
 	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
-	hub := internalportal.NewHub(auth)
+	hub := pubportal.NewControl(auth)
 	if err := hub.Start(context.Background(), pubportal.Deps{ThoughtSystem: q, Observation: broker}); err != nil {
 		t.Fatal(err)
 	}

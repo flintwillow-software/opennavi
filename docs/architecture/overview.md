@@ -103,7 +103,7 @@ model/                public  Model + provider descriptor
 skill/                public  Skill value (embedded content)
 store/                public  Store interface + implementations
 navi/                 public  composition root; imports the above
-internal/             private runtime: agent loop, providers, bridge, daemon, config, ops
+internal/             private runtime: agent loop, providers, bridge, config, ops
 cmd/navi/             reference navi (was the only runnable binary)
 templates/            starter navi modules (guardrail)
 internal/testdata/    synthetic out-of-repo modules (CI fixtures)
@@ -141,8 +141,11 @@ gateway so remote front-ends attach and control across processes. `navi-code`
 and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
 authoring stub is retired, and the out-of-repo extension path is guarded by CI
 (`internal/testdata/external-navi`, `internal/testdata/external-component`). The old `internal/daemon`
-run path is dead code, tracked for removal (NAVI-354); transcript replay for
-portals is tracked as NAVI-353.
+run path and its `internal/portal` compatibility shim are now retired (NAVI-354); the
+thought-queue metrics collector is parked pending wiring onto the reference navi
+(NAVI-357); cron tick-state persistence and missed-tick coalescing need re-wiring
+on the connector path (NAVI-358); transcript replay for portals is tracked as
+NAVI-353.
 
 ## Related
 

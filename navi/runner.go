@@ -67,8 +67,8 @@ func SessionIDFor(thoughtID string) string { return "thought:" + thoughtID }
 
 // checkpointPrefix is the self-describing magic for the checkpoint blob
 // format. The queue treats the blob as opaque; only the runner can detect
-// a stale format. It mirrors the daemon runner's format so a checkpoint
-// written by either path is readable by the other.
+// a stale format. It matches the retired daemon runner's format, so
+// checkpoints written before the daemon path was removed stay readable.
 const checkpointPrefix = "navicp1:"
 
 // AgentRunner is the real runner: one agent per thought, running the
@@ -427,7 +427,7 @@ func (n *Navi) runOne(ctx context.Context, t *thought.Thought) {
 
 	// Cancellation is shutdown, not failure: park the thought so it
 	// resumes rather than being marked failed. This is the
-	// park-not-kill promise the queue already keeps for the daemon.
+	// park-not-kill promise the queue already keeps for the runtime.
 	if ctx.Err() != nil {
 		if perr := n.Thoughts.Pause(t.ID); perr != nil {
 			n.log.Error("park interrupted thought", "thought", t.ID, "err", perr)
