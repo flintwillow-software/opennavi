@@ -57,7 +57,11 @@ func NewAgent(config AgentConfig) *Agent {
 		Executor:      NewToolExecutor("parallel", 4),
 		compaction:    resolveCompaction(config.Compaction),
 	}
-	RegisterBuiltinTools(a.Executor, config.WorkDir)
+	// No tools are seeded here: the agent loop is generic, and tools reach
+	// it only through the registry + internal/bridge (NAVI-356). The
+	// composition root binds the builtin catalog (tool/builtin) with the
+	// navi's working directory — previously this seeded file_read/shell_exec
+	// with an empty WorkDir that the bridge then replaced.
 	return a
 }
 
