@@ -69,7 +69,7 @@ for _, t := range builtins {
     n.Tools.Add(t)
 }
 n.Models.Add(model.Ollama("qwen3.8:27b", model.Default()))
-n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}))
+n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}, cron.WithStateStore(db)))
 n.Portals.Add(tui.NewPortal())
 n.Modes.Add(navi.PlanMode)
 
@@ -141,11 +141,11 @@ gateway so remote front-ends attach and control across processes. `navi-code`
 and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
 authoring stub is retired, and the out-of-repo extension path is guarded by CI
 (`internal/testdata/external-navi`, `internal/testdata/external-component`). The old `internal/daemon`
-run path and its `internal/portal` compatibility shim are now retired (NAVI-354); the
-thought-queue metrics collector is parked pending wiring onto the reference navi
-(NAVI-357); cron tick-state persistence and missed-tick coalescing need re-wiring
-on the connector path (NAVI-358); transcript replay for portals is tracked as
-NAVI-353.
+run path and its `internal/portal` compatibility shim are now retired (NAVI-354); cron tick state
+persists and missed ticks coalesce across restarts via `connector/cron`'s
+`WithStateStore` seam (NAVI-358); the thought-queue metrics collector is parked
+pending wiring onto the reference navi (NAVI-357); transcript replay for portals
+is tracked as NAVI-353.
 
 ## Related
 

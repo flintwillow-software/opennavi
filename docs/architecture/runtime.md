@@ -111,7 +111,11 @@ No path drives the agent around the queue.
 
 **Schedules** are a thought-system primitive, not generic config: a recurring
 routine is a thought factory. Default routines may be declared by the navi
-author; operators may override schedules at runtime.
+author; operators may override schedules at runtime. When the connector is
+constructed with `cron.WithStateStore(db)`, tick state persists
+(`last_fired`/`fire_count`) and a tick that came due while the navi was down is
+coalesced into one thought at `Start`; without it the connector keeps state in
+memory only and a missed tick is skipped (NAVI-358).
 
 ## Modes
 

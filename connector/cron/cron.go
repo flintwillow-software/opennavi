@@ -7,6 +7,7 @@ package cron
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -43,12 +44,35 @@ type Config struct {
 type Connector struct {
 	cfg   Config
 	sched *internalcron.Scheduler
+	// stateDB persists tick state (last_fired/fire_count) and enables
+	// missed-tick coalescing. nil = in-memory only.
+	stateDB *sql.DB
 	// now overrides the scheduler clock (tests). nil = time.Now.
 	now func() time.Time
 }
 
+// Option configures the connector.
+type Option func(*Connector)
+
+// WithStateStore persists cron tick state (last_fired/fire_count) in the
+// shared SQLite connection and enables missed-tick coalescing: a schedule
+// whose next-due passed while the navi was down enqueues one coalescing
+// thought at Start instead of being skipped. The connector migrates its own
+// schedule_state table (migration v6) at Start. Without this option the
+// connector keeps state in memory only, and a tick missed across a restart
+// is silently lost.
+func WithStateStore(db *sql.DB) Option {
+	return func(c *Connector) { c.stateDB = db }
+}
+
 // New builds the cron connector from its declared schedules.
-func New(cfg Config) *Connector { return &Connector{cfg: cfg} }
+func New(cfg Config, opts ...Option) *Connector {
+	c := &Connector{cfg: cfg}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
+}
 
 // Start binds the scheduler to the navi's thought system and launches the
 // tick loop. Invalid cron expressions or timezones fail Start (and thus
@@ -56,6 +80,10 @@ func New(cfg Config) *Connector { return &Connector{cfg: cfg} }
 func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 	if deps.ThoughtSystem == nil {
 		return fmt.Errorf("cron: thought system is required")
+	}
+	now := time.Now
+	if c.now != nil {
+		now = c.now
 	}
 	s := internalcron.NewScheduler(enqueuer{ts: deps.ThoughtSystem})
 	if c.now != nil {
@@ -78,8 +106,62 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 			deps.Log.Error("cron: enqueue failed", "err", err)
 		}
 	})
+	if err := c.wireState(deps, s, now); err != nil {
+		return err
+	}
 	s.Start()
 	c.sched = s
+	return nil
+}
+
+// wireState enables tick-state persistence and missed-tick coalescing when a
+// state store was supplied. It runs before the scheduler starts: missed ticks
+// are coalesced once at Start, and RecordFire is wired to the queue's started
+// event (the claim boundary), keyed by the schedule named in the thought's
+// metadata — a key that never meets MissedTick's coalescing rows, which carry
+// `missed: true`. With no state store this is a no-op (in-memory only).
+func (c *Connector) wireState(deps connector.Deps, s *internalcron.Scheduler, now func() time.Time) error {
+	if c.stateDB == nil {
+		return nil
+	}
+	if err := internalcron.MigrateState(c.stateDB); err != nil {
+		return err
+	}
+	state := internalcron.NewStateStore(c.stateDB)
+
+	deps.ThoughtSystem.OnEvent(func(ev thought.Event) {
+		if ev.Kind != thought.EventStarted {
+			return
+		}
+		got, err := deps.ThoughtSystem.GetThought(ev.ThoughtID)
+		if err != nil {
+			return
+		}
+		name := got.Metadata["schedule"]
+		if name == "" {
+			return
+		}
+		_ = state.RecordFire(name, now().UTC())
+	})
+
+	for _, def := range c.cfg.Schedules {
+		if def.Disabled {
+			continue
+		}
+		last, err := state.LastFired(def.Name)
+		if err != nil || last.IsZero() {
+			continue
+		}
+		expr, perr := internalcron.Parse(def.Expr)
+		if perr != nil {
+			continue // s.Add already validated the expression
+		}
+		if next := expr.Next(last); next.Before(now()) {
+			if err := s.MissedTick(def.Name); err != nil {
+				return fmt.Errorf("cron: missed tick %q: %w", def.Name, err)
+			}
+		}
+	}
 	return nil
 }
 

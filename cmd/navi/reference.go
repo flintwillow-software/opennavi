@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -105,7 +106,7 @@ func serveReferenceNavi(p runParams) error {
 	if err := addCatalogTools(n, rc, naviID, stateful, p.workDir); err != nil {
 		return err
 	}
-	if err := addCron(n, rc); err != nil {
+	if err := addCron(n, rc, store.DB()); err != nil {
 		return err
 	}
 	if err := addPortals(n, p); err != nil {
@@ -234,8 +235,10 @@ func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state
 	return add(thoughts.Tools(n.Thoughts))
 }
 
-// addCron wires configured schedules as the cron connector (ADR 0010).
-func addCron(n *navi.Navi, rc config.RuntimeConfig) error {
+// addCron wires configured schedules as the cron connector (ADR 0010),
+// backed by the shared store so tick state persists and missed ticks are
+// coalesced across restarts (NAVI-358).
+func addCron(n *navi.Navi, rc config.RuntimeConfig, db *sql.DB) error {
 	if rc.Cron == nil || len(rc.Cron.Schedules) == 0 {
 		return nil
 	}
@@ -250,7 +253,7 @@ func addCron(n *navi.Navi, rc config.RuntimeConfig) error {
 			Disabled: !s.IsEnabled(),
 		})
 	}
-	return n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}))
+	return n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}, cron.WithStateStore(db)))
 }
 
 // addPortals wires the TUI (in-process) and, when configured, the HTTP

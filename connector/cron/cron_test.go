@@ -2,10 +2,13 @@ package cron
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	internalcron "github.com/flintwillow-software/opennavi/internal/cron"
+	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -82,4 +85,98 @@ func TestStopIsIdempotent(t *testing.T) {
 	if err := c.Stop(); err != nil {
 		t.Fatalf("second Stop: %v", err)
 	}
+}
+
+// testCronDB opens a temp SQLite DB with the schedule_state table migrated.
+func testCronDB(t *testing.T) *sql.DB {
+	t.Helper()
+	st, err := sqlite.Open(t.TempDir()+"/cron.db", sqlite.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := internalcron.MigrateState(st.DB()); err != nil {
+		t.Fatal(err)
+	}
+	return st.DB()
+}
+
+// noopRunner completes any claimed thought immediately.
+type noopRunner struct{}
+
+func (noopRunner) Run(context.Context, *thought.Thought) error { return nil }
+
+// TestCronCoalescesMissedTick is the NAVI-358 gate: a schedule whose
+// next-due passed while the navi was down enqueues one coalescing thought
+// at Start instead of being skipped silently.
+func TestCronCoalescesMissedTick(t *testing.T) {
+	db := testCronDB(t)
+	// Seed a last-fired far enough in the past that the next minute is
+	// already overdue.
+	if err := internalcron.NewStateStore(db).RecordFire("every-minute", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	q := newQueue(t)
+	c := New(
+		Config{Schedules: []Schedule{{Name: "every-minute", Expr: "* * * * *", Prompt: "tick"}}},
+		WithStateStore(db),
+	)
+	if err := c.Start(context.Background(), connector.Deps{ThoughtSystem: q}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	// MissedTick runs synchronously before the scheduler starts.
+	found := false
+	for _, th := range q.GetThoughts() {
+		if th.Metadata["schedule"] == "every-minute" && th.Metadata["missed"] == "true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missed tick not coalesced into a thought: %+v", q.GetThoughts())
+	}
+}
+
+// TestCronRecordsFireStateOnClaim wires RecordFire to the queue's started
+// event: a schedule thought reaching a worker advances last_fired.
+func TestCronRecordsFireStateOnClaim(t *testing.T) {
+	db := testCronDB(t)
+	q := newQueue(t)
+	// A schedule that will not fire during the test (Jan 1 midnight).
+	c := New(
+		Config{Schedules: []Schedule{{Name: "s", Expr: "0 0 1 1 *", Prompt: "tick"}}},
+		WithStateStore(db),
+	)
+	if err := c.Start(context.Background(), connector.Deps{ThoughtSystem: q}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	pool := thought.NewPool(q, noopRunner{}, 1)
+	pool.Start()
+	defer pool.StopAndWait()
+
+	now := time.Now().UTC()
+	if err := q.Enqueue(&thought.Thought{
+		ID:        "t1",
+		Prompt:    "do work",
+		Priority:  4,
+		Status:    thought.ThoughtPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Metadata:  map[string]string{"schedule": "s"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state := internalcron.NewStateStore(db)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if last, err := state.LastFired("s"); err == nil && !last.IsZero() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("fire state never recorded for the claimed schedule thought")
 }

@@ -2,23 +2,20 @@ package cron
 
 import (
 	"database/sql"
-
 	"fmt"
-	"github.com/flintwillow-software/opennavi/thought"
+	"sync/atomic"
 	"time"
+
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // StateStore persists schedule TICK STATE (last_fired/next_due/
 // fire_count — not definitions; schedule definitions are runtime
 // config). Backed by the shared SQLite DB (migration v6).
 //
-// PARKED (NAVI-354): nothing calls MigrateState/NewStateStore/RecordFire/
-// LastFired/MissedTick any more. The retired `internal/daemon.WireCron` was
-// their only wiring; the connector path (`connector/cron`) constructs a
-// scheduler without a state store, so the reference navi currently runs
-// schedules with no persisted tick state and no missed-tick coalescing.
-// This is retained (with its tests) because the follow-up ticket consumes it
-// unchanged — see NAVI-358.
+// Wired by connector/cron when it is constructed with WithStateStore
+// (NAVI-358): Start migrates the table, records a fire on every schedule
+// thought's started event, and coalesces missed ticks at startup.
 type StateStore struct {
 	db *sql.DB
 }
@@ -86,12 +83,12 @@ func (ss *StateStore) SetNextDue(name string, due time.Time) error {
 	return nil
 }
 
-// MissedTick is a caller-invoked primitive: it enqueues ONE coalescing
-// thought for a schedule whose next_due passed while the daemon was
-// down. State tracking (RecordFire/next_due advancement) is wired by
-// the daemon core in #240 — nothing advances state rows today, and
-// repeated calls in the same wall second WILL collide on the thought
-// ID (the monotonic-counter fix lands with that wiring).
+// MissedTick is the startup-coalescing primitive: it enqueues ONE coalescing
+// thought for a schedule whose next-due passed while the navi was down. The
+// caller decides which schedules missed (LastFired + Parse/Next) and invokes
+// this once per schedule before the scheduler starts. The thought id carries
+// the scheduler's monotonic counter, so a MissedTick and a fireNow landing in
+// the same wall second cannot collide.
 func (s *Scheduler) MissedTick(name string) error {
 	s.mu.Lock()
 	sd, ok := s.schedules[name]
@@ -103,7 +100,7 @@ func (s *Scheduler) MissedTick(name string) error {
 	s.dbg("missed tick coalesced", map[string]any{"schedule": name})
 
 	t := &thought.Thought{
-		ID:        fmt.Sprintf("cron-%s-%s", name, now.UTC().Format("20060102T150405")),
+		ID:        fmt.Sprintf("cron-%s-%s-%d", name, now.UTC().Format("20060102T150405"), atomic.AddUint64(&s.idSeq, 1)),
 		Prompt:    sd.def.Prompt,
 		Priority:  sd.def.Priority,
 		Status:    thought.ThoughtPending,
@@ -113,9 +110,6 @@ func (s *Scheduler) MissedTick(name string) error {
 	}
 	return s.queue.Enqueue(t)
 }
-
-// context echo for future daemon wiring (step 2 will pass ctx through
-// the tick loop).
 
 // formatTimestamp is the persistence-side time format (RFC3339Nano for
 // state rows — parse compatibility matters more than lexical ordering

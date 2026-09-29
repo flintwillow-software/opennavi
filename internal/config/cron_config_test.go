@@ -54,21 +54,4 @@ func TestCronIsEnabledNilTrue(t *testing.T) {
 	}
 }
 
-func TestCronToSchedulerDefs(t *testing.T) {
-	cc := CronConfig{Schedules: []CronSchedule{
-		{Name: "on", Expr: "* * * * *", Prompt: "p"},
-		{Name: "off", Expr: "* * * * *", Prompt: "p", Enabled: boolPtr(false)},
-	}}
-	defs := cc.ToSchedulerDefs()
-	if len(defs) != 2 {
-		t.Fatalf("defs = %+v", defs)
-	}
-	if defs[0].Disabled {
-		t.Fatalf("nil Enabled must map to not-disabled: %+v", defs[0])
-	}
-	if !defs[1].Disabled {
-		t.Fatalf("explicit false must map to disabled: %+v", defs[1])
-	}
-}
-
 func boolPtr(b bool) *bool { return &b }
