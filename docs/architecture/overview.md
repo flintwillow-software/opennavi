@@ -113,10 +113,14 @@ internal/testdata/    synthetic out-of-repo modules (CI fixtures)
 portals receive handles through their `Deps` interface. This keeps the graph
 acyclic and components independently testable. The six component packages
 (`tool`, `thought`, `connector`, `portal`, `model`, `skill`) are additionally
-**stdlib-only** — their import closure pulls no implementation package
-(`store`, `tool/registry`, `internal/*`), so importing one never drags the
-runtime in; the `external-consumer` CI job asserts that closure as
-contract-purity (NAVI-355).
+**stdlib-only** — their import closure reaches no `internal/*` package and no
+tool-system implementation package — so importing one never drags the runtime
+in. Two CI guards pin this: `external-consumer` asserts contract-purity of the
+external component's whole closure (NAVI-355), and *public packages import no
+runtime internals* asserts the rule across every public package (NAVI-356).
+`store` is itself a public package (data types, their interfaces, in-memory
+helpers; the durable implementation is `store/sqlite`), so `tool/{note,todo,registry}
+→ store` is public→public.
 
 ## Boundaries
 

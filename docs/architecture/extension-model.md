@@ -42,13 +42,23 @@ Out-of-repo modules import **component packages only**, never `navi`. This keeps
 the graph acyclic and prevents an extension from dragging runtime internals into
 consumers.
 
-Component packages are **stdlib-only**: importing one must not transitively pull
-an implementation package (`store`, `tool/registry`, the runtime under
-`internal/`). The `external-consumer` CI job asserts this as *contract-purity*
-over the component module's whole dependency closure — not just its direct
-imports (NAVI-355). A registration seam that needs the registry (the
-queue-handle binding) therefore lives in `tool/registry`, not in the `thought`
-contract.
+Component packages are **stdlib-only** and pull in no runtime internals:
+importing one must not transitively reach an `internal/*` package or a
+tool-system implementation package (`tool/registry`, the shipped catalog). The
+`external-consumer` CI job asserts this as *contract-purity* over the component
+module's whole dependency closure — not just its direct imports (NAVI-355) — and
+a separate CI step asserts that no public package imports `internal/*`
+(NAVI-356). A registration seam that needs the registry (the queue-handle
+binding) therefore lives in `tool/registry`, not in the `thought` contract.
+
+`store` is a **public package**: session and stateful data types, their
+interfaces, and in-memory helpers, with the durable implementation in
+`store/sqlite`. `tool/{note,todo,registry}` importing it is therefore
+public→public, not public→implementation — an intentional boundary, recorded
+here (NAVI-356). The shipped catalog implementations live in the public
+`tool/*` packages (including `tool/builtin`'s `file_read`/`shell_exec`); the
+generic agent loop under `internal/agent` seeds no tools and receives them
+through the registry and `internal/bridge`.
 
 ## Writing a component
 
@@ -170,6 +180,7 @@ register into the same tool registry at a distinct trust level.
 ## Anti-patterns
 
 - Extensions importing `opennavi/navi` (coupling, cycles).
+- Public packages importing runtime internals (`opennavi/internal/*`).
 - Component packages importing SQLite, HTTP clients, or provider SDKs.
 - `init()`-based registration in component modules.
 - Using Go's `plugin` package.

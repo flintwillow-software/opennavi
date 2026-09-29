@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,15 +115,6 @@ func resolveWorkPath(workDir, p string) string {
 		return p
 	}
 	return filepath.Join(workDir, p)
-}
-
-// jsonSchema marshals a schema map to raw JSON for tool descriptors.
-func jsonSchema(v any) json.RawMessage {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return json.RawMessage(`{"type":"object"}`)
-	}
-	return data
 }
 
 // FlattenContent concatenates the text of all content blocks.

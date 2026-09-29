@@ -141,3 +141,14 @@ func TestExecutorToolsDescriptors(t *testing.T) {
 		t.Fatalf("descriptors not in registration order or missing description: %+v", tools)
 	}
 }
+
+// TestNewAgentSeedsNoTools pins the layering (NAVI-356): the agent loop is
+// generic and seeds no tool set. Tools reach an executor through the
+// registry + internal/bridge, bound by the composition root — not through
+// NewAgent, which previously registered the builtins with an empty WorkDir.
+func TestNewAgentSeedsNoTools(t *testing.T) {
+	a := NewAgent(AgentConfig{Provider: "mock", Model: "m"})
+	if got := len(a.Executor.Tools()); got != 0 {
+		t.Fatalf("NewAgent seeded %d tools, want 0", got)
+	}
+}
