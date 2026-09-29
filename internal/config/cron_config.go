@@ -7,8 +7,8 @@ import (
 )
 
 // CronSchedule is one named cron schedule in the runtime config
-// (.config/navi/<name>/config.yaml, S000400 cron interface). Under the
-// static-definition vs runtime-config split (S000200 §04), schedules
+// (.config/navi/<name>/config.yaml, cron interface). Under the
+// static-definition vs runtime-config split, schedules
 // are deployment-time settings owned by the operator — the compiled
 // navi definition declares whether the cron interface exists, not
 // which schedules it runs. SQLite persists tick state only.

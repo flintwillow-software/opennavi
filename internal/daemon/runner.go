@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/internal/config"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // checkpointPrefix is the self-describing magic for the checkpoint
@@ -28,7 +28,7 @@ const checkpointPrefix = "navicp1:"
 // Checkpoint-on-park: on ctx cancellation the runner snapshots the
 // in-flight conversation into the thought's Checkpoint (opaque bytes
 // to the queue, versioned for the runner), so a later restore resumes
-// mid-conversation. Spec §2.2: checkpoint-save is paired with session
+// mid-conversation. Spec: checkpoint-save is paired with session
 // log flush on the running→paused transition.
 type AgentRunner struct {
 	deps agentRunnerDeps
@@ -44,7 +44,7 @@ type agentRunnerDeps struct {
 	compactBudget int
 	logger        *logging.Logger
 	// providerConfig is the runtime provider config: the fallback
-	// source for per-thought provider overrides (S010104). The
+	// source for per-thought provider overrides. The
 	// prebuilt chain + model are the runtime primary / fallback chain
 	// used when the thought carries no override.
 	providerConfig config.ProviderConfig
@@ -55,12 +55,12 @@ type agentRunnerDeps struct {
 	registry *registry.Registry
 	bind     bridge.Options
 	// tracker lets the steering bridge resolve a running thought's
-	// in-flight agent (S010312 running path): registered on run start,
+	// in-flight agent (running path): registered on run start,
 	// unregistered when the run returns. May be nil (no routing).
 	tracker *inFlightAgents
 	// agentEvents, when set, receives every agent event of each
 	// thought as (thoughtID, event) — the portal observation hook
-	// (S000407). It must be cheap: the agent bus already delivers
+	// It must be cheap: the agent bus already delivers
 	// asynchronously per subscriber.
 	agentEvents func(thoughtID string, ev agent.AgentEvent)
 }
@@ -71,7 +71,7 @@ func NewAgentRunner(deps agentRunnerDeps) *AgentRunner {
 }
 
 // resolvePerThoughtProvider resolves the provider + model for ONE
-// thought (S010104): a thought-level Provider override replaces the
+// thought: a thought-level Provider override replaces the
 // runtime chain (built from the runtime provider config with the
 // existing buildProviderFor — the same construction the primary uses;
 // unknown names fail with a clear error, never a silent fallback).
@@ -92,7 +92,7 @@ func (r *AgentRunner) resolvePerThoughtProvider(t *thought.Thought) (llm.Provide
 	return p, model, nil
 }
 
-// Run executes one thought (spec: one thought ≈ one agent run).
+// Run executes one thought (one thought ≈ one agent run).
 //
 // Outcomes:
 //   - nil error → pool marks the thought complete
@@ -105,14 +105,14 @@ func (r *AgentRunner) resolvePerThoughtProvider(t *thought.Thought) (llm.Provide
 // never wedges a worker or loses the thought — worst case is a re-run.
 func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	start := time.Now()
-	// Provider/model per thought (S010104): the thought's override,
+	// Provider/model per thought: the thought's override,
 	// when present, replaces the runtime chain; the resolution fails
 	// the thought on unknown providers.
 	chain, model, perr := r.resolvePerThoughtProvider(t)
 	if perr != nil {
 		return perr
 	}
-	// One agent per thought: fresh state isolation (spec: one worker
+	// One agent per thought: fresh state isolation (one worker
 	// per thought, isolated processing).
 	a := agent.NewAgent(agent.AgentConfig{
 		Provider:     "daemon-wired",
@@ -122,8 +122,8 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	})
 	a.Provider = agentProviderAdapter{chain: chain}
 
-	// Registry-first tool surface (S130400/NAVI-272): the executor is
-	// rebuilt from the registry's active set via tools/bridge, so the
+	// Registry-first tool surface (NAVI-272): the executor is
+	// rebuilt from the registry's active set via tool/bridge, so the
 	// LLM-facing tool list is exactly the permitted active set and
 	// policy (allowed/blocked, timeout overrides) governs it. This
 	// replaces the executor NewAgent seeded with raw builtins — when
@@ -132,8 +132,8 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		return fmt.Errorf("daemon: bind tool registry for thought %s: %w", t.ID, err)
 	}
 
-	// Register the in-flight agent for the steering bridge (S010312
-	// running path): RouteMessage hands messages to the tracker, which
+	// Register the in-flight agent for the steering bridge
+	// (running path): RouteMessage hands messages to the tracker, which
 	// injects them into THIS agent's steering queue at the turn
 	// boundary. Unregistered when the run returns — a message routed
 	// outside the run window rejects with a clear error (the ack
@@ -142,7 +142,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		unregister := r.deps.tracker.track(t.ID, a)
 		defer unregister()
 	}
-	// Portal observation hook (S000407): forward the thought's agent
+	// Portal observation hook: forward the thought's agent
 	// events (content deltas, tool calls, transitions) to the portal
 	// seam. The agent delivers async-per-subscriber, so this never
 	// slows the run.
@@ -195,7 +195,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 
 	// Park on cancellation (ruling: park-with-checkpoint is the
 	// terminal path for interrupted thoughts — never kill-and-lose).
-	// Spec §2.2 pairs checkpoint-save with session-log flush: persist
+	// Spec pairs checkpoint-save with session-log flush: persist
 	// the conversation via SessionManager before returning.
 	if ctx.Err() != nil {
 		checkpoint, cerr := encodeCheckpoint(a.State().Clone().Messages)
@@ -225,7 +225,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 }
 
 // Park snapshots the in-flight conversation into the thought's
-// Checkpoint AND flushes the session log (spec §2.2 pairs
+// Checkpoint AND flushes the session log (pairs
 // checkpoint-save with session-log flush on the running→paused
 // transition).
 func (r *AgentRunner) Park(t *thought.Thought, a *agent.Agent) error {
@@ -293,7 +293,7 @@ func decodeCheckpoint(blob []byte) ([]agent.AgentMessage, error) {
 }
 
 // persistConversation records the agent conversation as session
-// entries (spec §2.2 session-log flush; #240 ruling — sessions record
+// entries (session-log flush; #240 ruling — sessions record
 // history). Creates the session if needed, then appends one entry per
 // agent message.
 func (r *AgentRunner) persistConversation(t *thought.Thought, msgs []agent.AgentMessage) error {
@@ -314,7 +314,7 @@ func (r *AgentRunner) persistConversation(t *thought.Thought, msgs []agent.Agent
 }
 
 // bindTools rebuilds the agent's executor from the registry's active
-// set via tools/bridge (registry authority: only active, permitted
+// set via tool/bridge (registry authority: only active, permitted
 // tools are bound — inactive builtins disappear). No-op without a
 // registry (agents keep NewAgent's builtin seeding).
 func (r *AgentRunner) bindTools(a *agent.Agent) error {

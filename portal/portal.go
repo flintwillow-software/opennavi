@@ -1,4 +1,4 @@
-// Package portal is the public portal contract (ADR 0004/0010): a
+// Package portal is the public portal component (ADR 0004/0010): a
 // portal is a human observation and control surface (CLI, TUI,
 // WebUI) — bidirectional, list/schedule/steer. It receives its
 // dependencies through portal.Deps and NEVER imports navi (rule 2:
@@ -27,7 +27,7 @@ var ErrUnauthorized = errors.New("portal: unauthorized")
 // bounded observation stream, and the logger. NO memory handle —
 // short-term memory is navi-internal working state (not an extension
 // surface) and long-term memory search is a tool against the M4
-// contract (same rationale as connector.Deps).
+// interface (same rationale as connector.Deps).
 type Deps struct {
 	// ThoughtSystem is the navi's queue handle.
 	ThoughtSystem thought.ThoughtSystem
@@ -82,7 +82,7 @@ type Portal interface {
 	// BumpPriority changes a queued thought's priority (NAVI-319 added the
 	// operation to the portal surface; the queue clamps it).
 	BumpPriority(identity, thoughtID string, prio int) error
-	// Retry re-queues a failed thought (S010002).
+	// Retry re-queues a failed thought.
 	Retry(identity, thoughtID string) error
 	// Enqueue schedules a new thought on behalf of identity
 	// (session-created thoughts claim the foreground slot).

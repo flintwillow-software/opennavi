@@ -32,7 +32,7 @@ type ProviderConfig struct {
 	BackoffFactor float64       `yaml:"backoff_factor,omitempty"`
 }
 
-// ToolPolicy is per-tool access control (spec: tool config with
+// ToolPolicy is per-tool access control (tool config with
 // allowed/blocked lists, per-tool timeouts).
 type ToolPolicy struct {
 	Allowed []string                 `yaml:"allowed,omitempty"` // if non-empty, ONLY these run
@@ -42,7 +42,7 @@ type ToolPolicy struct {
 
 // ThoughtQueueConfig tunes the daemon's thought queue (deployment
 // tuning: worker concurrency and priority slots). Runtime side of the
-// S000200 §04 split — queue throughput is an operator concern, not a
+// split — queue throughput is an operator concern, not a
 // compiled-definition concern.
 type ThoughtQueueConfig struct {
 	MaxConcurrent  int    `yaml:"max_concurrent,omitempty"`
@@ -50,15 +50,15 @@ type ThoughtQueueConfig struct {
 	SlotExhaustion string `yaml:"slot_exhaustion,omitempty"`
 }
 
-// ToolCapsConfig tunes tool-level caps and egress policy (NAVI-272,
-// S130500): note body caps and http_request egress policy. Nil
+// ToolCapsConfig tunes tool-level caps and egress policy (NAVI-272):
+// note body caps and http_request egress policy. Nil
 // sections and zero fields keep the tool packages' safe defaults.
 type ToolCapsConfig struct {
 	Notes *NoteCapsConfig   `yaml:"notes,omitempty"`
 	HTTP  *HTTPEgressConfig `yaml:"http,omitempty"`
 }
 
-// NoteCapsConfig caps note tool storage (S130500 §05).
+// NoteCapsConfig caps note tool storage.
 type NoteCapsConfig struct {
 	// MaxBodyBytes caps one note body (default 64 KiB).
 	MaxBodyBytes int `yaml:"max_body_bytes,omitempty"`
@@ -67,7 +67,7 @@ type NoteCapsConfig struct {
 	MaxNaviBytes int `yaml:"max_navi_bytes,omitempty"`
 }
 
-// HTTPEgressConfig tunes http_request egress (S130500 §06). Allowlist
+// HTTPEgressConfig tunes http_request egress. Allowlist
 // entries exempt internal services from the SSRF rules; denylist
 // entries remove them again (deny wins).
 type HTTPEgressConfig struct {
@@ -76,10 +76,10 @@ type HTTPEgressConfig struct {
 	Denylist         []string `yaml:"denylist,omitempty"`
 }
 
-// RuntimeConfig is the user-modifiable configuration (spec "Static
-// Definition vs. Runtime Config Separation"): LLM provider keys,
+// RuntimeConfig is the user-modifiable configuration (the static
+// definition vs. runtime config split): LLM provider keys,
 // session settings, tool policy overrides. It never modifies the
-// compiled-in Go navi definition (S000200 §04).
+// compiled-in Go navi definition.
 type RuntimeConfig struct {
 	Provider ProviderConfig `yaml:"provider,omitempty"`
 	Tools    ToolPolicy     `yaml:"tools,omitempty"`
@@ -281,7 +281,7 @@ func applyEnv(rc *RuntimeConfig) {
 // Validate checks the runtime config's self-contained invariants:
 // thought-queue tuning bounds and cron schedule consistency. There is
 // deliberately no cross-check against a navi definition — under the
-// go-first split (S000200 §04, S000207) the compiled definition is not
+// go-first split the compiled definition is not
 // visible to the runtime-config layer; the navi binary itself enforces
 // its compiled-in tool policy.
 func (rc RuntimeConfig) Validate() error {

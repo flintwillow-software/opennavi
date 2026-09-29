@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 )
 
 // inFlightAgents tracks a running thought's agent for the steering bridge
-// (S010310): RouteMessage's running path resolves the thought's agent and
+// RouteMessage's running path resolves the thought's agent and
 // injects the message at the turn boundary. The runner registers each
 // thought's agent on run start and unregisters it when the run returns, so
 // a message routed outside the run window rejects rather than vanishing.

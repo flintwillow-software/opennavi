@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 )
 
 // This file bridges the agent runtime and the session store: pausing an
@@ -100,7 +100,7 @@ func AgentStateFromEntries(entries []SessionEntry) *agent.AgentState {
 	msgs := make([]agent.AgentMessage, 0, len(entries))
 	for _, e := range entries {
 		// Soft-compacted originals are excluded from the restored LLM
-		// context; their system-role summaries are kept (spec §06: the
+		// context; their system-role summaries are kept (the
 		// summary itself carries is_compacted=1 but must survive).
 		if e.IsCompacted && e.Role != RoleSystem {
 			continue

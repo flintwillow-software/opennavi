@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ── Message routing (S010312) ────────────────────────────────────────
+// ── Message routing ────────────────────────────────────────
 //
 // Queue-level message routing: messages addressed to a thought by ID,
 // delivered with lifecycle-dependent semantics:
@@ -16,12 +16,12 @@ import (
 //	            steering; bridge wired via SetSteeringRouter)
 //	paused    → resumed (paused → pending) with the message attached
 //	            (path: resume-with-message)
-//	failed    → rejected (retry is the S010002 path, not routing)
+//	failed → rejected (retry is the path, not routing)
 //	complete / cancelled → rejected (terminal)
 //
 // Every attempt — delivery or rejection — emits a delivery-ack event
 // (EventMessageRouted) carrying the thought id, the delivery path, and
-// the outcome, so portal clients (S000406) observe both deliverables
+// the outcome, so portal clients observe both deliverables
 // and rejections.
 //
 // DISCIPLINE: RouteMessage follows the queue's deferred collect/emit
@@ -31,7 +31,7 @@ import (
 // the same rule applies to injected steering routers.
 
 // DeliveryPath names the delivery route taken for a routed message
-// (S010312): how the message reached (or failed to reach) the
+// how the message reached (or failed to reach) the
 // thought. The ack event reports it so portal clients can display the
 // injection point.
 type DeliveryPath string
@@ -41,7 +41,7 @@ const (
 	// Context, picked up when a worker claims it.
 	PathContextAppend DeliveryPath = "context-append"
 	// PathSteering — running thought: message injected into the
-	// agent's steering queue at the next turn boundary (S010310).
+	// agent's steering queue at the next turn boundary.
 	PathSteering DeliveryPath = "steering"
 	// PathResume — paused thought: resumed (paused → pending) with
 	// the message attached to its Context.
@@ -68,7 +68,7 @@ var (
 )
 
 // SteeringRouter injects a message into a running thought's agent
-// (turn-boundary steering, S010310). The queue invokes the router
+// (turn-boundary steering). The queue invokes the router
 // OUTSIDE q.mu — implementations must not re-enter the queue from
 // within (read state via snapshots/GetThought instead). Wired by the
 // runtime (NAVI-320); without a router, messages to running thoughts
@@ -114,14 +114,15 @@ func (q *Queue) locate(id string) (*Thought, string, int, bool) {
 }
 
 // RouteMessage delivers a message to the thought identified by id,
-// with semantics per its lifecycle state (S010312):
+// with semantics per its lifecycle state:
 //
 //   - pending: message appended to Context (path context-append)
 //   - running: handed to the steering router for turn-boundary
 //     injection (path steering); rejected if no bridge is registered
 //   - paused: resumed (paused → pending) with the message attached
 //     (path resume-with-message)
-//   - failed: rejected — the retry path is Retry (S010002)
+//
+// - failed: rejected — the retry path is Retry
 //   - complete/cancelled: rejected — terminal
 //
 // Returns the delivery path taken (empty on rejection) and an error
@@ -190,7 +191,7 @@ func (q *Queue) RouteMessageWithPath(id, msg string) (DeliveryPath, error) {
 		return PathSteering, nil
 
 	case ThoughtPaused:
-		// Resume with the message attached (spec: paused → pending,
+		// Resume with the message attached (paused → pending,
 		// message in Context for the resumed run). idx indexes
 		// q.paused.
 		t.AppendMessage(msg)
@@ -216,7 +217,7 @@ func (q *Queue) RouteMessageWithPath(id, msg string) (DeliveryPath, error) {
 
 	case ThoughtFailed:
 		q.mu.Unlock()
-		err := fmt.Errorf("thought: route %s: %w (failed thoughts retry via Retry, S010002)", id, ErrDeliveryRejected)
+		err := fmt.Errorf("thought: route %s: %w (failed thoughts retry via Retry)", id, ErrDeliveryRejected)
 		q.emit(rejectedAck(id, PathNone, err))
 		return "", err
 
@@ -234,8 +235,8 @@ func (q *Queue) RouteMessageWithPath(id, msg string) (DeliveryPath, error) {
 }
 
 // AppendMessage appends msg to the thought's Context on a newline
-// boundary and stamps UpdatedAt. Used by message routing (S010312:
-// pending deliveries and paused resume-with-message).
+// boundary and stamps UpdatedAt. Used by message routing
+// (pending deliveries and paused resume-with-message).
 func (t *Thought) AppendMessage(msg string) {
 	if t.Context == "" {
 		t.Context = msg
@@ -245,7 +246,7 @@ func (t *Thought) AppendMessage(msg string) {
 	t.UpdatedAt = timeNowUTC()
 }
 
-// routedAck builds a delivery-ack event (S010312): thought id,
+// routedAck builds a delivery-ack event: thought id,
 // delivery path, outcome.
 func routedAck(id string, path DeliveryPath, outcome string) Event {
 	return Event{

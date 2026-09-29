@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 )
 
 // ── NAVI-325: one assembly + dead --ollama-host flag ─────────────────

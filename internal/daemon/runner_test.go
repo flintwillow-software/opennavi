@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/config"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -185,7 +185,7 @@ func (f RunnerFunc) Run(ctx context0, t *thought.Thought) error { return f(ctx, 
 
 var _ thought.Runner = RunnerFunc(nil)
 
-// ── provider/model per thought (S010104) ─────────────────────────────────
+// ── provider/model per thought ─────────────────────────────────
 
 func TestResolvePerThoughtProviderDefaultsToRuntime(t *testing.T) {
 	chain := llm.NewMockProvider([]llm.StreamEvent{{Type: llm.StreamEventStop}})

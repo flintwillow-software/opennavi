@@ -1,4 +1,4 @@
-// Package tui implements the Bubble Tea portal client (S000406): the
+// Package tui implements the Bubble Tea portal client: the
 // human door into the house — a terminal UI bound to the navi's
 // thought queue through the portal surface (NAVI-318). The same model
 // runs in-process (binary run, NAVI-320) or against the gateway
@@ -55,10 +55,10 @@ type Transport interface {
 	Resume(thoughtID string) error
 	Cancel(thoughtID string) error
 	Retry(thoughtID string) error
-	// Enqueue creates a session thought (S000406): prompt with
+	// Enqueue creates a session thought: prompt with
 	// optional priority (1-10; 0 = default) and not-before time
 	// (zero = due now). In-process thoughts are foreground-tagged so
-	// they claim the foreground slot (S010003).
+	// they claim the foreground slot.
 	Enqueue(prompt string, prio int, deferUntil time.Time) error
 }
 
@@ -108,7 +108,7 @@ func newThoughtID() string {
 }
 
 // Enqueue creates a session thought: foreground-tagged so it claims the
-// foreground slot (S010003), with optional priority (1-10; out-of-range or
+// foreground slot, with optional priority (1-10; out-of-range or
 // 0 keeps the default 4) and not-before time.
 func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Time) error {
 	now := time.Now().UTC()
@@ -425,7 +425,7 @@ func NewModel(tr Transport) *tuiModel {
 
 // poll returns the re-arming feed-drain command: a non-blocking
 // mailbox read, so the tea event loop never blocks on the portal (a
-// slow UI just drains fewer events per tick) — S000406, the
+// slow UI just drains fewer events per tick) —, the
 // "within one event delivery" guarantee holds per mailbox push.
 func (m *tuiModel) poll() tea.Cmd {
 	return tea.Every(150*time.Millisecond, func(t time.Time) tea.Msg {
@@ -454,7 +454,7 @@ func (m *tuiModel) anyRunning() bool {
 	return false
 }
 
-// Init seeds from the transport snapshot (S000406) and starts the
+// Init seeds from the transport snapshot and starts the
 // feed poll.
 func (m *tuiModel) Init() tea.Cmd {
 	if thoughts, err := m.transport.Snapshot(); err == nil {
@@ -1150,7 +1150,7 @@ func (m *tuiModel) chatLines() []string {
 
 // Run drives the TUI over tr until the user quits; the tea program
 // keeps its own signal handler DISABLED — the navi runtime's signal
-// ctx owns SIGINT (park-with-checkpoint semantics, S010003).
+// ctx owns SIGINT (park-with-checkpoint semantics).
 func Run(tr Transport) error {
 	model := NewModel(tr)
 	p := tea.NewProgram(model,

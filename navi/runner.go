@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/bridge"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
 )
 
 // Runner executes one thought to a terminal state. It is a seam: the
@@ -107,7 +107,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
 
 	// Registry-first tool surface: the executor is rebuilt from the
-	// registry's active set through tools/bridge, narrowed by the
+	// registry's active set through tool/bridge, narrowed by the
 	// thought's mode and the compiled ceiling. This replaces the builtins
 	// NewAgent seeded, so the LLM-facing list is exactly the permitted
 	// surface.
@@ -115,7 +115,7 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		return fmt.Errorf("navi: thought %s: %w", t.ID, err)
 	}
 
-	// Steering bridge (S010310): register the in-flight agent so a
+	// Steering bridge: register the in-flight agent so a
 	// message routed to this thought mid-run is injected at the turn
 	// boundary. Unregistered when the run returns.
 	unregister := r.navi.inflight.track(t.ID, a)
@@ -224,7 +224,7 @@ func userPrompt(t *thought.Thought) string {
 }
 
 // bindTools rebuilds the agent's executor from the registry's active set
-// via tools/bridge, narrowed by the thought's mode and the compiled
+// via tool/bridge, narrowed by the thought's mode and the compiled
 // ceiling. The registry stays authoritative for metadata, validation, and
 // dispatch; the executor only carries the resolved surface and timeout
 // envelopes.

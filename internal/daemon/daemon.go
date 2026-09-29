@@ -13,25 +13,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/agent"
+	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/cron"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/internal/ops/metrics"
 	"github.com/flintwillow-software/opennavi/internal/portal"
 	"github.com/flintwillow-software/opennavi/internal/session"
-	"github.com/flintwillow-software/opennavi/llm"
 	pubportal "github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
-	"github.com/flintwillow-software/opennavi/tools/builtin"
-	toolhttp "github.com/flintwillow-software/opennavi/tools/http"
-	"github.com/flintwillow-software/opennavi/tools/note"
-	"github.com/flintwillow-software/opennavi/tools/registry"
-	"github.com/flintwillow-software/opennavi/tools/thoughts"
-	timepkg "github.com/flintwillow-software/opennavi/tools/time"
-	"github.com/flintwillow-software/opennavi/tools/todo"
+	"github.com/flintwillow-software/opennavi/tool/builtin"
+	toolhttp "github.com/flintwillow-software/opennavi/tool/http"
+	"github.com/flintwillow-software/opennavi/tool/note"
+	"github.com/flintwillow-software/opennavi/tool/registry"
+	"github.com/flintwillow-software/opennavi/tool/thoughts"
+	timepkg "github.com/flintwillow-software/opennavi/tool/time"
+	"github.com/flintwillow-software/opennavi/tool/todo"
 )
 
 // Runtime is the assembled daemon: everything long-running needs.
@@ -63,12 +63,12 @@ type Runtime struct {
 	Metrics *metrics.Collector // queue metrics; nil when disabled
 
 	// inflight resolves a running thought's in-flight agent for the
-	// steering bridge (S010312 running path; S010310 turn-boundary
+	// steering bridge (running path; turn-boundary
 	// injection). Registered by the runner per run; the queue's
 	// SetSteeringRouter closure delegates here. Test seam: read via
 	// steeringSnapshot to verify injection.
 	inflight *inFlightAgents
-	// Portal is the control + observation service (S000407). It is always
+	// Portal is the control + observation service. It is always
 	// assembled so in-process front-ends can use it; the gateway is
 	// mounted only when PortalAddr is set.
 	Portal      *portal.Hub
@@ -77,9 +77,9 @@ type Runtime struct {
 
 // RuntimeParams carries the command-layer inputs (flags already
 // merged through the #237 chain's flags layer by the caller). Under
-// the go-first authoring split (S000200 §04, S000207) there is no
-// navi.yaml: definition-level concerns are compiled into the navi
-// binary, and the daemon consumes only runtime config.
+// the go-first authoring split there is no YAML definition file:
+// definition-level concerns are compiled into the navi binary, and the
+// daemon consumes only runtime config.
 type RuntimeParams struct {
 	RuntimeFile string // runtime config YAML ("" = none)
 	SessionDB   string // final session DB path (post-merge)
@@ -100,19 +100,19 @@ type RuntimeParams struct {
 	// zero cost when unset.
 	MetricsAddr string
 	// PortalAddr serves the portal observation + control attachment
-	// (S000407) on "host:port" — the metrics-addr pattern. Empty
+	// on "host:port" — the metrics-addr pattern. Empty
 	// (the default) disables the portal serve path entirely.
 	PortalAddr string
 	// OverrideAuthorizer is a test seam replacing the fail-closed nil
-	// authorizer (S040200): production wires nil, so every portal
+	// authorizer: production wires nil, so every portal
 	// attachment is refused until IAM lands.
 	OverrideAuthorizer portal.PortalAuthorizer
 	// NaviID is the per-navi scoping key for stateful tool storage
-	// (S130500 §07): todos/notes are keyed (navi_id, id), so two
+	// todos/notes are keyed (navi_id, id), so two
 	// navis on one host sharing a DB never see each other's state.
 	NaviID string
 	// Foreground marks an interactive session attached to the binary
-	// run (S010003 §06): the session's thought occupies a reserved
+	// run: the session's thought occupies a reserved
 	// foreground slot (Config.ForegroundSlots >= 1) and the run exits
 	// when the session ends and the queue drains (RunForeground). The
 	// runtime assembles IDENTICALLY in every mode (one assembly,
@@ -185,7 +185,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
-	// Stateful tool storage (S130500 §07): todos + notes tables over
+	// Stateful tool storage: todos + notes tables over
 	// the shared DB, scoped per navi. Opened here so stateful tools
 	// (todo_*/note_*) can register against it and the health view can
 	// read todo state.
@@ -195,17 +195,17 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		return nil, err
 	}
 
-	// Tool registry (S130400): builtins register with full metadata;
+	// Tool registry: builtins register with full metadata;
 	// catalog/author/stateful tools join here as they land. The active
 	// set is composed from the runtime ToolPolicy — the LLM-facing
-	// surface is registry-first, and tools/bridge binds it into the
+	// surface is registry-first, and tool/bridge binds it into the
 	// agent executor per thought run.
 	reg := registry.New()
 	if err := builtin.Register(reg, params.WorkDir); err != nil {
 		store.Close()
 		return nil, err
 	}
-	// Stateful catalog tools (S130500): the todo tools register for
+	// Stateful catalog tools: the todo tools register for
 	// this navi's identity; note/time/http tools join as they land.
 	// Empty NaviID falls back to the shared default scope.
 	naviID := params.NaviID
@@ -220,7 +220,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	// Stateless catalog tools (S130500): time_read needs no store
+	// Stateless catalog tools: time_read needs no store
 	// handle.
 	if err := timepkg.RegisterTools(reg); err != nil {
 		store.Close()
@@ -228,7 +228,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	}
 	// http_request: stateless egress tool; the SSRF allow/deny lists
 	// and response cap come from tool_caps config (deny still wins in
-	// the tool). Auth stays nil — S100400 credential resolution lands
+	// the tool). Auth stays nil — credential resolution lands
 	// separately, so authRef calls fail closed.
 	if err := toolhttp.Register(reg, httpEgress(rc.ToolCaps)...); err != nil {
 		store.Close()
@@ -277,7 +277,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		PrioritySlots:  thoughtPrioritySlots(rc),
 		SlotExhaustion: thought.PolicyQueue,
 	}
-	// Foreground reservation (S010003 §06, NAVI-320): a binary run
+	// Foreground reservation (, NAVI-320): a binary run
 	// reserves one slot for the interactive session's thought. The
 	// reservation is carved from the pool (disjoint from priority
 	// slots), so a binary run needs at least two slots of capacity —
@@ -298,7 +298,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	// Thought-management tools (S130600, NAVI-323): the navi manages
+	// Thought-management tools (, NAVI-323): the navi manages
 	// its own queue through the catalog mechanism — queue-attached via
 	// thought.RegisterQueueTools, bound to THIS runtime's queue. The
 	// #287 rails apply at Enqueue (origin:tool tag, self-scheduled
@@ -321,12 +321,12 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	broker := pubportal.NewBroker()
 	q.OnEvent(func(ev thought.Event) { broker.Publish(pubportal.QueueEvent(ev)) })
 
-	// Portal control service (S000407): assembled unconditionally and
+	// Portal control service: assembled unconditionally and
 	// bound from Deps, so an in-process front-end can observe without the
 	// gateway. It is served on PortalAddr when set. No authorizer is
 	// wired in production (OverrideAuthorizer is a test seam): IAM lands
-	// later, so attachments and control fail closed until then (S040200
-	// fail-closed stub).
+	// later, so attachments and control fail closed until then
+	// (fail-closed stub).
 	portalPlane := portal.NewHub(params.OverrideAuthorizer)
 	if err := portalPlane.Start(context.Background(), pubportal.Deps{
 		ThoughtSystem: q,
@@ -366,12 +366,12 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 	sessionM := session.NewSessionManager(store)
 
 	// In-flight agent tracker: the steering bridge resolves a running
-	// thought's agent for turn-boundary message injection (S010312
-	// running path; S010310). The runner registers each agent on run
+	// thought's agent for turn-boundary message injection
+	// (running path). The runner registers each agent on run
 	// start; the router closure runs outside q.mu (RouteMessage
 	// guarantee) so snapshot reads are safe.
 	tracker := newInFlightAgents()
-	// Per-thought agent events (S000407/NAVI-352): the runtime publishes
+	// Per-thought agent events (NAVI-352): the runtime publishes
 	// them onto the observation broker, where any subscriber sees them.
 	agentEvents := func(thoughtID string, ev agent.AgentEvent) {
 		broker.Publish(pubportal.Event{
@@ -396,7 +396,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 		agentEvents:    agentEvents,
 		providerConfig: rc.Provider,
 	})
-	// Steering bridge (S010312/S010310): binary runs route messages to
+	// Steering bridge: binary runs route messages to
 	// the in-flight agent's steering queue at turn boundaries. Daemon
 	// mode works too (messages may arrive for any running thought) —
 	// the bridge is harmless when no route targets a running thought.
@@ -441,7 +441,7 @@ func Assemble(params RuntimeParams) (*Runtime, error) {
 
 // agentDetail summarizes an agent event for the observation stream
 // (bounded length; never raw credentials). NAVI-352 moved the neutral
-// event type to the public contract; the agent-specific summary stays
+// event type to the public interface; the agent-specific summary stays
 // here, where the agent package is already in scope.
 func agentDetail(ev agent.AgentEvent) string {
 	if ev.Tool != nil {
@@ -466,7 +466,7 @@ func agentDetail(ev agent.AgentEvent) string {
 
 // bindOptions maps the runtime ToolPolicy onto the bridge's bind-time
 // policy: allowed/blocked name lists (deny wins) and per-tool timeout
-// overrides (internal/config ToolPolicy ↔ tools/bridge Policy).
+// overrides (internal/config ToolPolicy ↔ tool/bridge Policy).
 func bindOptions(tp config.ToolPolicy) bridge.Options {
 	timeouts := make(map[string]time.Duration, len(tp.Timeout))
 	for name, d := range tp.Timeout {
@@ -495,7 +495,7 @@ func noteCaps(tc *config.ToolCapsConfig) []note.Options {
 
 // httpEgress maps tool_caps.http config onto http registration options
 // (allow/deny lists, response cap). The auth resolver stays nil until
-// S100400 lands — authRef calls fail closed.
+// lands — authRef calls fail closed.
 func httpEgress(tc *config.ToolCapsConfig) []toolhttp.Options {
 	if tc == nil || tc.HTTP == nil {
 		return nil
@@ -510,7 +510,7 @@ func httpEgress(tc *config.ToolCapsConfig) []toolhttp.Options {
 // activeNames composes the default active set from the registered
 // tools and the runtime ToolPolicy: blocked tools are excluded (deny
 // wins), and a non-empty Allowed list restricts the set to those
-// names. Remaining access-level enforcement (S040200) lands with IAM.
+// names. Remaining access-level enforcement lands with IAM.
 func activeNames(names []string, tp config.ToolPolicy) []string {
 	blocked := make(map[string]bool, len(tp.Blocked))
 	for _, name := range tp.Blocked {
@@ -696,7 +696,7 @@ func (d *Runtime) startConnectors() (stopConnectors func()) {
 		}
 	}
 
-	// Serve the portal attachment (S000407) when PortalAddr is set
+	// Serve the portal attachment when PortalAddr is set
 	// (Runtime.Portal non-nil iff PortalAddr was set): same listener
 	// lifecycle and graceful shutdown ordering as the metrics server.
 	// The serve shim (portal.go) is a loopback-grade JSON mapping;

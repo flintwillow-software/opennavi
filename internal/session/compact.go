@@ -2,8 +2,7 @@ package session
 
 import ()
 
-// Context compaction (spec 03-session-context/01-session-management.md
-// §06): compacted entries are soft-deleted — flagged IsCompacted and
+// Context compaction: compacted entries are soft-deleted — flagged IsCompacted and
 // never removed — with a system-role summary entry inserted at the cut
 // point. Original history stays in the store for audit and search.
 // Session state mutation (ApplyCompaction) is public on the store data

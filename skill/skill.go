@@ -1,4 +1,4 @@
-// Package skill is the public skill contract (ADR 0004): a skill is a
+// Package skill is the public skill component (ADR 0004): a skill is a
 // self-contained capability bundle whose content is embedded in the
 // definition — instructions, examples, and constraints the navi loads
 // as context when the skill is active. Stdlib-only; no imports beyond

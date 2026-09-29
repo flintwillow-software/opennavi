@@ -1,4 +1,4 @@
-# Runtime config for navi-daemon (S000200 §04).
+# Runtime config for navi-daemon.
 #
 # This is the operator's deployment surface — it never modifies the
 # compiled navi definition. Point navi-daemon at it with NAVI_CONFIG.

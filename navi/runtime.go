@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/internal/config"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/provider"
-	"github.com/flintwillow-software/opennavi/llm"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/thought"
 )

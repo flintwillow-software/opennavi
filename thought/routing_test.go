@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// ── S010312 delivery scenarios ──────────────────────────────────────
+// ── delivery scenarios ──────────────────────────────────────
 
 func TestRouteMessageToPending(t *testing.T) {
 	q, st := routeQueue(t)
@@ -195,7 +195,7 @@ func TestRouteMessageTerminalRejections(t *testing.T) {
 		_ = path
 	}
 
-	// Failed thoughts are rejected with the retry hint (S010002).
+	// Failed thoughts are rejected with the retry hint.
 	if err := q.Enqueue(&Thought{ID: "f1", Prompt: "flaky", Priority: 4, Status: ThoughtPending}); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRouteMessageUnknownID(t *testing.T) {
 }
 
 // TestEveryRoutedAttemptEmitsAck: delivered and rejected attempts both
-// surface on the ack fanout (S010312 acknowledgment requirement).
+// surface on the ack fanout (acknowledgment requirement).
 func TestEveryRoutedAttemptEmitsAck(t *testing.T) {
 	q, _ := routeQueue(t)
 	// t1 enqueued first so the claim takes it (priority tie → stable
@@ -284,7 +284,7 @@ func TestEveryRoutedAttemptEmitsAck(t *testing.T) {
 	}
 }
 
-// ── foreground slot policy (S010003) ─────────────────────────────────
+// ── foreground slot policy ─────────────────────────────────
 
 func TestForegroundSlotClaimedByInteractiveThought(t *testing.T) {
 	// 3 slots: 1 foreground-reserved, 2 open.
@@ -404,7 +404,7 @@ func TestForegroundSlotValidation(t *testing.T) {
 }
 
 func TestRouteMessagePauseResumeRoundTrip(t *testing.T) {
-	// Full S010312 paused scenario: paused thought with checkpoint,
+	// Full paused scenario: paused thought with checkpoint,
 	// message arrives, thought resumes with the message attached.
 	q, _ := routeQueue(t)
 	if err := q.Enqueue(&Thought{ID: "w1", Prompt: "long task", Priority: 4, Status: ThoughtPending}); err != nil {

@@ -46,7 +46,7 @@ capability.
   consistency and auditability.
 - Capability audit is "read `main.go` and `go.mod`", not "inspect a plugin dir
   plus config at each layer."
-- The S000600 extension contract is out of scope until a concrete need for
+- The S000600 extension interface is out of scope until a concrete need for
   no-rebuild capability appears.
 
 ## Alternatives considered

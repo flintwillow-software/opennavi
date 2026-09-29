@@ -1,5 +1,5 @@
 // Package provider binds declared model descriptors (model.Provider) to
-// live llm adapters. It is the seam ADR 0009 implies but the contract
+// live llm adapters. It is the seam ADR 0009 implies but the interface
 // packages cannot hold: model/ stays stdlib-only and secret-free, so the
 // code that turns a CREDENTIAL REFERENCE into a value, and a descriptor
 // into an adapter, lives here as an implementation.
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/flintwillow-software/opennavi/llm"
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/model"
 )
 

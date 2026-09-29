@@ -1,4 +1,4 @@
-// Portal serve shim (S000407): the daemon serves the observation + control
+// Portal serve shim: the daemon serves the observation + control
 // portal so a remote gateway attachment can observe the navi's thought
 // process and — once IAM lands — control it.
 //
@@ -8,11 +8,11 @@
 // rather than an internal copy. The real wire protocol is still deferred
 // to 05-messaging.
 //
-// Authorization: OBSERVATION is an attachment (S000407) — the stream
+// Authorization: OBSERVATION is an attachment — the stream
 // carries prompt content and tool-input snippets, so attaching to it is
 // governed by the same portal authorization as control. Every request
 // authorizes through the wrapped portal's Attach; with no authorizer wired
-// (IAM pending) everything fails closed 403 (S040200).
+// (IAM pending) everything fails closed 403.
 package daemon
 
 import (

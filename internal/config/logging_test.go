@@ -69,7 +69,7 @@ func TestLoggingSectionValidation(t *testing.T) {
 // TestLoggingSectionYAMLLoads: the YAML surface parses (the config is
 // another way to turn the same knobs as the flags).
 func TestLoggingSectionYAMLLoads(t *testing.T) {
-	rc, err := LoadRuntimeFile("../../testdata/logging-config.yaml")
+	rc, err := LoadRuntimeFile("testdata/logging-config.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

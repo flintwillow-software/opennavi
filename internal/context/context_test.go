@@ -25,7 +25,7 @@ func TestShouldCompactMatrix(t *testing.T) {
 		{899, 10, false}, // above warning but few messages: no compact
 		{900, 10, true},  // at trigger: compact
 		{850, 60, true},  // at warning (>=) with many messages: compact
-		{800, 60, true},  // spec uses >= on the warning branch too
+		{800, 60, true},  // the design uses >= on the warning branch too
 		{0, 10, false},
 	}
 	for _, c := range cases {

@@ -26,7 +26,7 @@ import (
 //     write would make adopted work invisible)
 //   - Delete — record removal is the observable effect
 //
-// Loss window (documented honestly, S010002 delta): a kill -9 loses
+// Loss window (documented honestly, delta): a kill -9 loses
 // at most ONE flush interval of non-checkpoint mutations (by default
 // 250ms). Checkpoint/park writes are synchronous, so interrupt
 // durability is unchanged.
@@ -57,7 +57,7 @@ func (c Config) flushInterval() time.Duration {
 // FALLBACK: when the flusher is not running (disabled/legacy mode —
 // Config.FlushInterval < 0, or StartFlusher never called), the mark
 // degrades to a synchronous write — the store is the durability
-// contract and the flusher is the only other writer.
+// interface and the flusher is the only other writer.
 //
 // LOCKING: called WITH q.mu held (mutation paths). The fallback write
 // runs inside that lock (legacy semantics: write-through). The

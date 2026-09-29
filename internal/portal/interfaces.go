@@ -1,8 +1,8 @@
-// Package portal implements the navi's portal control plane (S000407):
+// Package portal implements the navi's portal control plane:
 // transport-agnostic observation and control of a navi's thought process,
 // authorized fail-closed.
 //
-// The observation and control contracts now live on the public `portal`
+// The observation and control interfaces now live on the public `portal`
 // package (NAVI-352 and its control follow-up). This internal package is
 // the compatibility surface the daemon and its tests use: aliases onto the
 // public types plus a `NewHub` shim for the public `Control` service, so
@@ -17,7 +17,7 @@ import (
 // refused attach/control action, never defaulted open.
 var ErrPortalUnauthorized = pubportal.ErrUnauthorized
 
-// Aliases onto the public contract types.
+// Aliases onto the public interface types.
 type (
 	PortalCategory     = pubportal.Category
 	PortalEvent        = pubportal.Event

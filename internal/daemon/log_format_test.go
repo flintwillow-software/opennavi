@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
-	"github.com/flintwillow-software/opennavi/llm"
 )
 
 // captureLog assembles a runtime with the given params (a piped logger

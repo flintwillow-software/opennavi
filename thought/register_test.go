@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // queueDef builds a complete ToolDefinition for seam tests, following
-// the tools/registry test convention.
+// the tool/registry test convention.
 func queueDef(name string) registry.ToolDefinition {
 	schema, _ := registry.ParseSchema(json.RawMessage(`{"type":"object"}`))
 	return registry.ToolDefinition{

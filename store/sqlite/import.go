@@ -15,7 +15,7 @@ const timeFormat = time.RFC3339Nano
 
 // ImportJSONL reads a JSONL file written by ExportJSONL (header line,
 // then one message per line) and inserts it as a new session within a
-// single transaction (spec §01.2 — atomic import). If the header
+// single transaction (— atomic import). If the header
 // carries a session ID that already exists, the import fails rather
 // than overwriting; use a fresh export or delete the target first.
 func (s *Store) ImportJSONL(path string) (*store.Session, error) {

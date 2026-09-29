@@ -9,7 +9,6 @@ import (
 )
 
 // SlotExhaustionPolicy determines what happens when all slots are full
-// (spec §3.1).
 type SlotExhaustionPolicy string
 
 const (
@@ -18,14 +17,14 @@ const (
 	PolicyQueue  SlotExhaustionPolicy = "queue"  // queue indefinitely (unbounded pending)
 )
 
-// Slot is one unit of processing capacity (spec §3.1).
+// Slot is one unit of processing capacity.
 type Slot struct {
 	ID        string
 	WorkerID  string
 	ThoughtID string
 	Reserved  bool // reserved for high-priority thoughts
 	// Foreground marks a slot held for the binary run's interactive
-	// thought (S010003): only foreground-tagged thoughts may claim
+	// thought: only foreground-tagged thoughts may claim
 	// it, so interactive work never starves behind daemon backlog.
 	// Foreground thoughts may still use open slots, and preemption
 	// applies to them like everything else (same priority rules).
@@ -36,12 +35,12 @@ type Slot struct {
 // number or lower) may use reserved slots and preempt running thoughts.
 const HighPriorityThreshold = 3
 
-// Config configures a Queue (spec §3.2).
+// Config configures a Queue.
 type Config struct {
 	MaxConcurrent int
 	PrioritySlots int
 	// ForegroundSlots reserves capacity for the binary run's
-	// interactive thought (S010003): foreground-tagged thoughts claim
+	// interactive thought: foreground-tagged thoughts claim
 	// these first (they may also use open slots), and non-foreground
 	// thoughts never occupy them. Same priority/preemption rules as
 	// every other slot. Disjoint from PrioritySlots.
@@ -63,7 +62,7 @@ type Config struct {
 	SlotExhaustion SlotExhaustionPolicy
 }
 
-// Queue is a priority queue with bounded capacity (spec §3.1).
+// Queue is a priority queue with bounded capacity.
 // Persistent state lives in a Store; the queue itself is the in-memory
 // scheduler over it.
 type Queue struct {
@@ -79,7 +78,7 @@ type Queue struct {
 	store Store
 
 	// steeringRouter delivers messages to a running thought's agent
-	// (S010312 running-path); invoked OUTSIDE q.mu — implementations
+	// (running-path); invoked OUTSIDE q.mu — implementations
 	// must not re-enter the queue. Wired by the runtime (NAVI-320).
 	steeringRouter SteeringRouter
 
@@ -101,7 +100,7 @@ type Queue struct {
 	handlers []func(Event)
 }
 
-// Store persists queue state (spec §3.4). The SQLite implementation
+// Store persists queue state. The SQLite implementation
 // (store/sqlite, migration v3) and an in-memory implementation
 // live alongside; the queue persists through this interface rather than
 // inventing a parallel storage layer.
@@ -113,7 +112,7 @@ type Store interface {
 }
 
 // NewQueue builds a queue with the given config and persistence, and
-// performs crash recovery (spec §3.5): previously-running thoughts
+// performs crash recovery: previously-running thoughts
 // return to pending for re-acquisition.
 func NewQueue(cfg Config, store Store) (*Queue, error) {
 	if cfg.MaxConcurrent <= 0 {
@@ -137,7 +136,7 @@ func NewQueue(cfg Config, store Store) (*Queue, error) {
 		slots[i] = Slot{
 			ID:       fmt.Sprintf("slot-%d", i+1),
 			Reserved: i < cfg.PrioritySlots, // priority thoughts fill reserved slots first
-			// Foreground reservation (S010003): carved from the tail of
+			// Foreground reservation: carved from the tail of
 			// the slot pool, disjoint from the priority-reserved head.
 			Foreground: i >= cfg.MaxConcurrent-cfg.ForegroundSlots,
 		}
@@ -154,7 +153,7 @@ func NewQueue(cfg Config, store Store) (*Queue, error) {
 	return q, nil
 }
 
-// recover implements crash recovery (spec §3.5): persisted thoughts are
+// recover implements crash recovery: persisted thoughts are
 // reloaded; running ones return to pending (they need re-acquisition).
 func (q *Queue) recover() error {
 	if q.store == nil {
@@ -204,12 +203,12 @@ func (q *Queue) OnEvent(fn func(Event)) {
 // thought waits for a worker to claim it. High-priority thoughts
 // preempt lower-priority running thoughts when no slot is free.
 //
-// The deferral parameter arrives on the thought itself (S130600 §02):
+// The deferral parameter arrives on the thought itself:
 // when t.DeferUntil is set, the thought is queued — and persisted —
 // immediately but is not claimable by the pool until the not-before
-// time passes (durable state, S010002). Self-scheduled thoughts
+// time passes (durable state). Self-scheduled thoughts
 // (Metadata origin `self`/`tool`) have their priority clamped to the
-// conservative band (§1.2) — a navi cannot enqueue its own work ahead
+// conservative band — a navi cannot enqueue its own work ahead
 // of external work by default.
 func (q *Queue) Enqueue(t *Thought) error {
 	if t.ID == "" {
@@ -251,7 +250,7 @@ func (q *Queue) Enqueue(t *Thought) error {
 
 	// Preemption: a high-priority thought with no free slot pauses the
 	// lowest-priority running thought, freeing a slot for the next
-	// claim (spec §3.2). Paused thoughts resume via Resume.
+	// claim. Paused thoughts resume via Resume.
 	t.UpdatedAt = time.Now().UTC()
 	q.pending = append(q.pending, t)
 	q.sortPending()
@@ -272,7 +271,7 @@ func (q *Queue) Enqueue(t *Thought) error {
 
 // Dequeue claims the highest-priority pending thought that is DUE and
 // for which a slot is available, transitions it to running, and
-// allocates the slot (spec §3.3, S130600 §02). Deferred thoughts are
+// allocates the slot. Deferred thoughts are
 // skipped until their not-before time passes — a deferred entry never
 // blocks a due thought of any priority. Returns ok=false when nothing
 // is claimable.
@@ -334,7 +333,7 @@ func (q *Queue) BumpPriority(id string, newPriority int) error {
 	return nil
 }
 
-// Pause stops a running thought and frees its slot (spec §2.2). The
+// Pause stops a running thought and frees its slot. The
 // checkpoint passed here (typically the runner's snapshot) is stored
 // on the thought for resume. Workers also use Pause to honour a
 // preemption request — it clears the PreemptRequested flag.
@@ -397,13 +396,13 @@ func (q *Queue) Resume(id string) error {
 	return nil
 }
 
-// Cancel a pending or paused thought (spec §2.2: running thoughts must
+// Cancel a pending or paused thought (running thoughts must
 // be paused/failed first).
 func (q *Queue) Cancel(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if t, idx := q.findRunning(id); t != nil {
-		_ = idx // running thoughts cancel via Pause first (spec §2.2)
+		_ = idx // running thoughts cancel via Pause first
 		return fmt.Errorf("thought: %s is running — pause it before cancelling", id)
 	}
 	if t, idx := q.findIn(q.pending, id); t != nil {
@@ -529,7 +528,7 @@ func (q *Queue) findSlotFor(t *Thought) string {
 			continue
 		}
 		if s.Foreground {
-			// Foreground reservation (S010003): held for foreground
+			// Foreground reservation: held for foreground
 			// thoughts only — daemon backlog cannot starve the
 			// interactive session, and a foreground thought prefers its
 			// reserved slot over consuming shared capacity.
@@ -549,7 +548,7 @@ func (q *Queue) findSlotFor(t *Thought) string {
 		}
 	}
 	// Foreground thoughts prefer their reserved slot, then normal
-	// capacity (schedulable like any other, S010003 §06).
+	// capacity (schedulable like any other).
 	if t.Foreground && foregroundFree != "" {
 		return foregroundFree
 	}
@@ -558,9 +557,9 @@ func (q *Queue) findSlotFor(t *Thought) string {
 
 // preemptCandidate picks the lowest-priority running thought the given
 // high-priority thought may preempt (only strictly lower-priority
-// victims; spec §3.2).
+// victims;).
 //
-// Slot-type rule (S010003 foreground reservation): a victim whose slot
+// Slot-type rule (foreground reservation): a victim whose slot
 // the preemptor could not claim must not be picked — preemption frees
 // the victim's slot for the preemptor, and freeing a slot the
 // preemptor can never use (a foreground slot, for a non-foreground
@@ -590,8 +589,8 @@ func (q *Queue) preemptCandidate(t *Thought) string {
 	return victimID
 }
 
-// preempt pauses the victim running thought (freeing its slot, spec
-// §2.2 running → paused) and parks it as paused for later resume;
+// preempt pauses the victim running thought (freeing its slot,
+// running → paused) and parks it as paused for later resume;
 // the caller's thought then starts on the freed slot.
 func (q *Queue) preempt(victimID string, by *Thought, evts *[]Event) {
 	// Cooperative preemption (caller holds q.mu): mark the victim — it
@@ -689,7 +688,7 @@ func (q *Queue) save(t *Thought) error {
 }
 
 // Retry returns a failed thought to the pending queue for
-// re-acquisition (spec §2.2: failed → pending).
+// re-acquisition (failed → pending).
 func (q *Queue) Retry(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -758,8 +757,8 @@ func (q *Queue) Slots() []Slot {
 	return out
 }
 
-// AppendContext appends a message to a thought's Context (S130600 §03
-// context append): the queue owns the record — callers mutate through
+// AppendContext appends a message to a thought's Context
+// (context append): the queue owns the record — callers mutate through
 // this method, never through GetThought clones (which the queue no
 // longer controls). Persisted with the change.
 func (q *Queue) AppendContext(id, msg string) error {
@@ -778,7 +777,7 @@ func (q *Queue) AppendContext(id, msg string) error {
 }
 
 // Delete removes a thought record entirely from the queue and its
-// persistence (S130600 §04). Lifecycle protection: a RUNNING thought
+// persistence. Lifecycle protection: a RUNNING thought
 // cannot be deleted in place — it must be paused or cancelled first
 // (the error names the constraint); terminal thoughts (complete/
 // cancelled) stay queued for inspection rather than deleted here.
@@ -807,7 +806,7 @@ func (q *Queue) Delete(id string) error {
 		q.mu.Unlock()
 		return fmt.Errorf("thought: delete %s: %w (state %s)", id, ErrThoughtProtected, t.Status)
 	}
-	// Ack event with the PRIOR status (S010312-style accounting:
+	// Ack event with the PRIOR status (-style accounting:
 	// metrics observers only see events — Detail names the gauge to
 	// decrement). Deferred collect/emit: event leaves q.mu's scope.
 	evts = append(evts, Event{
@@ -827,6 +826,6 @@ func (q *Queue) Delete(id string) error {
 	return nil
 }
 
-// The concrete runtime handle must satisfy the component contract, since
+// The concrete runtime handle must satisfy the component interface, since
 // components receive it narrowed to ThoughtSystem through Deps.
 var _ ThoughtSystem = (*Queue)(nil)

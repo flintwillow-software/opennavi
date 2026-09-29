@@ -3,16 +3,16 @@ package navi
 import (
 	"fmt"
 
+	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
-	"github.com/flintwillow-software/opennavi/tools/bridge"
-	"github.com/flintwillow-software/opennavi/tools/registry"
+	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
 // buildRegistry converts the declared Tools collection into the runtime
-// tool registry (S130400). The registry owns metadata, validation,
+// tool registry. The registry owns metadata, validation,
 // active-set membership, and dispatch; the runner binds a mode-selected
-// subset of it into each thought's agent executor via tools/bridge.
+// subset of it into each thought's agent executor via tool/bridge.
 //
 // The compiled default active set is every registered tool the navi's
 // permission ceiling permits. A thought's mode narrows that further at

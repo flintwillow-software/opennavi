@@ -1,12 +1,11 @@
-/bin/
-/data/
+/var/
 /go.work
 /go.work.sum
 /templates/navi-code/navi-code
 /templates/navi-daemon/navi-daemon
 /cmd/navi/navi.db
 /cmd/navi/navi.log
-/tools/external-navi/external-navi
-/tools/external-component/check
+/internal/testdata/external-navi/external-navi
+/internal/testdata/external-component/check
 /navi.db
 /navi.log

@@ -1,10 +1,10 @@
-// Package tool is the public tool contract (ADR 0004: contract
+// Package tool is the public tool component (ADR 0004: component
 // packages are public and dependency-light; ADR 0010: tools are
 // agent-callable actions that run inside a thought). Stdlib-only: it
 // must never import store/sqlite, llm/* adapters, internal/*, or navi
 // — an extension author imports THIS package, not the runtime.
 //
-// Def mirrors tools/registry's ToolDefinition FIELD-FOR-FIELD (the
+// Def mirrors tool/registry's ToolDefinition FIELD-FOR-FIELD (the
 // M4 catalog port must be mechanical): Name, Description, InputSchema,
 // OutputFormat, Access, Timeout, Recovery, Mode, Tags, Version,
 // PromptSnippet, PromptGuidelines, SourceInfo{Origin, Path}.
@@ -14,7 +14,7 @@
 // concern, not descriptor ABI. Def leaves it out (the public
 // descriptor is the 13 fields below); the M4 port expresses argument
 // preparation through the registry's registration option, keeping the
-// contract ABI free of an implementation migration detail.
+// component ABI free of an implementation migration detail.
 package tool
 
 import (
@@ -25,7 +25,7 @@ import (
 	"time"
 )
 
-// ToolAccess is the access level a tool call requires (S130000 §01).
+// ToolAccess is the access level a tool call requires.
 // The zero value is "any" for filters; definitions must set a real level.
 type ToolAccess int
 
@@ -40,7 +40,7 @@ const (
 	AccessExecute
 )
 
-// String returns the spec-facing access name.
+// String returns the canonical access name.
 func (a ToolAccess) String() string {
 	switch a {
 	case AccessReadOnly:
@@ -67,7 +67,7 @@ const (
 	ToolModeSequential
 )
 
-// String returns the spec-facing mode name.
+// String returns the canonical mode name.
 func (m ToolMode) String() string {
 	switch m {
 	case ToolModeParallel:
@@ -79,7 +79,7 @@ func (m ToolMode) String() string {
 	}
 }
 
-// ToolOrigin records who provided a tool (S130400 §01 provenance).
+// ToolOrigin records who provided a tool (provenance).
 type ToolOrigin int
 
 const (
@@ -91,11 +91,11 @@ const (
 	OriginSDK
 	// OriginAuthor tools are registered by a navi author.
 	OriginAuthor
-	// OriginExtension tools arrive via the extension contract (S000600).
+	// OriginExtension tools arrive via the extension interface.
 	OriginExtension
 )
 
-// String returns the spec-facing origin name.
+// String returns the canonical origin name.
 func (o ToolOrigin) String() string {
 	switch o {
 	case OriginBuiltin:
@@ -111,7 +111,7 @@ func (o ToolOrigin) String() string {
 	}
 }
 
-// SourceInfo records a tool's provenance (S130400 §01): where the
+// SourceInfo records a tool's provenance: where the
 // tool came from plus optional location metadata for audit and
 // filtering.
 type SourceInfo struct {
@@ -122,14 +122,14 @@ type SourceInfo struct {
 }
 
 // PrepareArguments migrates older argument shapes to the current
-// schema before validation (S130400 §06). The contract types the hook;
+// schema before validation. The interface types the hook;
 // the M4 port attaches it by registration option (see the package
 // note on the Def omission).
 type PrepareArguments func(args map[string]any) (map[string]any, error)
 
 // Schema is the JSON Schema tool-call arguments are validated against
-// before dispatch (S130400 §06) — a pragmatic stdlib-encoded subset,
-// constructed via ParseSchema (mirrors tools/registry.Schema).
+// before dispatch — a pragmatic stdlib-encoded subset,
+// constructed via ParseSchema (mirrors tool/registry.Schema).
 type Schema struct {
 	raw json.RawMessage
 }
@@ -196,7 +196,7 @@ type Def struct {
 }
 
 // Namespace returns the namespace of the tool name: the segment before
-// the first underscore (S130400 §04).
+// the first underscore.
 func (d Def) Namespace() string {
 	name, _, _ := strings.Cut(d.Name, "_")
 	return name

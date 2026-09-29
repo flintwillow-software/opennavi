@@ -53,7 +53,7 @@ func TestApplyCompactionSoftDeletes(t *testing.T) {
 		t.Fatalf("summary entry = %+v", summary)
 	}
 	if !summary.IsCompacted {
-		t.Fatal("summary entry should carry is_compacted=1 (spec §06)")
+		t.Fatal("summary entry should carry is_compacted=1")
 	}
 	if s.Entries[3].IsCompacted || s.Entries[4].IsCompacted {
 		t.Fatal("kept entries must not be flagged")

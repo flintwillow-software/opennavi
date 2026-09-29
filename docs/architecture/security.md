@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-28'
 tags:
   - architecture
   - security
@@ -39,9 +39,14 @@ The catalog ships granular tools so authors can omit dangerous operations
 rather than trust policy to restrain them:
 
 ```go
-n.Tools.Add(tools.TodoRead(store))
-n.Tools.Add(tools.TodoUpdate(store))
-// todo_create and todo_delete are never imported — absent from the binary
+todos, _ := todo.Tools(naviID, state)
+for _, t := range todos {
+    switch t.Def.Name {
+    case "todo_read", "todo_update":
+        n.Tools.Add(t)
+    }
+}
+// todo_create and todo_delete are never declared — absent from the binary
 ```
 
 What is not imported cannot be reached by a prompt, a mode, or a misconfigured
@@ -49,11 +54,11 @@ policy. This is the primary security control.
 
 ## Permissions
 
-- The compiled `.Permissions` policy is the **ceiling**.
-- `.config/navi/<name>/policy.yaml` and runtime config may only add restrictions.
+- The compiled `Permissions` policy is the **ceiling**.
+- Runtime config may only add restrictions.
 - **Deny wins over allow.**
-- Granting a navi more than its binary declares requires rebuilding and
-  re-signing — never a config edit.
+- Granting a navi more than its binary declares requires rebuilding — and, once
+  artifact signing lands, re-signing — never a config edit.
 
 ```
 compiled policy  ── ceiling ──▶  runtime policy  ── effective ──▶  tool call
@@ -72,8 +77,8 @@ execution surface without shipping two binaries.
 Every tool declares its origin (`builtin`, `sdk`, `author`, `extension`) and,
 for build-time modules, its module path and version. Populated from
 `runtime/debug.ReadBuildInfo()`, a running navi can report exactly which module
-provided each capability. `go.sum` plus the binary signature form the
-supply-chain record.
+provided each capability. `go.mod`/`go.sum` plus build info are the
+supply-chain record; artifact signing is deferred (see below).
 
 ## Secrets
 
@@ -87,12 +92,14 @@ supply-chain record.
   component with a clear error rather than silently degrading.
 
 ```go
-connector.Discord(connector.Config{Credential: "DISCORD_TOKEN"})
+model.OpenRouter("anthropic/claude-sonnet-4", model.WithCredential("OPENROUTER_API_KEY"))
 ```
 
 ## Trust boundary
 
-What a signature attests to:
+Artifact signing is **not implemented yet**; the supply-chain record today is
+the module graph (`go.mod`/`go.sum`) plus build info. When signing lands
+(deferred, ADR 0005), a signature will attest to:
 
 - the exact source and dependency graph that produced the binary,
 - the compiled permission policy, tools, models, and connectors,
@@ -104,7 +111,7 @@ What it does **not** attest to (runtime, operator-controlled):
 - runtime policy tightening,
 - schedules.
 
-Runtime plugins (S000600) are deferred (ADR 0005). If introduced, they register
+Runtime plugins are deferred (ADR 0005). If introduced, they register
 into the same tool registry under a distinct origin and require an explicit
 allow-signers declaration; they never widen the compiled policy.
 

@@ -13,7 +13,7 @@ import (
 )
 
 // StatefulStore implements store.StatefulToolStore on SQLite
-// (migration 6, S130500 §07): durable todo and note state for
+// (migration 6): durable todo and note state for
 // stateful catalog tools, in the same database as sessions/thoughts.
 // Per-navi scoping is enforced here — every query is filtered on
 // navi_id, so two navis sharing one DB never see each other's state.

@@ -25,7 +25,7 @@ func newTestStatefulStore(t *testing.T) (*StatefulStore, string) {
 }
 
 // reopenStatefulStore reopens the same database file — the
-// "state survives restart" scenario (S130500 §07).
+// "state survives restart" scenario.
 func reopenStatefulStore(t *testing.T, path string) *StatefulStore {
 	t.Helper()
 	st, err := Open(path, Options{})

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Metric name prefix (issue spec): opennavi_*.
+// Metric name prefix: opennavi_*.
 const prefix = "opennavi"
 
 // renderOptions tunes exposition (subset for tests).

@@ -17,7 +17,7 @@ const (
 )
 
 // Session is the primary unit of conversation: an ordered sequence of
-// entries with branching support (spec §03).
+// entries with branching support.
 type Session struct {
 	ID      string
 	Name    string
@@ -57,7 +57,7 @@ func NewSession(agentID, workDir string) *Session {
 }
 
 // AppendEntry adds an entry to the sequence, filling in the ID and
-// timestamp when unset, and advances Current (spec §03).
+// timestamp when unset, and advances Current.
 func (s *Session) AppendEntry(entry SessionEntry) {
 	if entry.ID == "" {
 		entry.ID = NewUUID()
@@ -131,7 +131,7 @@ func (s *Session) Clone() *Session {
 // MessageCount returns the number of entries.
 func (s *Session) MessageCount() int { return len(s.Entries) }
 
-// Info renders the list-view projection of the session (spec §04).
+// Info renders the list-view projection of the session.
 func (s *Session) Info() SessionInfo {
 	return SessionInfo{
 		ID:           s.ID,

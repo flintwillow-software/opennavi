@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-28'
 tags:
   - architecture
   - plan
@@ -16,13 +16,11 @@ tags:
 
 ## Target
 
-Current: `cmd/navi` + `internal/daemon.Assemble` hardcode the runtime; `sdk/`
-is a validation stub that nothing bridges to.
-
-Target: a public `navi` composition root over public contract packages
-(`tool`, `thought`, `connector`, `portal`, `model`, `skill`), with
-implementations behind them, `cmd/navi` reduced to a reference navi, and the
-starter templates as real out-of-repo-style navis.
+**Shipped.** The rewrite is complete: a public `navi` composition root over
+public component packages (`tool`, `thought`, `connector`, `portal`, `model`,
+`skill`), with implementations behind them, `cmd/navi` reduced to a reference
+navi, and the starter templates as real out-of-repo-style navis. `sdk/` — the
+old authoring stub — is retired.
 
 See [overview.md](./overview.md), [runtime.md](./runtime.md),
 [security.md](./security.md), [extension-model.md](./extension-model.md).
@@ -32,7 +30,7 @@ See [overview.md](./overview.md), [runtime.md](./runtime.md),
 | ID | Goal | Depends on | Verification gate | Huly |
 |---|---|---|---|---|
 | **M0** | Freeze design + decisions | — | ADRs accepted ✅ (2026-09-24) | NAVI-344 |
-| **M1** | Create leaf contract packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
+| **M1** | Create leaf component packages: `tool`, `skill`, `model`, `thought` (interface), `connector`, `portal` — stdlib-only, no behavior changes | M0 | `go build ./...`, unit tests for new types | NAVI-345 |
 | **M2** | Build the `navi` composition root: `New`, `With*` options, collections, `Add` validation, freeze-on-`Run`, cross-cutting validation | M1 | Run a mock-provider navi end-to-end in a test | NAVI-343 |
 | **M3** | Promote `internal/thought` → public `thought/`; split `internal/interfaces` into `connector`/`portal`; keep queue semantics | M1 | Existing queue/routing/recovery tests green | NAVI-348 |
 | **M4** | Port the catalog to the collection model: builtin tools, todo/note/time/http/thoughts tools, skills, providers, cron connector, TUI/gateway portals | M2, M3 | Catalog parity with today's tool set and active-set behavior | NAVI-342 |
@@ -50,13 +48,13 @@ the composition-root package is named `navi`; connectors/portals receive a
 per-domain `Deps` struct and never import `navi`; and egress tools are added
 explicitly via `connector.SendTool()` (no auto-registration).
 
-### M1 — contract packages
+### M1 — component packages
 
 - Define types by *consumption*: `connector.Deps` and `portal.Deps` expose
   `thought.ThoughtSystem`, `model.Registry`, `*slog.Logger`.
-- Keep `tool` aligned with the existing `tools/registry` descriptor so the
+- Keep `tool` aligned with the existing `tool/registry` descriptor so the
   catalog port is mechanical.
-- Contract packages must not import `store/sqlite`, `llm/*` adapters, or
+- Component packages must not import `store/sqlite`, `internal/llm` adapters, or
   `internal/*`.
 - Memory is deliberately **not** part of M1. Short-term memory is
   navi-internal — the navi's own working state rather than an extension-surface
@@ -90,14 +88,16 @@ explicitly via `connector.SendTool()` (no auto-registration).
 
 ### M6 — guardrail
 
-- The current `S000805` guardrail builds the two in-tree templates. Extend it
-  with a synthetic external navi module and an external component module that
-  import only public contract packages.
+- The starter-template guardrail (CI job `templates`) builds the two in-tree
+  templates against the checkout.
+- A separate CI job (`external-consumer`) builds two synthetic out-of-repo
+  modules — `internal/testdata/external-navi` and `internal/testdata/external-component` — that import
+  only public component packages, and asserts the component's import boundary.
 
 ## Explicitly out of scope
 
-- Runtime plugins (S000600) — deferred (ADR 0005).
-- Cloud platform / marketplace components (S000900).
+- Runtime plugins — deferred (ADR 0005).
+- Cloud platform / marketplace components.
 - Memory subsystem rewrite; this plan moves visibility, not semantics. The
   *model* is still documented in [memory.md](./memory.md), and delivery is
   NAVI-350 (long-term) and NAVI-351 (short-term).
@@ -111,14 +111,14 @@ capability backlog. Existing Huly work is triaged as:
 | Disposition | Issues |
 |---|---|
 | **Superseded** (canceled) | NAVI-68 (`navi.yaml` definition model), NAVI-69 (builder/compiler pipeline), NAVI-74 (build pipeline & Makefile) — children of the old NAVI-48 foundation epic |
-| **Deferred** | NAVI-72 (runtime extension contract) — ADR 0005; revisit if a no-rebuild need appears |
+| **Deferred** | NAVI-72 (runtime extension interface) — ADR 0005; revisit if a no-rebuild need appears |
 | **Reshaped** | NAVI-70 (trust/signing → `security.md`), NAVI-71 (layout → package layout), NAVI-73 (`navi init` → navi repo scaffold), NAVI-256 (config → defaults-in-code) |
-| **Re-homed** | NAVI-89 (messaging → connectors / portals / thought-system), NAVI-59 (tool catalog → `tool` contract), NAVI-97 (providers → `Models` collection) |
+| **Re-homed** | NAVI-89 (messaging → connectors / portals / thought-system), NAVI-59 (tool catalog → `tool` component), NAVI-97 (providers → `Models` collection) |
 | **Absorbed** | NAVI-339 (thought scoping) → M3/M4 |
 | **Orthogonal** (proceeds independently) | NAVI-50, NAVI-183, NAVI-79, NAVI-82, NAVI-39, and standalone follow-ups |
 
 Interface-affected epics are linked `is-blocked-by` the milestone that provides
-their new contract (NAVI-59/89/97 ← M1, NAVI-256 ← M2) and `relates-to` where they
+their new interface (NAVI-59/89/97 ← M1, NAVI-256 ← M2) and `relates-to` where they
 are merely adjacent (NAVI-266 ↔ M4).
 
 ## Tracking

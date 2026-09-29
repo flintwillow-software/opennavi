@@ -9,12 +9,12 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// This file is the public control counterpart of the observation contract:
+// This file is the public control counterpart of the observation interface:
 // a Portal implementation that authorizes attach/control actions and
 // applies them through the thought-system handle, binding both at Start
 // from Deps. The gateway frames it over HTTP; the in-process TUI controls
 // the thought system directly. Authorization fails closed with no
-// authorizer wired (S040200): IAM lands later.
+// authorizer wired: IAM lands later.
 
 // Action enumerates portal control operations for authorization.
 type Action string

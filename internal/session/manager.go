@@ -6,7 +6,7 @@ import (
 )
 
 // SessionManager manages the session lifecycle on top of a Store
-// (spec §04, narrowed to the #149 scope: create, pause, resume, close).
+// (, narrowed to the #149 scope: create, pause, resume, close).
 type SessionManager struct {
 	store Store
 }
@@ -49,7 +49,7 @@ func (m *SessionManager) LoadSession(id string) (*Session, error) {
 }
 
 // ForkSession creates a child session branching from the parent at the
-// parent's Current position (spec §05): entries up to Current are
+// parent's Current position: entries up to Current are
 // copied; the child gets parent_id linkage and independent history
 // afterwards. The fork point entry also becomes the child's ParentID
 // entry linkage.
@@ -137,7 +137,7 @@ func (m *SessionManager) ListSessions(opts ListOptions) ([]SessionInfo, error) {
 	return out, nil
 }
 
-// TagSession adds a tag to a session (spec §02 session_tags; a tag is
+// TagSession adds a tag to a session (session_tags; a tag is
 // not duplicated on the same session).
 func (m *SessionManager) TagSession(id, tag string) (*Session, error) {
 	s, err := m.LoadSession(id)

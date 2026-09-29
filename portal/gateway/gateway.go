@@ -1,4 +1,4 @@
-// Package gateway implements the HTTP portal gateway (S000407): a
+// Package gateway implements the HTTP portal gateway: a
 // portal.Portal that serves the bounded observation stream and control
 // channel over HTTP, so a remote front-end can observe and steer a navi.
 //
@@ -7,7 +7,7 @@
 // portal (the shared Hub). That keeps one authorization path — the
 // gateway never decides who may control a thought. The real wire protocol
 // is deferred (05-messaging); until then this is the loopback-grade JSON
-// mapping the daemon shim used, now a component on the public contract.
+// mapping the daemon shim used, now a component on the public interface.
 package gateway
 
 import (

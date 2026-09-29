@@ -24,7 +24,7 @@ func TestEventKinds(t *testing.T) {
 }
 
 // stubTS proves structural satisfaction (ADR 0004 rule 2): a plain
-// struct implementing ThoughtSystem's methods conforms — the contract
+// struct implementing ThoughtSystem's methods conforms — the interface
 // never names the runtime.
 type stubTS struct {
 	queued []*Thought

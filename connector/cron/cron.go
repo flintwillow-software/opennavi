@@ -1,7 +1,7 @@
 // Package cron implements the cron connector (ADR 0010): a
 // connector.Connector that turns recurring schedule definitions into
 // thoughts. Cron is a thought-system primitive — a recurring routine is a
-// thought factory — exposed through the connector contract so it arrives
+// thought factory — exposed through the connector interface so it arrives
 // through the same door as any other inbound transport.
 package cron
 
@@ -93,10 +93,10 @@ func (c *Connector) Stop() error {
 }
 
 // enqueuer adapts the component-facing thought system onto the
-// scheduler's Enqueue contract.
+// scheduler's Enqueue interface.
 type enqueuer struct{ ts thought.ThoughtSystem }
 
 func (e enqueuer) Enqueue(t *thought.Thought) error { return e.ts.Enqueue(t) }
 
-// Compile-time check: the connector satisfies the public contract.
+// Compile-time check: the connector satisfies the public interface.
 var _ connector.Connector = (*Connector)(nil)

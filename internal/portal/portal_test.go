@@ -26,7 +26,7 @@ func (a denyAuth) Authorize(action PortalAction, identity string) error {
 	return errors.New("denied by test authorizer")
 }
 
-// newQueue builds a queue over an in-memory store for contract tests.
+// newQueue builds a queue over an in-memory store for conformance tests.
 func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
 	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 4, PrioritySlots: 0, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
@@ -179,7 +179,7 @@ func TestPortalFansDeliveryAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	// RouteMessage on a pending thought takes the context-append path
-	// (S010312) and emits the delivery-ack event.
+	// and emits the delivery-ack event.
 	path, err := q.RouteMessageWithPath("t2", "hello")
 	if err != nil {
 		t.Fatalf("RouteMessage: %v", err)
@@ -287,7 +287,7 @@ func TestControlActionsApplyAndEmit(t *testing.T) {
 func TestUnauthorizedControlRefused(t *testing.T) {
 	q := newQueue(t)
 
-	// No authorizer: every action fails closed (S040200).
+	// No authorizer: every action fails closed.
 	p, _ := newBrokerHub(t, q, nil)
 	if err := p.Attach("u"); !errors.Is(err, ErrPortalUnauthorized) {
 		t.Errorf("attach: %v, want ErrPortalUnauthorized", err)
