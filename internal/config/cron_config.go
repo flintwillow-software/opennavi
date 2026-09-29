@@ -1,10 +1,6 @@
 package config
 
-import (
-	"fmt"
-
-	"github.com/flintwillow-software/opennavi/internal/cron"
-)
+import "fmt"
 
 // CronSchedule is one named cron schedule in the runtime config
 // (.config/navi/<name>/config.yaml, cron interface). Under the
@@ -58,21 +54,4 @@ func (c CronConfig) Validate() error {
 		}
 	}
 	return nil
-}
-
-// ToSchedulerDefs converts validated runtime schedules to the
-// scheduler's ScheduleDef shape (nil-Enabled → not disabled).
-func (c CronConfig) ToSchedulerDefs() []cron.ScheduleDef {
-	out := make([]cron.ScheduleDef, 0, len(c.Schedules))
-	for _, s := range c.Schedules {
-		out = append(out, cron.ScheduleDef{
-			Name:     s.Name,
-			Expr:     s.Expr,
-			Prompt:   s.Prompt,
-			Priority: s.Priority,
-			TZ:       s.TZ,
-			Disabled: s.Enabled != nil && !*s.Enabled,
-		})
-	}
-	return out
 }
