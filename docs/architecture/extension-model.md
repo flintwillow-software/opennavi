@@ -42,6 +42,14 @@ Out-of-repo modules import **component packages only**, never `navi`. This keeps
 the graph acyclic and prevents an extension from dragging runtime internals into
 consumers.
 
+Component packages are **stdlib-only**: importing one must not transitively pull
+an implementation package (`store`, `tool/registry`, the runtime under
+`internal/`). The `external-consumer` CI job asserts this as *contract-purity*
+over the component module's whole dependency closure — not just its direct
+imports (NAVI-355). A registration seam that needs the registry (the
+queue-handle binding) therefore lives in `tool/registry`, not in the `thought`
+contract.
+
 ## Writing a component
 
 A third-party tool is a normal module:
@@ -154,7 +162,8 @@ register into the same tool registry at a distinct trust level.
   component module — against `main` and every release tag, in addition to the
   in-tree starter templates. `internal/testdata/external-navi` and
   `internal/testdata/external-component` are those modules; the `external-consumer` CI job
-  builds them and asserts the component's import boundary.
+  builds them and asserts the component's import boundary — direct imports are
+  contract-only and the full dependency closure is contract-pure.
 - `SourceInfo` is populated from build info so provenance is auditable at
   runtime.
 

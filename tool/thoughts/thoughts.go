@@ -5,7 +5,7 @@
 // (thoughts_update), and remove records (thoughts_delete).
 //
 // The tools are queue-attached catalog tools: registered through
-// thought.RegisterQueueTools, every handler receives
+// registry.RegisterQueueTools, every handler receives
 // the navi's own queue handle per dispatch and operates through the
 // queue's public API only — mutations never touch GetThought clones
 // (the queue owns its records). Snapshot reads (GetThoughts/GetThought)
@@ -55,14 +55,14 @@ func Register(reg *registry.Registry, q *thought.Queue) error {
 	if q == nil {
 		return errors.New("thoughts: queue is required")
 	}
-	handle := thought.QueueHandle{Queue: q}
-	tools := []thought.QueueTool{
+	handle := registry.QueueHandle{Queue: q}
+	tools := []registry.QueueTool{
 		{Def: readDef(), Handler: handleRead},
 		{Def: createDef(), Handler: handleCreate},
 		{Def: updateDef(), Handler: handleUpdate},
 		{Def: deleteDef(), Handler: handleDelete},
 	}
-	return thought.RegisterQueueTools(reg, handle, tools)
+	return registry.RegisterQueueTools(reg, handle, tools)
 }
 
 // Tools returns the four thought-management tools as public component
@@ -72,8 +72,8 @@ func Tools(q *thought.Queue) ([]tool.Tool, error) {
 	if q == nil {
 		return nil, errors.New("thoughts: queue is required")
 	}
-	handle := thought.QueueHandle{Queue: q}
-	pairs := []thought.QueueTool{
+	handle := registry.QueueHandle{Queue: q}
+	pairs := []registry.QueueTool{
 		{Def: readDef(), Handler: handleRead},
 		{Def: createDef(), Handler: handleCreate},
 		{Def: updateDef(), Handler: handleUpdate},
@@ -214,7 +214,7 @@ func deleteDef() registry.ToolDefinition {
 // handleRead implements thoughts_read: queue snapshot,
 // optional status filter, ordered by priority then most recent
 // activity.
-func handleRead(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
+func handleRead(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	status := thought.ThoughtStatus("")
 	if raw, ok := args["status"]; ok {
 		s, ok := raw.(string)
@@ -257,7 +257,7 @@ func handleRead(ctx context.Context, args map[string]any, handle thought.QueueHa
 // thought tagged origin:tool — the queue clamps self-scheduled
 // priority at Enqueue. Optional defer_until makes the
 // thought durable-but-not-claimable until the timestamp passes.
-func handleCreate(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
+func handleCreate(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	prompt, err := stringField(args, "prompt")
 	if err != nil {
 		return "", fmt.Errorf("thoughts_create: %w", err)
@@ -322,7 +322,7 @@ func handleCreate(ctx context.Context, args map[string]any, handle thought.Queue
 // by id — clamped priority, lifecycle transitions, context append.
 // Mutations go through the queue's public API; snapshot reads provide
 // the values the clamp needs (GetThought returns clones).
-func handleUpdate(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
+func handleUpdate(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	id, err := stringField(args, "id")
 	if err != nil {
 		return "", fmt.Errorf("thoughts_update: %w", err)
@@ -399,7 +399,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle thought.Queue
 
 // handleDelete implements thoughts_delete: record removal —
 // running thoughts protected (cancel first via thoughts_update).
-func handleDelete(ctx context.Context, args map[string]any, handle thought.QueueHandle) (string, error) {
+func handleDelete(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	id, err := stringField(args, "id")
 	if err != nil {
 		return "", fmt.Errorf("thoughts_delete: %w", err)

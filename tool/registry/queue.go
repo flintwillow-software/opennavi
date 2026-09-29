@@ -1,45 +1,51 @@
-// Queue-handle registration seam: catalog tools bound to
-// the navi's OWN thought-queue handle at registration, with full
-// registry governance (complete Definition metadata, schema validation,
-// active-set membership, access levels per /) flowing
-// through registry.Register exactly as for any catalog tool. This seam
-// only adds the per-dispatch handle binding — the same shape as
-// RegisterStateful's store binding — so the thought
-// loop itself stays hidden from tool callers behind the public queue
-// surface.
+// Queue-handle registration seam: catalog tools bound to a navi's OWN
+// thought-queue handle at registration, with full registry governance
+// (complete ToolDefinition metadata, schema validation, active-set
+// membership, access levels) flowing through Registry.Register exactly
+// as for any catalog tool. This seam only adds the per-dispatch handle
+// binding — the same shape as RegisterStateful's store binding — so the
+// thought loop itself stays hidden from tool callers behind the public
+// queue surface.
+//
+// It lives in tool/registry rather than in the thought contract package
+// (NAVI-355): the contract packages are the dependency-light public
+// surface (ADR 0004), and a registration seam that needs the registry
+// must not drag the registry (and the store behind it) into `thought`'s
+// import closure. A component that imports only `thought` now compiles
+// nothing but stdlib.
 //
 // Discipline: queue-attached handlers observe the queue through
 // snapshots (GetThoughts/GetThought return clones the queue no longer
 // mutates) and MUST NOT re-enter the queue from an event handler while
 // q.mu is held — the queue emits events outside the lock and the same
 // rule governs the metrics collector (#280).
-package thought
+package registry
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"github.com/flintwillow-software/opennavi/tool/registry"
+	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // QueueHandle is the per-dispatch handle handed to queue-attached tool
 // handlers: the navi's own queue, bound at registration time.
 type QueueHandle struct {
 	// Queue is the thought queue this registration's tools operate on.
-	Queue *Queue
+	Queue *thought.Queue
 }
 
 // QueueHandler executes a queue-attached tool call. Args arrive
 // pre-validated against the definition's InputSchema as a decoded JSON
-// object, exactly like registry.Handler; handle carries the queue for
-// the navi this registration was bound to.
+// object, exactly like Handler; handle carries the queue for the navi
+// this registration was bound to.
 type QueueHandler func(ctx context.Context, args map[string]any, handle QueueHandle) (string, error)
 
 // QueueTool pairs a complete ToolDefinition with its queue-attached
 // handler for RegisterQueueTools.
 type QueueTool struct {
-	Def     registry.ToolDefinition
+	Def     ToolDefinition
 	Handler QueueHandler
 }
 
@@ -51,12 +57,12 @@ type QueueTool struct {
 // provided per tool. The registration returns at the first error and
 // earlier tools stay registered (the registry applies/validates each
 // Register independently, like RegisterStateful).
-func RegisterQueueTools(reg *registry.Registry, handle QueueHandle, tools []QueueTool, opts ...registry.Option) error {
+func RegisterQueueTools(reg *Registry, handle QueueHandle, tools []QueueTool, opts ...Option) error {
 	if reg == nil {
-		return errors.New("thought: queue-tool registration: registry is required")
+		return errors.New("registry: queue-tool registration: registry is required")
 	}
 	if handle.Queue == nil {
-		return errors.New("thought: queue-tool registration: queue handle is required")
+		return errors.New("registry: queue-tool registration: queue handle is required")
 	}
 	for _, tool := range tools {
 		if tool.Handler == nil {
