@@ -10,29 +10,29 @@ import (
 
 func TestStateStoreRoundTrip(t *testing.T) {
 	db := testStateDB(t)
-	ss := NewStateStore(db)
+	ss := newStateStore(db)
 
-	// LastFired on unknown schedule: zero time, no error.
-	got, err := ss.LastFired("never")
+	// lastFired on unknown schedule: zero time, no error.
+	got, err := ss.lastFired("never")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.IsZero() {
-		t.Fatalf("LastFired(never) = %v, want zero", got)
+		t.Fatalf("lastFired(never) = %v, want zero", got)
 	}
 
-	// RecordFire advances last_fired and fire_count.
+	// recordFire advances last_fired and fire_count.
 	at := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
-	if err := ss.RecordFire("health-check", at); err != nil {
+	if err := ss.recordFire("health-check", at); err != nil {
 		t.Fatal(err)
 	}
-	if err := ss.RecordFire("health-check", at.Add(time.Minute)); err != nil {
+	if err := ss.recordFire("health-check", at.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
 	// NextDue round-trip.
 	due := time.Date(2026, 9, 6, 13, 0, 0, 0, time.UTC)
-	if err := ss.SetNextDue("health-check", due); err != nil {
+	if err := ss.setNextDue("health-check", due); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,17 +65,17 @@ func TestStateStoreRoundTrip(t *testing.T) {
 
 func TestStateStoreMultipleSchedules(t *testing.T) {
 	db := testStateDB(t)
-	ss := NewStateStore(db)
+	ss := newStateStore(db)
 	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
-	if err := ss.RecordFire("a", now); err != nil {
+	if err := ss.recordFire("a", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := ss.RecordFire("b", now.Add(time.Second)); err != nil {
+	if err := ss.recordFire("b", now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	// Independent rows.
-	a, _ := ss.LastFired("a")
-	b, _ := ss.LastFired("b")
+	a, _ := ss.lastFired("a")
+	b, _ := ss.lastFired("b")
 	if !a.Equal(now) || !b.Equal(now.Add(time.Second)) {
 		t.Fatalf("a=%v b=%v", a, b)
 	}
@@ -88,7 +88,7 @@ func testStateDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if err := MigrateState(st.DB()); err != nil {
+	if err := migrateState(st.DB()); err != nil {
 		t.Fatal(err)
 	}
 	return st.DB()

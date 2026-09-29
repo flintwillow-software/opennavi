@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
-	internalcron "github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -95,7 +94,7 @@ func testCronDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if err := internalcron.MigrateState(st.DB()); err != nil {
+	if err := migrateState(st.DB()); err != nil {
 		t.Fatal(err)
 	}
 	return st.DB()
@@ -113,7 +112,7 @@ func TestCronCoalescesMissedTick(t *testing.T) {
 	db := testCronDB(t)
 	// Seed a last-fired far enough in the past that the next minute is
 	// already overdue.
-	if err := internalcron.NewStateStore(db).RecordFire("every-minute", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+	if err := newStateStore(db).recordFire("every-minute", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	q := newQueue(t)
@@ -126,7 +125,7 @@ func TestCronCoalescesMissedTick(t *testing.T) {
 	}
 	defer c.Stop()
 
-	// MissedTick runs synchronously before the scheduler starts.
+	// missedTick runs synchronously before the scheduler starts.
 	found := false
 	for _, th := range q.GetThoughts() {
 		if th.Metadata["schedule"] == "every-minute" && th.Metadata["missed"] == "true" {
@@ -138,7 +137,7 @@ func TestCronCoalescesMissedTick(t *testing.T) {
 	}
 }
 
-// TestCronRecordsFireStateOnClaim wires RecordFire to the queue's started
+// TestCronRecordsFireStateOnClaim wires recordFire to the queue's started
 // event: a schedule thought reaching a worker advances last_fired.
 func TestCronRecordsFireStateOnClaim(t *testing.T) {
 	db := testCronDB(t)
@@ -170,10 +169,10 @@ func TestCronRecordsFireStateOnClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state := internalcron.NewStateStore(db)
+	state := newStateStore(db)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if last, err := state.LastFired("s"); err == nil && !last.IsZero() {
+		if last, err := state.lastFired("s"); err == nil && !last.IsZero() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

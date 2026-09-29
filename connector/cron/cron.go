@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
-	internalcron "github.com/flintwillow-software/opennavi/internal/cron"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -43,7 +42,7 @@ type Config struct {
 // bound to the navi's thought system, Stop halts it.
 type Connector struct {
 	cfg   Config
-	sched *internalcron.Scheduler
+	sched *scheduler
 	// stateDB persists tick state (last_fired/fire_count) and enables
 	// missed-tick coalescing. nil = in-memory only.
 	stateDB *sql.DB
@@ -85,12 +84,12 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 	if c.now != nil {
 		now = c.now
 	}
-	s := internalcron.NewScheduler(enqueuer{ts: deps.ThoughtSystem})
+	s := newScheduler(deps.ThoughtSystem)
 	if c.now != nil {
 		s.SetClock(c.now)
 	}
 	for _, def := range c.cfg.Schedules {
-		if err := s.Add(internalcron.ScheduleDef{
+		if err := s.Add(scheduleSpec{
 			Name:     def.Name,
 			Expr:     def.Expr,
 			Prompt:   def.Prompt,
@@ -116,18 +115,18 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 
 // wireState enables tick-state persistence and missed-tick coalescing when a
 // state store was supplied. It runs before the scheduler starts: missed ticks
-// are coalesced once at Start, and RecordFire is wired to the queue's started
+// are coalesced once at Start, and recordFire is wired to the queue's started
 // event (the claim boundary), keyed by the schedule named in the thought's
-// metadata — a key that never meets MissedTick's coalescing rows, which carry
+// metadata — a key that never meets missedTick's coalescing rows, which carry
 // `missed: true`. With no state store this is a no-op (in-memory only).
-func (c *Connector) wireState(deps connector.Deps, s *internalcron.Scheduler, now func() time.Time) error {
+func (c *Connector) wireState(deps connector.Deps, s *scheduler, now func() time.Time) error {
 	if c.stateDB == nil {
 		return nil
 	}
-	if err := internalcron.MigrateState(c.stateDB); err != nil {
+	if err := migrateState(c.stateDB); err != nil {
 		return err
 	}
-	state := internalcron.NewStateStore(c.stateDB)
+	state := newStateStore(c.stateDB)
 
 	deps.ThoughtSystem.OnEvent(func(ev thought.Event) {
 		if ev.Kind != thought.EventStarted {
@@ -141,23 +140,23 @@ func (c *Connector) wireState(deps connector.Deps, s *internalcron.Scheduler, no
 		if name == "" {
 			return
 		}
-		_ = state.RecordFire(name, now().UTC())
+		_ = state.recordFire(name, now().UTC())
 	})
 
 	for _, def := range c.cfg.Schedules {
 		if def.Disabled {
 			continue
 		}
-		last, err := state.LastFired(def.Name)
+		last, err := state.lastFired(def.Name)
 		if err != nil || last.IsZero() {
 			continue
 		}
-		expr, perr := internalcron.Parse(def.Expr)
+		expr, perr := parseExpr(def.Expr)
 		if perr != nil {
 			continue // s.Add already validated the expression
 		}
 		if next := expr.Next(last); next.Before(now()) {
-			if err := s.MissedTick(def.Name); err != nil {
+			if err := s.missedTick(def.Name); err != nil {
 				return fmt.Errorf("cron: missed tick %q: %w", def.Name, err)
 			}
 		}
@@ -173,12 +172,6 @@ func (c *Connector) Stop() error {
 	}
 	return nil
 }
-
-// enqueuer adapts the component-facing thought system onto the
-// scheduler's Enqueue interface.
-type enqueuer struct{ ts thought.ThoughtSystem }
-
-func (e enqueuer) Enqueue(t *thought.Thought) error { return e.ts.Enqueue(t) }
 
 // Compile-time check: the connector satisfies the public interface.
 var _ connector.Connector = (*Connector)(nil)

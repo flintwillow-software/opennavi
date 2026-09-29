@@ -6,7 +6,7 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// memoryEnqueuer records enqueued thoughts (implements Enqueuer).
+// memoryEnqueuer records enqueued thoughts (implements enqueuer).
 type memoryEnqueuer struct {
 	mu     sync.Mutex
 	values []*thought.Thought

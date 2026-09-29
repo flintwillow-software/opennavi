@@ -9,25 +9,25 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// StateStore persists schedule TICK STATE (last_fired/next_due/
+// stateStore persists schedule TICK STATE (last_fired/next_due/
 // fire_count — not definitions; schedule definitions are runtime
 // config). Backed by the shared SQLite DB (migration v6).
 //
 // Wired by connector/cron when it is constructed with WithStateStore
 // (NAVI-358): Start migrates the table, records a fire on every schedule
 // thought's started event, and coalesces missed ticks at startup.
-type StateStore struct {
+type stateStore struct {
 	db *sql.DB
 }
 
-// NewStateStore wraps the shared connection.
-func NewStateStore(db *sql.DB) *StateStore {
-	return &StateStore{db: db}
+// newStateStore wraps the shared connection.
+func newStateStore(db *sql.DB) *stateStore {
+	return &stateStore{db: db}
 }
 
-// MigrateState applies migration v6 (idempotent): the schedule_state
+// migrateState applies migration v6 (idempotent): the schedule_state
 // table. Exposed separately so the run-startup chain can control ordering.
-func MigrateState(db *sql.DB) error {
+func migrateState(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schedule_state (
 		schedule_name TEXT PRIMARY KEY,
 		last_fired DATETIME,
@@ -41,9 +41,9 @@ func MigrateState(db *sql.DB) error {
 	return nil
 }
 
-// LastFired returns the last-fired timestamp for a schedule (zero if
+// lastFired returns the last-fired timestamp for a schedule (zero if
 // never fired).
-func (ss *StateStore) LastFired(name string) (time.Time, error) {
+func (ss *stateStore) lastFired(name string) (time.Time, error) {
 	var last sql.NullString
 	err := ss.db.QueryRow(`SELECT last_fired FROM schedule_state WHERE schedule_name = ?`, name).Scan(&last)
 	if err == sql.ErrNoRows {
@@ -58,8 +58,8 @@ func (ss *StateStore) LastFired(name string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, last.String)
 }
 
-// RecordFire records a tick for a schedule (last_fired + fire_count).
-func (ss *StateStore) RecordFire(name string, at time.Time) error {
+// recordFire records a tick for a schedule (last_fired + fire_count).
+func (ss *stateStore) recordFire(name string, at time.Time) error {
 	_, err := ss.db.Exec(`INSERT INTO schedule_state (schedule_name, last_fired, fire_count, updated_at)
 		VALUES (?, ?, 1, ?)
 		ON CONFLICT(schedule_name) DO UPDATE SET
@@ -72,7 +72,7 @@ func (ss *StateStore) RecordFire(name string, at time.Time) error {
 }
 
 // NextDue records the computed next-due timestamp for a schedule.
-func (ss *StateStore) SetNextDue(name string, due time.Time) error {
+func (ss *stateStore) setNextDue(name string, due time.Time) error {
 	_, err := ss.db.Exec(`INSERT INTO schedule_state (schedule_name, next_due, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(schedule_name) DO UPDATE SET next_due=excluded.next_due, updated_at=excluded.updated_at`,
@@ -83,13 +83,13 @@ func (ss *StateStore) SetNextDue(name string, due time.Time) error {
 	return nil
 }
 
-// MissedTick is the startup-coalescing primitive: it enqueues ONE coalescing
+// missedTick is the startup-coalescing primitive: it enqueues ONE coalescing
 // thought for a schedule whose next-due passed while the navi was down. The
-// caller decides which schedules missed (LastFired + Parse/Next) and invokes
+// caller decides which schedules missed (lastFired + parseExpr/Next) and invokes
 // this once per schedule before the scheduler starts. The thought id carries
-// the scheduler's monotonic counter, so a MissedTick and a fireNow landing in
+// the scheduler's monotonic counter, so a missedTick and a fireNow landing in
 // the same wall second cannot collide.
-func (s *Scheduler) MissedTick(name string) error {
+func (s *scheduler) missedTick(name string) error {
 	s.mu.Lock()
 	sd, ok := s.schedules[name]
 	now := s.clock()
