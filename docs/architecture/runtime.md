@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-28'
+updated: '2026-09-30'
 tags:
   - architecture
   - runtime
@@ -54,6 +54,7 @@ if err := n.Run(ctx); err != nil { ... }
 | `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
 | `Portals` | added | human observe/control surfaces | Receive `Deps` at `Start`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
+| `Stores` | added | persistence backends (`fs`, `sqlite`, …) | Selected at build time, chosen at runtime; RAM is the source of truth, the backend is eventual ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
 
 `Permissions` is a field (the compiled policy ceiling; runtime config may only
 tighten it), not a collection. Runtime plugins are deferred (ADR 0005) and have
@@ -97,6 +98,7 @@ Handle API exposed as `n.Thoughts`:
 | `Enqueue(t)` | Schedule a thought (durable; deferral rides the thought) |
 | `GetThought(id)` / `GetThoughts()` | Inspect the queue (copies) |
 | `RouteMessage(id, msg)` | Lifecycle-aware delivery: queued → append, running → steer, paused → resume, terminal → reject |
+| `Transcript(id, after, limit)` | Read a thought's conversation, live and historical, bounded by cursor + limit ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
 | `OnEvent(fn)` | Observe queue events (portal/connector fanout) |
 | `Pause` / `Resume` / `Cancel` / `Retry` / `BumpPriority` | Control |
 | `Complete(id, result)` / `Fail(id, detail)` | Report a thought's outcome |
@@ -163,6 +165,9 @@ type Portal interface {
 }
 
 type Deps struct {
+    // ThoughtSystem is the queue handle. It also carries each thought's
+    // transcript, live and historical, so a portal reads a conversation
+    // without a session handle and without knowing the backend (ADR 0011).
     ThoughtSystem thought.ThoughtSystem
     Model         model.Registry
     // Observation is the bounded, cursor-ed view of queue lifecycle and
@@ -192,7 +197,12 @@ slowing the queue.
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
   same queue and running-agent events a connector can observe — through
   `Deps.Observation`, whose bounded mailboxes keep a slow front-end from
-  stalling the queue (NAVI-352).
+  stalling the queue (NAVI-352). A portal also reads a thought's full
+  conversation — live and historical — through `Deps.ThoughtSystem`, so attach
+  and restart show what happened rather than only what happened next
+  (ADR 0011). The intended end state is one bidirectional stream a portal
+  translates for its transport, with access scoped by IAM rather than by
+  separate read and write surfaces (ADR 0012, proposed).
 - The SDK ships an HTTP **`portal/gateway`** component: a `portal.Portal`
   that frames the bounded observation stream and control channel over HTTP
   and delegates authorization to the control portal (the `Hub`), so there is
@@ -214,11 +224,15 @@ import it — they depend only on the component packages.
 Each thought run resolves an agent run: mode-selected tool surface → registry
 active set → bridge into the executor. The registry owns metadata, validation,
 active-set membership, and dispatch; the executor owns concurrency and timeout
-envelopes. Session state (messages, checkpoints) persists through the store.
+envelopes. Session state (messages, checkpoints) persists through the selected
+`Stores` backend, which is not on the read path: the run reads and writes RAM,
+and the backend catches up asynchronously (ADR 0011).
 
 ## Related
 
 - [overview.md](./overview.md) — package map and boundaries
 - [security.md](./security.md) — permission ceiling and omission
 - [extension-model.md](./extension-model.md) — third-party components
+- [ADR 0011](../adr/0011-persistence-is-a-backend-component.md) — backend stores, RAM-first persistence
+- [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones
