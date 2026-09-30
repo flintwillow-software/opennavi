@@ -1,7 +1,7 @@
-// Package cron implements a pure-Go 5-field cron scheduler:
-// it wakes on a cron schedule and enqueues thoughts on the thought
-// queue. Standard 5-field format (minute hour dom mon dow), numbers
-// only; timezone-aware with per-schedule TZ overrides.
+// cronExpr.go — the 5-field cron expression parser.
+//
+// Standard 5-field format (minute hour dom mon dow), numbers only;
+// timezone-aware with per-schedule TZ overrides.
 package cron
 
 import (
@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// CronExpr is a parsed 5-field cron expression.
-type CronExpr struct {
+// cronExpr is a parsed 5-field cron expression.
+type cronExpr struct {
 	minute, hour, dom, mon, dow fieldSet
 	// domOrDow tracks Vixie-cron semantics: when both dom and dow are
 	// restricted (non-*), a time matches if EITHER matches.
@@ -45,15 +45,15 @@ var fieldSpecs = [5]fieldSpec{
 	{0, 6, "day-of-week"}, // 0=Sunday
 }
 
-// Parse parses a standard 5-field cron expression ("m h dom mon dow").
+// parseExpr parses a standard 5-field cron expression ("m h dom mon dow").
 // Supported syntax per field: *, exact values, ranges (a-b), steps
 // (*\/n and a-b/n), comma lists. Numbers only.
-func Parse(expr string) (*CronExpr, error) {
+func parseExpr(expr string) (*cronExpr, error) {
 	fields := strings.Fields(expr)
 	if len(fields) != 5 {
 		return nil, fmt.Errorf("cron: %q: expected 5 fields, got %d", expr, len(fields))
 	}
-	var ce CronExpr
+	var ce cronExpr
 	for i, spec := range fieldSpecs {
 		fs, err := parseField(fields[i], spec)
 		if err != nil {
@@ -80,7 +80,7 @@ func Parse(expr string) (*CronExpr, error) {
 
 // Matches reports whether t fires under this expression. Sub-minute
 // precision is truncated (cron fires at second 0).
-func (c *CronExpr) Matches(t time.Time) bool {
+func (c *cronExpr) Matches(t time.Time) bool {
 	if !c.minute.matches(t.Minute()) || !c.hour.matches(t.Hour()) || !c.mon.matches(int(t.Month())) {
 		return false
 	}
@@ -97,7 +97,7 @@ func (c *CronExpr) Matches(t time.Time) bool {
 // aware: minute-of-day matching uses the time's own location, so DST
 // gaps (skipped wall times) resolve to the next existing wall time and
 // DST overlaps fire once per wall-time pass.
-func (c *CronExpr) Next(t time.Time) time.Time {
+func (c *cronExpr) Next(t time.Time) time.Time {
 	tt := t.Truncate(time.Minute).Add(time.Minute)
 	limit := t.AddDate(5, 0, 0)
 	for tt.Before(limit) {

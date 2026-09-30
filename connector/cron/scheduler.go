@@ -10,10 +10,10 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// ScheduleDef is one named schedule. Schedule definitions are
+// scheduleSpec is one named schedule. Schedule definitions are
 // deployment-time runtime config; the compiled navi
 // definition declares only whether the cron interface exists.
-type ScheduleDef struct {
+type scheduleSpec struct {
 	Name     string // unique schedule name
 	Expr     string // 5-field cron expression
 	Prompt   string // thought prompt / task template
@@ -25,22 +25,22 @@ type ScheduleDef struct {
 	Disabled bool
 }
 
-// Enqueuer is what the scheduler feeds (agent-agnostic: implemented by
+// enqueuer is what the scheduler feeds (agent-agnostic: implemented by
 // the thought queue).
-type Enqueuer interface {
+type enqueuer interface {
 	Enqueue(t *thought.Thought) error
 }
 
 // clockFunc returns the current time. Overridable in tests.
 type clockFunc func() time.Time
 
-// Scheduler fires named schedules on their cron expressions and
+// scheduler fires named schedules on their cron expressions and
 // enqueues thoughts on the queue (cron-triggered tasks create
 // thoughts with cron-defined priority).
-type Scheduler struct {
+type scheduler struct {
 	mu        sync.Mutex
 	schedules map[string]*scheduledDef
-	queue     Enqueuer
+	queue     enqueuer
 	clock     clockFunc
 	wake      chan struct{}
 	done      chan struct{}
@@ -53,14 +53,14 @@ type Scheduler struct {
 }
 
 type scheduledDef struct {
-	def  ScheduleDef
-	expr *CronExpr
+	def  scheduleSpec
+	expr *cronExpr
 	loc  *time.Location
 }
 
-// NewScheduler builds a scheduler over the given enqueuer.
-func NewScheduler(q Enqueuer) *Scheduler {
-	return &Scheduler{
+// newScheduler builds a scheduler over the given enqueuer.
+func newScheduler(q enqueuer) *scheduler {
+	return &scheduler{
 		schedules: make(map[string]*scheduledDef),
 		queue:     q,
 		clock:     time.Now,
@@ -70,7 +70,7 @@ func NewScheduler(q Enqueuer) *Scheduler {
 }
 
 // SetClock overrides the time source (tests).
-func (s *Scheduler) SetClock(fn clockFunc) {
+func (s *scheduler) SetClock(fn clockFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clock = fn
@@ -78,14 +78,14 @@ func (s *Scheduler) SetClock(fn clockFunc) {
 
 // OnError registers an observer for tick-loop errors (e.g. failed
 // enqueues). Called synchronously from the tick loop.
-func (s *Scheduler) OnError(fn func(error)) {
+func (s *scheduler) OnError(fn func(error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.errorHandlers = append(s.errorHandlers, fn)
 }
 
 // emitError fans a tick-loop error out to registered observers.
-func (s *Scheduler) emitError(err error) {
+func (s *scheduler) emitError(err error) {
 	s.mu.Lock()
 	handlers := append([]func(error){}, s.errorHandlers...)
 	s.mu.Unlock()
@@ -96,7 +96,7 @@ func (s *Scheduler) emitError(err error) {
 
 // Add registers a schedule definition. Errors on invalid cron
 // expressions, invalid timezones, duplicate names.
-func (s *Scheduler) Add(def ScheduleDef) error {
+func (s *scheduler) Add(def scheduleSpec) error {
 	if strings.TrimSpace(def.Name) == "" {
 		return fmt.Errorf("cron: schedule name is required")
 	}
@@ -106,7 +106,7 @@ func (s *Scheduler) Add(def ScheduleDef) error {
 	if def.Priority == 0 {
 		def.Priority = 3 // cron-triggered,
 	}
-	expr, err := Parse(def.Expr)
+	expr, err := parseExpr(def.Expr)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (s *Scheduler) Add(def ScheduleDef) error {
 }
 
 // Remove unregisters a schedule and signals the loop.
-func (s *Scheduler) Remove(name string) {
+func (s *scheduler) Remove(name string) {
 	s.mu.Lock()
 	delete(s.schedules, name)
 	s.mu.Unlock()
@@ -145,7 +145,7 @@ func (s *Scheduler) Remove(name string) {
 }
 
 // Start launches the tick loop.
-func (s *Scheduler) Start() {
+func (s *scheduler) Start() {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -158,7 +158,7 @@ func (s *Scheduler) Start() {
 }
 
 // Stop halts the tick loop and waits for it to exit.
-func (s *Scheduler) Stop() {
+func (s *scheduler) Stop() {
 	close(s.done)
 	s.wg.Wait()
 }
@@ -168,7 +168,7 @@ func (s *Scheduler) Stop() {
 // first enqueue error (never silently swallowed — a swallowed enqueue
 // error is a lost scheduled task with zero trace). Used by the tick
 // loop and tests.
-func (s *Scheduler) fireNow(now time.Time) error {
+func (s *scheduler) fireNow(now time.Time) error {
 	s.mu.Lock()
 	scheds := make([]*scheduledDef, 0, len(s.schedules))
 	for _, sd := range s.schedules {
@@ -184,7 +184,7 @@ func (s *Scheduler) fireNow(now time.Time) error {
 			continue
 		}
 		// Collision-proof ID: wall-second + monotonic counter (fireNow
-		// and MissedTick can hit the same wall second, exactly the
+		// and missedTick can hit the same wall second, exactly the
 		// crash-recovery scenario).
 		id := fmt.Sprintf("cron-%s-%s-%d", sd.def.Name, now.UTC().Format("20060102T150405"), atomic.AddUint64(&s.idSeq, 1))
 		t := &thought.Thought{
@@ -204,7 +204,7 @@ func (s *Scheduler) fireNow(now time.Time) error {
 	return nil
 }
 
-func (s *Scheduler) loop() {
+func (s *scheduler) loop() {
 	defer s.wg.Done()
 	for {
 		s.mu.Lock()
@@ -248,15 +248,15 @@ func (s *Scheduler) loop() {
 }
 
 // OnDebug registers an observer for debug-level scheduler events
-// (tick fires, MissedTick coalescing). Called synchronously.
-func (s *Scheduler) OnDebug(fn func(msg string, fields map[string]any)) {
+// (tick fires, missedTick coalescing). Called synchronously.
+func (s *scheduler) OnDebug(fn func(msg string, fields map[string]any)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.debugFn = fn
 }
 
 // dbg fires a debug-level event if a debug observer is registered.
-func (s *Scheduler) dbg(msg string, fields map[string]any) {
+func (s *scheduler) dbg(msg string, fields map[string]any) {
 	if s.debugFn != nil {
 		s.debugFn(msg, fields)
 	}

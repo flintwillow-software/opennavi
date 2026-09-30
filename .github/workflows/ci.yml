@@ -31,17 +31,14 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
       # The component packages and `store` are the public surface (ADR 0004);
-      # none may import runtime internals. `tool/builtin` used to wrap
-      # internal/agent — fixed in NAVI-356, which also added this guard.
-      # `connector/cron` still imports internal/cron; that is a known
-      # violation tracked as NAVI-359, and the exception line below is
-      # removed when it lands.
+      # none may import runtime internals. Added in NAVI-356; the last
+      # exception (connector/cron -> internal/cron) was removed in NAVI-359,
+      # so this now covers every public package with no exceptions.
       - name: Public packages import no runtime internals
         run: |
           violations="$(grep -rn '"github.com/flintwillow-software/opennavi/internal/' \
             --include='*.go' tool thought connector portal model skill store \
-            | grep -v '_test.go' \
-            | grep -v '^connector/cron/cron.go:' || true)"
+            | grep -v '_test.go' || true)"
           if [ -n "$violations" ]; then
             echo "public packages import runtime internals:"
             echo "$violations"

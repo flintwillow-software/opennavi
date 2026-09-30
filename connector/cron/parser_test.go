@@ -19,8 +19,8 @@ func TestParseValid(t *testing.T) {
 		"0 12 1 */2 *",
 	}
 	for _, expr := range valid {
-		if _, err := Parse(expr); err != nil {
-			t.Errorf("Parse(%q) = %v, want nil", expr, err)
+		if _, err := parseExpr(expr); err != nil {
+			t.Errorf("parseExpr(%q) = %v, want nil", expr, err)
 		}
 	}
 }
@@ -45,11 +45,11 @@ func TestParseInvalid(t *testing.T) {
 		"0-70 * * * *":  "out of range",
 	}
 	for expr, want := range invalid {
-		_, err := Parse(expr)
+		_, err := parseExpr(expr)
 		if err == nil {
-			t.Errorf("Parse(%q) = nil, want error containing %q", expr, want)
+			t.Errorf("parseExpr(%q) = nil, want error containing %q", expr, want)
 		} else if !contains(err.Error(), want) {
-			t.Errorf("Parse(%q) = %q, want containing %q", expr, err, want)
+			t.Errorf("parseExpr(%q) = %q, want containing %q", expr, err, want)
 		}
 	}
 }
@@ -68,7 +68,7 @@ func indexOf(s, sub string) int {
 }
 
 func TestMatchesMinute(t *testing.T) {
-	ce, _ := Parse("*/15 * * * *")
+	ce, _ := parseExpr("*/15 * * * *")
 	base := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
 	if !ce.Matches(base) {
 		t.Fatal("10:00 should match */15")
@@ -83,7 +83,7 @@ func TestMatchesMinute(t *testing.T) {
 
 func TestMatchesDomDowOrSemantics(t *testing.T) {
 	// "0 0 13 * 5": 13th OR Friday (Vixie OR when both restricted).
-	ce, _ := Parse("0 0 13 * 5")
+	ce, _ := parseExpr("0 0 13 * 5")
 	// 2026-09-13 is a Sunday → dom match.
 	if !ce.Matches(time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)) {
 		t.Fatal("13th should match (dom)")
@@ -99,7 +99,7 @@ func TestMatchesDomDowOrSemantics(t *testing.T) {
 }
 
 func TestNextMinuteResolution(t *testing.T) {
-	ce, _ := Parse("30 * * * *")
+	ce, _ := parseExpr("30 * * * *")
 	base := time.Date(2026, 9, 6, 10, 31, 0, 0, time.UTC)
 	next := ce.Next(base)
 	if want := time.Date(2026, 9, 6, 11, 30, 0, 0, time.UTC); !next.Equal(want) {
@@ -113,7 +113,7 @@ func TestNextMinuteResolution(t *testing.T) {
 }
 
 func TestNextLeapDay(t *testing.T) {
-	ce, _ := Parse("0 0 29 2 *")
+	ce, _ := parseExpr("0 0 29 2 *")
 	next := ce.Next(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	// 2028 is the next leap year after 2026 (2027 not, 2028 yes).
 	if want := time.Date(2028, 2, 29, 0, 0, 0, 0, time.UTC); !next.Equal(want) {
@@ -130,7 +130,7 @@ func TestNextDSTGap(t *testing.T) {
 	if err != nil {
 		t.Skip("tzdata unavailable")
 	}
-	ce, _ := Parse("30 2 * * *")
+	ce, _ := parseExpr("30 2 * * *")
 	before := time.Date(2026, 3, 7, 12, 0, 0, 0, loc)
 	next := ce.Next(before)
 
@@ -153,7 +153,7 @@ func TestNextDSTFallBackDoubleFire(t *testing.T) {
 	if err != nil {
 		t.Skip("tzdata unavailable")
 	}
-	ce, _ := Parse("30 2 * * *")
+	ce, _ := parseExpr("30 2 * * *")
 	// Scan the repeated hour manually: 01:59 → 02:30 (first pass, EDT)
 	// → 01:59:59 (wait, Go normalizes)... Actually scan wall minutes
 	// via Next() twice.
