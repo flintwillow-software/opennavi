@@ -61,7 +61,7 @@ three capability layers — [tools, connectors, portals](../adr/0010-three-capab
 — do not include it. So it is absent from `connector.Deps` and `portal.Deps`
 as a handle a component may write. When the tiers land, a portal *views* them
 through the navi stream ([ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md),
-proposed) rather than through a store handle. M1 (NAVI-345) publishes no memory
+proposed) rather than through a datastore handle. M1 (NAVI-345) publishes no memory
 interface.
 
 One consequence is accepted deliberately: an `internal/` package is importable
@@ -82,18 +82,18 @@ separates it from the session record.
 Sessions and thought transcripts are *history*, not a datastore: they are the
 incidental artifact of a thought having run, kept for continuity, replay, and
 operator inspection. A thought owns its transcript, and the runtime persists it
-asynchronously through the selected backend store — RAM is the source of truth
+asynchronously through the selected datastore — RAM is the source of truth
 and history is best-effort, so a hard kill may lose its tail
-([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)). Nothing chooses
+([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)). Nothing chooses
 what lands there; it is whatever happened.
 
 Memory is the opposite. An entry exists because the navi decided it was worth
 keeping. So memory grows deliberately and slowly rather than in proportion to run
 volume, and most thoughts will write nothing at all.
 
-Both tiers **require a configured backend store** ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)):
+Both tiers **require a configured datastore** ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)):
 memory is persisted through it rather than held only in RAM, and a navi that
-declares memory without a store fails at assembly instead of silently losing
+declares memory without a datastore fails at assembly instead of silently losing
 what it learned.
 
 The natural write point is therefore **the end of a thought** — a post-thought
@@ -127,12 +127,12 @@ when implementing either side.
 
 - **Not the thought system.** That is the runtime's main loop — it decides what
   runs next, not what a navi knows. It is the *queue*.
-- **Not `store.MemoryStore`.** That is the volatile backend — the in-memory
+- **Not `datastore.MemoryStore`.** That is the volatile backend — the in-memory
   default that persists nothing — unrelated to the memory tiers.
 - **Not the thought transcript.** Sessions record history — what happened.
   Memory records what the navi chose to keep. A portal reads the transcript
-  through the thought system, not through a store handle, and never learns
-  which backend produced it ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)).
+  through the thought system, not through a datastore handle, and never learns
+  which backend produced it ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)).
 - **Not `note`.** [`tool/note`](../../tool/note/) is a per-navi verbatim
   scratchpad, and its own documentation calls it "deliberately distinct from
   semantic memory". Notes are written and read back exactly; memory is curated
@@ -159,7 +159,7 @@ Recorded rather than silently decided:
    writes are deliberate rather than volume-driven, pruning can also be a
    deliberate act rather than a heuristic. Transcript history has the same open
    question: detail is cache-eligible for GC, but no policy yet decides when a
-   transcript is pruned or archived ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)).
+   transcript is pruned or archived ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)).
 
 ## Provenance
 
@@ -196,5 +196,5 @@ document it" — so it drifted. Capturing the model here is the fix.
 - [rewrite-plan.md](./rewrite-plan.md) — milestones
 - [ADR 0010](../adr/0010-three-capability-layers.md) — why short-term memory is
   not one of the three capability layers, and long-term memory is a tool
-- [ADR 0011](../adr/0011-persistence-is-a-backend-component.md) — where history
+- [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — where history
   and memory are persisted, and why the backend is not a read path

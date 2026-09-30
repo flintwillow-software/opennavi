@@ -54,7 +54,7 @@ if err := n.Run(ctx); err != nil { ... }
 | `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
 | `Portals` | added | human observe/control surfaces | Receive `Deps` at `Start`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
-| `Stores` | added | persistence backends (`fs`, `sqlite`, …) | Selected at build time, chosen at runtime; backs thought state, transcripts, tool state, and memory. RAM is the source of truth, the backend is eventual ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
+| `Datastores` | added | persistence backends (`fs`, `sqlite`, …) | Candidates declared at build time, one active backend chosen at runtime; backs thought state, transcripts, tool state, and memory. RAM is the source of truth, the backend is eventual ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)) |
 
 `Permissions` is a field (the compiled policy ceiling; runtime config may only
 tighten it), not a collection. Runtime plugins are deferred (ADR 0005) and have
@@ -98,7 +98,7 @@ Handle API exposed as `n.Thoughts`:
 | `Enqueue(t)` | Schedule a thought (durable; deferral rides the thought) |
 | `GetThought(id)` / `GetThoughts()` | Inspect the queue (copies) |
 | `RouteMessage(id, msg)` | Lifecycle-aware delivery: queued → append, running → steer, paused → resume, terminal → reject |
-| `Transcript(id, after, limit)` | Read a thought's conversation, live and historical, bounded by cursor + limit ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
+| `Transcript(id, after, limit)` | Read a thought's conversation, live and historical, bounded by cursor + limit ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)) |
 | `OnEvent(fn)` | Observe queue events (portal/connector fanout) |
 | `Pause` / `Resume` / `Cancel` / `Retry` / `BumpPriority` | Control |
 | `Complete(id, result)` / `Fail(id, detail)` | Report a thought's outcome |
@@ -225,7 +225,7 @@ Each thought run resolves an agent run: mode-selected tool surface → registry
 active set → bridge into the executor. The registry owns metadata, validation,
 active-set membership, and dispatch; the executor owns concurrency and timeout
 envelopes. Session state (messages, checkpoints), stateful tool state (todo,
-note), and the memory tiers all persist through the selected `Stores` backend,
+note), and the memory tiers all persist through the selected `Datastores` backend,
 which is not on the read path: the run reads and writes RAM, and the backend
 catches up asynchronously through one ordered writer (ADR 0011). Memory
 requires a configured store — there is no volatile-memory mode.
@@ -235,6 +235,6 @@ requires a configured store — there is no volatile-memory mode.
 - [overview.md](./overview.md) — package map and boundaries
 - [security.md](./security.md) — permission ceiling and omission
 - [extension-model.md](./extension-model.md) — third-party components
-- [ADR 0011](../adr/0011-persistence-is-a-backend-component.md) — backend stores, RAM-first persistence
+- [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — datastores, RAM-first persistence
 - [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones

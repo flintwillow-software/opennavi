@@ -39,7 +39,7 @@ trigger, a gateway webhook, a human portal — feeds the same thought queue.
    LLM providers ◀──┤              agent loop ──▶ tools           │
    (Ollama,         │                   │       (file, shell,     │
     OpenRouter)     │                   ▼        http, domain)   │
-                    │          backend store (async)             │
+                    │          datastore (async)                │
                     └─────────────────────────────────────────────┘
 ```
 
@@ -51,9 +51,9 @@ trigger, a gateway webhook, a human portal — feeds the same thought queue.
 - **Tools** are agent-callable actions the navi invokes, including egress tools
   that send messages back out through a connector (`discord_send`).
 - **Providers** are LLM backends selected per thought.
-- **Stores** are persistence backends (`fs` markdown, `sqlite`, …). RAM is the
-  source of truth; the backend is eventual and off the read path (ADR 0011).
-  Portals read history through the thought system, never through the store.
+- **Datastores** are persistence backends (`fs` markdown, `sqlite`, …). RAM is
+  the source of truth; the backend is eventual and off the read path (ADR 0011).
+  Portals read history through the thought system, never through the datastore.
 
 ## The navi object
 
@@ -65,15 +65,19 @@ n := navi.New("oncall-bot",
     navi.WithPersonality(onCallPersona),
 )
 
+// One datastore backs thought state, transcripts, tool state, and memory.
+// Candidates are declared here; runtime config selects the active backend.
+ds := n.Datastores.Add(datastore.FS("~/.opennavi/oncall-bot"))
+
 n.Skills.Add(skill.Skill{Name: "incident_response", Content: incidentResponse})
 builtins, _ := builtin.Tools(workDir)
 for _, t := range builtins {
     n.Tools.Add(t)
 }
+n.Tools.Add(todo.Tools(naviID, ds.Stateful()))
 n.Models.Add(model.Ollama("qwen3.8:27b", model.Default()))
-n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}, cron.WithStateStore(db)))
+n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}, cron.WithDatastore(ds)))
 n.Portals.Add(tui.NewPortal())
-n.Stores.Add(store.FS("~/.opennavi/oncall-bot"))
 n.Modes.Add(navi.PlanMode)
 
 if err := n.Run(ctx); err != nil {
@@ -104,9 +108,9 @@ portal/gateway        public  HTTP portal gateway (observation + control framing
 portal/tui            public  terminal portal
 model/                public  Model + provider descriptor
 skill/                public  Skill value (embedded content)
-store/                public  backend contract + data types (metadata/detail aggregates)
-store/fs              public  markdown + frontmatter backend
-store/sqlite          public  SQLite backend (sessions, thoughts, stateful state)
+datastore/            public  datastore contract + data types (metadata/detail aggregates)
+datastore/fs          public  markdown + frontmatter backend
+datastore/sqlite      public  SQLite backend (thoughts, transcripts, stateful state)
 navi/                 public  composition root; imports the above
 internal/             private runtime: agent loop, providers, bridge, config, ops
 cmd/navi/             reference navi (was the only runnable binary)
@@ -117,15 +121,15 @@ internal/testdata/    synthetic out-of-repo modules (CI fixtures)
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
 portals receive handles through their `Deps` interface. This keeps the graph
 acyclic and components independently testable. The seven component packages
-(`tool`, `thought`, `connector`, `portal`, `model`, `skill`, `store`) are additionally
+(`tool`, `thought`, `connector`, `portal`, `model`, `skill`, `datastore`) are additionally
 **stdlib-only** — their import closure reaches no `internal/*` package and no
 tool-system implementation package — so importing one never drags the runtime
 in. Two CI guards pin this: `external-consumer` asserts contract-purity of the
 external component's whole closure (NAVI-355), and *public packages import no
 runtime internals* asserts the rule across every public package (NAVI-356).
-`store` is itself a public package (data types, their interfaces, in-memory
-helpers; the durable implementation is `store/sqlite`), so `tool/{note,todo,registry}
-→ store` is public→public.
+`datastore` is itself a public package (data types, their interfaces, in-memory
+helpers; the durable implementations are `datastore/fs` and `datastore/sqlite`),
+so `tool/{note,todo,registry} → datastore` is public→public.
 
 ## Boundaries
 
@@ -160,7 +164,7 @@ persists and missed ticks coalesce across restarts via `connector/cron`'s
 `WithStateStore` seam (NAVI-358); the thought-queue metrics collector is parked
 pending wiring onto the reference navi (NAVI-357); portal state access —
 thought history, transcripts, and the eventual unified navi stream — is
-specified by [ADR 0011](../adr/0011-persistence-is-a-backend-component.md) and
+specified by [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) and
 [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) and tracked as
 NAVI-360 (backend stores + integration surface) and NAVI-361 (TUI portal +
 navi exposure).
