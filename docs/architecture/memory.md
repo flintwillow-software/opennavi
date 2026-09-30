@@ -157,9 +157,11 @@ Recorded rather than silently decided:
 3. **Retention and pruning.** The original design said "long-term with pruning"
    for both `navi` and `memories`, without defining a policy. Because short-term
    writes are deliberate rather than volume-driven, pruning can also be a
-   deliberate act rather than a heuristic. Transcript history has the same open
-   question: detail is cache-eligible for GC, but no policy yet decides when a
-   transcript is pruned or archived ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)).
+   deliberate act rather than a heuristic. Datastore history follows the same
+   stance: retention defaults to unbounded and a prune mechanism ships with the
+   datastore, invoked explicitly rather than by a background heuristic
+   ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md), decision 11).
+   The memory tiers' own retention policy is still open.
 
 ## Provenance
 

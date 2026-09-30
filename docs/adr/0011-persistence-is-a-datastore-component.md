@@ -126,6 +126,29 @@ unspecified.
     the body carries the transcript. The layout is the `fs` backend's concern and
     is not part of the contract.
 
+11. **Retain everything; prune deliberately.** Default retention is unbounded.
+    Metadata-first hydration plus lazy detail is what makes that affordable, so
+    keeping history is the default rather than a setting to opt into. The
+    datastore ships a **cleanup mechanism** for old transcripts and datastore
+    objects generally — an operator-invokable prune plus an optional declarative
+    policy (age, size, or count). Pruning is an explicit act with a visible
+    effect, not a background heuristic that quietly deletes history, matching
+    memory.md's stance on deliberately-kept knowledge.
+
+12. **Consumers depend on per-aggregate views; routing is a seam.** A consumer
+    takes a view of one aggregate — thought/transcript, tool state, memory —
+    never "the datastore". The collection maps aggregate → active backend and
+    defaults every aggregate to the single active datastore, so the MVP is
+    single-backend while multi-backend (transcripts on `fs`, memory on
+    `postgres`) stays a config-and-validation change rather than an ABI change.
+    A consumer cannot tell which backend serves it, and could not with either
+    arrangement — which is what makes the granularity cheap now and expensive to
+    retrofit later.
+
+13. **The ordered writer lives at the datastore level.** The single serialized
+    writer is a datastore component, and the thought system's flusher feeds it
+    as one producer among several rather than owning the queue itself.
+
 ## Consequences
 
 - **The datastore leaves the critical path.** No disk latency inside a run, a
@@ -135,12 +158,16 @@ unspecified.
   gateway, WebUI — can show a thought's full conversation, live and historical,
   without importing `navi` or `internal/` and without knowing the backend
   (NAVI-353's gap closes).
-- **Durability is explicitly two-tiered** and documented: thought state is
-  memory-first with a short loss window and synchronous checkpoints; history is
-  best-effort, async, and may lose its tail on a hard kill — but what survives
-  survives in order.
+- **Durability is two-tiered** and documented: thought state is memory-first
+  with a short loss window and synchronous checkpoints; history is best-effort,
+  async, and may lose its tail on a hard kill — but what survives survives in
+  order. With per-aggregate routing, that order is per-backend: each backend
+  holds a prefix of the global write order, and a consistent horizon across
+  backends is an open question below.
 - **RAM is bounded by access, not by navi age.** Cold start is cheap; unaccessed
-  detail is collectable.
+  detail is collectable, which is what lets retention default to unbounded.
+- **History is kept until someone chooses to drop it.** A pruning mechanism
+  exists from the start; the shipped default is to retain.
 - **`datastore` becomes a component package**, joining the stdlib-only set.
 - **One datastore backs the whole navi.** A navi author selects one backend and
   gets thought state, transcripts, tool state, and memory. The todo/note tools
@@ -168,6 +195,7 @@ Because handles are views (decision 4), both swap points work:
 |---|---|---|
 | Backend **parameters** (path, DSN) | Runtime config | No |
 | Which compiled-in backend is **active** | Runtime config (`datastore.backend`) | No |
+| Which backend serves a given **aggregate** | Runtime routing config | No |
 | Add a **compiled-in candidate** | `.Add()` in `main.go` | Yes |
 | Use a new **community backend** | `import` + `.Add()` in `main.go` | Yes |
 
@@ -197,6 +225,11 @@ exists to preserve.
 - **Hand the concrete backend to the tool factory.** Simplest handle, and it
   makes runtime selection impossible — the backend kind would freeze at build
   time. Rejected.
+- **A single opaque "the navi's datastore" handle.** One handle for everything
+  and the simplest consumer signature, but it forecloses per-aggregate routing
+  and would have to be re-cut across every consumer to add it later.
+  Rejected — the views cost almost nothing now and cannot be introduced cheaply
+  afterwards.
 - **Per-aggregate writes with no global order.** Higher throughput and fewer
   shared structures, but a crash can leave a thought `complete` with a truncated
   transcript, and recovery has to reconcile aggregates instead of resuming from
@@ -206,17 +239,17 @@ exists to preserve.
 
 Recorded rather than silently decided:
 
-1. **Retention and pruning.** Metadata is retained; detail is GC-eligible. That
-   is a bounded *cache*, not a retention *policy* — nothing yet decides when a
-   transcript is pruned, archived, or dropped, which is also memory.md's open
-   question 3.
-2. **One active datastore or many.** The collection is shaped as a candidate
-   set with one active backend. Whether a navi may split aggregates across
-   several active backends (transcripts on `fs`, memory on `postgres`) is not
-   decided, and would change the handle shape.
-3. **Where the ordered writer lives.** Whether the single writer is the
-   thought-system flusher extended to carry every aggregate, or a separate
-   datastore-level writer the flusher feeds.
+1. **Cross-backend consistency on recovery.** With per-aggregate routing each
+   backend holds its own prefix of the global write order, so a crash can leave
+   `fs` ahead of `postgres`. Recovering a single consistent horizon needs a
+   watermark (persist a global sequence per backend; the horizon is the minimum).
+   Deferred until multi-backend routing is actually used — single-backend, which
+   is the MVP, does not have this problem.
+2. **Default retention policy.** The shipped `fs` and `sqlite` defaults: retain
+   forever, or a conservative age. The mechanism exists either way.
+3. **Whether pruning is also a tool.** A cleanup mechanism an operator can
+   invoke is decided; whether the agent can invoke it (a `datastore_prune` tool)
+   is not.
 
 ## Related
 
