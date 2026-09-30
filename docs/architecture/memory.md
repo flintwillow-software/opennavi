@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-26'
-updated: '2026-09-28'
+updated: '2026-09-30'
 tags:
   - architecture
   - memory
@@ -58,8 +58,11 @@ visible to subsequent thoughts.
 **It is navi-internal, not a public component package.** It is the navi's own
 working state rather than a capability an extension supplies, and ADR 0010's
 three capability layers — [tools, connectors, portals](../adr/0010-three-capability-layers.md)
-— do not include it. So it is absent from `connector.Deps` and `portal.Deps`;
-M1 (NAVI-345) publishes no memory interface.
+— do not include it. So it is absent from `connector.Deps` and `portal.Deps`
+as a handle a component may write. When the tiers land, a portal *views* them
+through the navi stream ([ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md),
+proposed) rather than through a datastore handle. M1 (NAVI-345) publishes no memory
+interface.
 
 One consequence is accepted deliberately: an `internal/` package is importable
 by the runtime and by in-repo `tool/`, but **not** by out-of-repo extension
@@ -77,15 +80,21 @@ Short-term memory holds what the navi **deliberately tucks away**. That is what
 separates it from the session record.
 
 Sessions and thought transcripts are *history*, not a datastore: they are the
-incidental artifact of a thought having run, kept for continuity, replay
-(NAVI-334), and operator inspection. The runtime already rules this way —
-[`navi/runner.go`](../../navi/runner.go) flushes the agent
-conversation to session entries with the comment *"sessions record history"*
-(#240). Nothing chooses what lands there; it is whatever happened.
+incidental artifact of a thought having run, kept for continuity, replay, and
+operator inspection. A thought owns its transcript, and the runtime persists it
+asynchronously through the selected datastore — RAM is the source of truth
+and history is best-effort, so a hard kill may lose its tail
+([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)). Nothing chooses
+what lands there; it is whatever happened.
 
 Memory is the opposite. An entry exists because the navi decided it was worth
 keeping. So memory grows deliberately and slowly rather than in proportion to run
 volume, and most thoughts will write nothing at all.
+
+Both tiers **require a configured datastore** ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)):
+memory is persisted through it rather than held only in RAM, and a navi that
+declares memory without a datastore fails at assembly instead of silently losing
+what it learned.
 
 The natural write point is therefore **the end of a thought** — a post-thought
 analysis pass, at the same lifecycle point where the runner already flushes the
@@ -118,11 +127,12 @@ when implementing either side.
 
 - **Not the thought system.** That is the runtime's main loop — it decides what
   runs next, not what a navi knows. It is the *queue*.
-- **Not `store.MemoryStore`.** That is an in-memory *implementation* of the
-  session store, unrelated to the memory tiers.
+- **Not `datastore.MemoryStore`.** That is the volatile backend — the in-memory
+  default that persists nothing — unrelated to the memory tiers.
 - **Not the thought transcript.** Sessions record history — what happened.
-  Memory records what the navi chose to keep. See
-  [Intentional, not incidental](#intentional-not-incidental).
+  Memory records what the navi chose to keep. A portal reads the transcript
+  through the thought system, not through a datastore handle, and never learns
+  which backend produced it ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)).
 - **Not `note`.** [`tool/note`](../../tool/note/) is a per-navi verbatim
   scratchpad, and its own documentation calls it "deliberately distinct from
   semantic memory". Notes are written and read back exactly; memory is curated
@@ -147,7 +157,11 @@ Recorded rather than silently decided:
 3. **Retention and pruning.** The original design said "long-term with pruning"
    for both `navi` and `memories`, without defining a policy. Because short-term
    writes are deliberate rather than volume-driven, pruning can also be a
-   deliberate act rather than a heuristic.
+   deliberate act rather than a heuristic. Datastore history follows the same
+   stance: retention defaults to unbounded and a prune mechanism ships with the
+   datastore, invoked explicitly rather than by a background heuristic
+   ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md), decision 11).
+   The memory tiers' own retention policy is still open.
 
 ## Provenance
 
@@ -184,3 +198,5 @@ document it" — so it drifted. Capturing the model here is the fix.
 - [rewrite-plan.md](./rewrite-plan.md) — milestones
 - [ADR 0010](../adr/0010-three-capability-layers.md) — why short-term memory is
   not one of the three capability layers, and long-term memory is a tool
+- [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — where history
+  and memory are persisted, and why the backend is not a read path

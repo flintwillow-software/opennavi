@@ -51,9 +51,10 @@ a separate CI step asserts that no public package imports `internal/*`
 (NAVI-356). A registration seam that needs the registry (the queue-handle
 binding) therefore lives in `tool/registry`, not in the `thought` contract.
 
-`store` is a **public package**: session and stateful data types, their
-interfaces, and in-memory helpers, with the durable implementation in
-`store/sqlite`. `tool/{note,todo,registry}` importing it is therefore
+`datastore` is a **public package**: thought/transcript, stateful tool, and
+memory data types, their interfaces, and in-memory helpers, with the durable
+implementations in `datastore/fs` and `datastore/sqlite`,
+`tool/{note,todo,registry}` importing it is therefore
 public→public, not public→implementation — an intentional boundary, recorded
 here (NAVI-356). The shipped catalog implementations live in the public
 `tool/*` packages (including `tool/builtin`'s `file_read`/`shell_exec`); the
