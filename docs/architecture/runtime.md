@@ -54,7 +54,7 @@ if err := n.Run(ctx); err != nil { ... }
 | `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
 | `Portals` | added | human observe/control surfaces | Receive `Deps` at `Start`; list/schedule/steer thoughts |
 | `Modes` | added | named tool/permission/model sets | Selected per thought |
-| `Stores` | added | persistence backends (`fs`, `sqlite`, …) | Selected at build time, chosen at runtime; RAM is the source of truth, the backend is eventual ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
+| `Stores` | added | persistence backends (`fs`, `sqlite`, …) | Selected at build time, chosen at runtime; backs thought state, transcripts, tool state, and memory. RAM is the source of truth, the backend is eventual ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)) |
 
 `Permissions` is a field (the compiled policy ceiling; runtime config may only
 tighten it), not a collection. Runtime plugins are deferred (ADR 0005) and have
@@ -224,9 +224,11 @@ import it — they depend only on the component packages.
 Each thought run resolves an agent run: mode-selected tool surface → registry
 active set → bridge into the executor. The registry owns metadata, validation,
 active-set membership, and dispatch; the executor owns concurrency and timeout
-envelopes. Session state (messages, checkpoints) persists through the selected
-`Stores` backend, which is not on the read path: the run reads and writes RAM,
-and the backend catches up asynchronously (ADR 0011).
+envelopes. Session state (messages, checkpoints), stateful tool state (todo,
+note), and the memory tiers all persist through the selected `Stores` backend,
+which is not on the read path: the run reads and writes RAM, and the backend
+catches up asynchronously through one ordered writer (ADR 0011). Memory
+requires a configured store — there is no volatile-memory mode.
 
 ## Related
 

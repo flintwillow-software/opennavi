@@ -91,6 +91,11 @@ Memory is the opposite. An entry exists because the navi decided it was worth
 keeping. So memory grows deliberately and slowly rather than in proportion to run
 volume, and most thoughts will write nothing at all.
 
+Both tiers **require a configured backend store** ([ADR 0011](../adr/0011-persistence-is-a-backend-component.md)):
+memory is persisted through it rather than held only in RAM, and a navi that
+declares memory without a store fails at assembly instead of silently losing
+what it learned.
+
 The natural write point is therefore **the end of a thought** — a post-thought
 analysis pass, at the same lifecycle point where the runner already flushes the
 session. Whether that pass is a runtime step or a tool the agent calls, and

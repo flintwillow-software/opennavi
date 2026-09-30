@@ -95,6 +95,21 @@ unspecified.
    the body carries the transcript. The layout is the `fs` backend's concern and
    is not part of the contract.
 
+8. **Tools and memory are store consumers, not special cases.** The backend
+   exposes typed views over one store: the thought/transcript aggregate,
+   stateful tool state, and the memory tiers. A tool binds a store handle the
+   way `registry.RegisterStateful` already binds one, so the todo and note tools
+   become ordinary consumers rather than a parallel persistence path. **Short-
+   and long-term memory require a configured backend store** — a navi that
+   declares memory without one fails at assembly rather than silently keeping
+   memory volatile.
+
+9. **One writer, one ordered queue.** All asynchronous persistence — thought
+   state, transcripts, tool state, memory — drains through a single writer over
+   an ordered queue, with per-aggregate high-water marks for batching. Reads
+   never consult the queue, and a slow or failed write is surfaced as an event
+   rather than by blocking a producer.
+
 ## Consequences
 
 - **The store leaves the critical path.** No disk latency inside a run, a
@@ -112,9 +127,19 @@ unspecified.
 - **`store` becomes a component package.** Its public surface changes from
   session CRUD to the backend/aggregate contract; `MemoryStore` becomes the
   volatile default. `store` joins the stdlib-only component packages.
+- **Persistence is one dependency, not several.** A navi author selects one
+  backend and gets thought state, transcripts, tool state, and memory. The
+  todo/note tools stop carrying their own store path, and the memory tiers gain
+  a real durability story instead of an implied one.
+- **Memory needs a backend.** A navi that wants short- or long-term memory must
+  configure a store; there is no memory-without-persistence mode. This is a
+  compile-time/assembly requirement, not a runtime degradation.
 - **One backend handle replaces several options** (`WithThoughtStore`,
-  `WithSessionStore`, and the cron/stateful wiring) — a breaking option change,
-  deliberate.
+  `WithSessionStore`, and the cron/stateful wiring).
+- **The public surface may be reshaped freely.** The repository is pre-1.0 with
+  no external adopters (ADR 0001) and this is an MVP, so options, interfaces,
+  and package layout can break without compatibility shims. `store`'s session
+  CRUD surface is replaced outright rather than deprecated.
 - **ADR 0010 is not superseded.** Its three layers classify capabilities by their
   relationship to the thought system (tools run *inside* a thought, connectors
   *create* one, portals observe/steer). A backend store sits *beneath* the
@@ -146,15 +171,20 @@ Recorded rather than silently decided:
    is a bounded *cache*, not a retention *policy* — nothing yet decides when a
    transcript is pruned, archived, or dropped, which is also memory.md's open
    question 3.
-2. **Scope of one backend.** Whether stateful tool state (todo/note) and cron
-   tick state move under the same backend contract or stay separate typed stores
-   sharing one backend instance.
+2. **How a tool gets its store handle.** `Deps` is a lifecycle argument, not a
+   constructor input (ADR 0002), and tools have no `Start` — so the store cannot
+   arrive the way `Connector.Deps` does. Either `.Add()` on the `Stores`
+   collection returns a handle the author passes to the tool factory (today's
+   `todo.Tools(naviID, stateful)` shape, explicit in `main.go`), or a tool
+   *declares* a store requirement the runtime binds at assembly. Leaning to the
+   first: it matches `RegisterStateful` and keeps the dependency visible.
 3. **Naming.** Whether the component package keeps the name `store` (with
    `store/fs`, `store/sqlite` under it) or is renamed (`backend`, `storage`) to
    distinguish it from the retired session-store surface.
-4. **Write ordering across aggregates.** With async writes, whether a
-   per-thought high-water mark (append entries after the last flushed index) is
-   sufficient, or cross-aggregate ordering needs a sequence.
+4. **Whether one writer stays a hard invariant.** A single writer goroutine gives
+   a total order across aggregates; a bounded pool with per-aggregate
+   serialization gives more throughput. The ordering rule above is the decision;
+   the concurrency shape is not yet fixed.
 
 ## Related
 
