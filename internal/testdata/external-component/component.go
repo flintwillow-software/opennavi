@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
@@ -49,6 +50,44 @@ func PingTool() tool.Tool {
 				return "", err
 			}
 			return "pong", nil
+		},
+	}
+}
+
+// TodoCount builds a read-only tool over the datastore's tool-state view.
+// It exists to prove the datastore contract is usable from an out-of-repo
+// module: the per-aggregate view is the only handle, the signature names
+// no navi or internal type, and the tool cannot tell which backend serves
+// it.
+func TodoCount(naviID string, state datastore.ToolState) tool.Tool {
+	schema, _ := tool.ParseSchema(json.RawMessage(`{"type":"object"}`))
+	return tool.Tool{
+		Def: tool.Def{
+			Name:          "external_todo_count",
+			Description:   "Synthetic out-of-repo tool: counts the navi's todos through a datastore view.",
+			InputSchema:   schema,
+			OutputFormat:  "text",
+			Access:        tool.AccessReadOnly,
+			Timeout:       5 * time.Second,
+			Recovery:      "retry_once",
+			Mode:          tool.ToolModeSequential,
+			Tags:          []string{"external", "synthetic"},
+			Version:       "0.1.0",
+			PromptSnippet: "Count todos through the datastore contract",
+			SourceInfo: tool.SourceInfo{
+				Origin: tool.OriginAuthor,
+				Path:   "example.com/external-component",
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			todos, err := state.ListTodos(naviID, "", 0)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d", len(todos)), nil
 		},
 	}
 }

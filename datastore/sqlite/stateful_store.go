@@ -12,7 +12,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 )
 
-// StatefulStore implements datastore.StatefulToolStore on SQLite
+// StatefulStore implements the datastore.ToolState view on SQLite
 // (migration 6): durable todo and note state for
 // stateful catalog tools, in the same database as sessions/thoughts.
 // Per-navi scoping is enforced here — every query is filtered on

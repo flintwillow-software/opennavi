@@ -30,14 +30,14 @@ jobs:
       - name: Gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
-      # The component packages and `store` are the public surface (ADR 0004);
+      # The component packages and `datastore` are the public surface (ADR 0004);
       # none may import runtime internals. Added in NAVI-356; the last
       # exception (connector/cron -> internal/cron) was removed in NAVI-359,
       # so this now covers every public package with no exceptions.
       - name: Public packages import no runtime internals
         run: |
           violations="$(grep -rn '"github.com/flintwillow-software/opennavi/internal/' \
-            --include='*.go' tool thought connector portal model skill store \
+            --include='*.go' tool thought connector portal model skill datastore \
             | grep -v '_test.go' || true)"
           if [ -n "$violations" ]; then
             echo "public packages import runtime internals:"
@@ -109,7 +109,7 @@ jobs:
         run: |
           bad="$(go list -f '{{join .Imports "\n"}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore)$' || true)"
           if [ -n "$bad" ]; then
             echo "external component imports non-contract packages:"
             echo "$bad"
@@ -126,12 +126,12 @@ jobs:
 
           # NAVI-355: the closure must be CONTRACT-PURE. Importing a contract
           # package must not transitively pull an implementation package
-          # (store, tool/registry, ...) — the contract layer is stdlib-only, and
-          # that is the invariant an out-of-repo author relies on. Before
-          # NAVI-355, `thought` imported tool/registry, so this list was non-empty.
+          # (datastore/sqlite, tool/registry, ...) — the contract layer is
+          # stdlib-only, and that is the invariant an out-of-repo author
+          # relies on. NAVI-375 adds `datastore` to that contract layer.
           impure="$(go list -deps -f '{{.ImportPath}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore)$' || true)"
           if [ -n "$impure" ]; then
             echo "external component's contract closure is not contract-pure:"
             echo "$impure"

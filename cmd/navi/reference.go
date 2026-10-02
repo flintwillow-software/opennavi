@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector/cron"
+	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
@@ -73,10 +75,6 @@ func serveReferenceNavi(p runParams) error {
 		return err
 	}
 	defer store.Close()
-	stateful, err := sqlite.NewStatefulStore(store.DB())
-	if err != nil {
-		return err
-	}
 	thoughtStore, err := sqlite.NewThoughtStore(store.DB())
 	if err != nil {
 		return err
@@ -96,14 +94,23 @@ func serveReferenceNavi(p runParams) error {
 		}),
 		navi.WithWorkers(p.workers),
 		navi.WithThoughtStore(thoughtStore),
-		navi.WithSessionStore(store),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithCompactBudget(p.compactBudget),
 	)
+
+	// The reference navi declares the non-durable reference datastore: it
+	// integrates through the contract (the catalog takes
+	// n.Datastores.Handle().Stateful()), but transcripts, memory, and tool
+	// state stay in memory until the durable backends land
+	// (datastore/fs, NAVI-365; datastore/sqlite, NAVI-364). The thought
+	// queue and cron tick state stay on SQLite.
+	if err := n.Datastores.Add(inmem.Candidate()); err != nil {
+		return err
+	}
 	if err := addProviders(n, rc); err != nil {
 		return err
 	}
-	if err := addCatalogTools(n, rc, naviID, stateful, p.workDir); err != nil {
+	if err := addCatalogTools(n, rc, naviID, n.Datastores.Handle().Stateful(), p.workDir); err != nil {
 		return err
 	}
 	if err := addCron(n, rc, store.DB()); err != nil {
@@ -197,7 +204,7 @@ func addProvider(n *navi.Navi, name, modelName, endpoint string, isDefault bool)
 }
 
 // addCatalogTools registers the catalog the reference navi ships.
-func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, stateful *sqlite.StatefulStore, workDir string) error {
+func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state datastore.ToolState, workDir string) error {
 	add := func(tools []tool.Tool, err error) error {
 		if err != nil {
 			return err
@@ -212,10 +219,10 @@ func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state
 	if err := add(builtin.Tools(workDir)); err != nil {
 		return err
 	}
-	if err := add(todo.Tools(naviID, stateful)); err != nil {
+	if err := add(todo.Tools(naviID, state)); err != nil {
 		return err
 	}
-	if err := add(note.Tools(naviID, stateful, noteCaps(rc.ToolCaps)...)); err != nil {
+	if err := add(note.Tools(naviID, state, noteCaps(rc.ToolCaps)...)); err != nil {
 		return err
 	}
 	tm, err := timepkg.Tool()

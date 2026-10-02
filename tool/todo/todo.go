@@ -5,7 +5,7 @@
 //
 // All three register through tool/registry.RegisterStateful: each
 // handler receives a per-navi store handle at dispatch and persists
-// through datastore.StatefulToolStore, so todo state survives restarts
+// through datastore.ToolState, so todo state survives restarts
 // and is scoped per navi identity. Register the package with
 // RegisterTools (or one tool with RegisterOne) on a bound registry.
 package todo
@@ -40,7 +40,7 @@ func Definitions() []registry.ToolDefinition {
 
 // RegisterTools registers all three todo tools on reg for the navi
 // identity naviID, persisting through state (seam).
-func RegisterTools(reg *registry.Registry, naviID string, state datastore.StatefulToolStore) error {
+func RegisterTools(reg *registry.Registry, naviID string, state datastore.ToolState) error {
 	if reg == nil {
 		return errors.New("todo: registry is required")
 	}
@@ -65,7 +65,7 @@ func RegisterTools(reg *registry.Registry, naviID string, state datastore.Statef
 // RegisterOne registers a single todo tool by name on reg — for
 // selective activation (a navi may enable todo_read without the
 // writers).
-func RegisterOne(reg *registry.Registry, naviID string, state datastore.StatefulToolStore, name string) error {
+func RegisterOne(reg *registry.Registry, naviID string, state datastore.ToolState, name string) error {
 	switch name {
 	case "todo_read":
 		return reg.RegisterStateful(readDef(), naviID, state, handleRead)
@@ -81,7 +81,7 @@ func RegisterOne(reg *registry.Registry, naviID string, state datastore.Stateful
 // Tools returns the three todo tools as public component tools bound to
 // naviID and state — the collection form of RegisterTools for the navi
 // composition root.
-func Tools(naviID string, state datastore.StatefulToolStore) ([]tool.Tool, error) {
+func Tools(naviID string, state datastore.ToolState) ([]tool.Tool, error) {
 	if naviID == "" {
 		return nil, errors.New("todo: navi identity is required")
 	}

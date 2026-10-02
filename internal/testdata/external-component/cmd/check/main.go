@@ -27,6 +27,12 @@ func main() {
 	var c connector.Connector = &component.Watcher{}
 	var p portal.Portal = &component.Dashboard{}
 
+	// The datastore view is part of the component's public surface: the
+	// factory is asserted to type-check against the contract, which is what
+	// keeps the external-consumer guard honest about datastore being a
+	// contract package.
+	var _ = component.TodoCount
+
 	// The portal must fail closed for an identity that never attached.
 	if err := p.Steer("anon", "t1", "hi"); !errors.Is(err, portal.ErrUnauthorized) {
 		panic(fmt.Sprintf("dashboard must fail closed, got %v", err))

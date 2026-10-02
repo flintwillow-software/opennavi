@@ -12,7 +12,7 @@ import (
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
-// memStatefulStore is a minimal in-memory StatefulToolStore mirroring
+// memStatefulStore is a minimal in-memory datastore.ToolState mirroring
 // the registry tests' helper — enough for tool-layer semantics; the
 // SQLite-backed durability/scoping tests live in store/sqlite.
 type memStatefulStore struct {

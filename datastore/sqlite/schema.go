@@ -1,7 +1,6 @@
-// Package sqlite implements the session.Store interface on top of
-// SQLite, using
-// the pure-Go modernc.org/sqlite driver (no CGO) and app-level
-// AES-256-GCM encryption for sensitive columns.
+// Migrations for the SQLite persistence layer, applied by Open/OpenDB.
+// The schema is append-only: migrations are never rewritten, and a table
+// that a retired feature used is left in place rather than dropped.
 package sqlite
 
 import (

@@ -31,7 +31,7 @@ func statefulDef(name string) ToolDefinition {
 	}
 }
 
-// memStatefulStore is a minimal in-memory StatefulToolStore for
+// memStatefulStore is a minimal in-memory datastore.ToolState for
 // registry-level tests; the real SQLite implementation and its
 // restart/scoping tests live in store/sqlite.
 type memStatefulStore struct {

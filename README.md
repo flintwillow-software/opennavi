@@ -49,8 +49,9 @@ The SDK provides:
   thought system.
 - **Provider layer** (`internal/llm`) — Ollama and OpenRouter with a fallback
   chain.
-- **Session store** (`store/`, `store/sqlite/`) — conversations, thoughts, and
-  memory in one SQLite database.
+- **Datastore** (`datastore/`, `datastore/sqlite/`) — the public persistence
+  contract (per-aggregate views, candidate backends) with the SQLite
+  implementation; RAM is the source of truth at runtime (ADR 0011).
 - **Tool system** (`tool/`) — the `Tool` type, the registry and bridge, and
   the shipped catalog: builtins (`file_read`, `shell_exec`) plus the todo,
   note, time, http, and thoughts tools.
@@ -81,7 +82,7 @@ opennavi/
 ├── navi/           # composition root
 ├── tool/ thought/ connector/ portal/ model/ skill/   # public component packages
 ├── tool/           # the tool system: Tool type, registry, catalog
-├── store/          # public session store interface + SQLite implementation
+├── datastore/      # public persistence contract + backends (inmem, sqlite)
 ├── internal/       # runtime: agent loop, providers, bridge, config, ops
 ├── templates/      # starter navi modules (CI guardrail)
 └── docs/

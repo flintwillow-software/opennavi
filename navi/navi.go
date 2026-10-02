@@ -55,6 +55,11 @@ type Navi struct {
 	Portals    *Collection[portal.Portal]
 	Modes      *Collection[Mode]
 
+	// Datastores is the compiled candidate set of persistence backends
+	// (ADR 0011). The active one is selected from runtime config at
+	// assembly; consumers take per-aggregate views from its handle.
+	Datastores *DatastoreCollection
+
 	// Permissions is the compiled permission ceiling (ADR 0006): what
 	// this binary is capable of at all. Modes may narrow it and can
 	// never widen it.
@@ -96,12 +101,15 @@ type Navi struct {
 	// registry is the runtime tool registry built from the declared Tools
 	// collection (built once, at assemble).
 	registry *registry.Registry
+	// transcripts is the thought/transcript view the runner persists
+	// through. It is resolved from the active datastore at assembly and is
+	// nil when no datastore is declared (history is then not persisted).
+	transcripts datastore.Thoughts
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
 	// Execution.
 	runner   Runner
-	sessions datastore.Store
 	workers  int
 	dispatch *dispatch
 
@@ -198,6 +206,7 @@ func New(name string, opts ...Option) *Navi {
 			"portal", nil, validatePortal),
 		Modes: newCollection("mode",
 			func(m Mode) string { return m.Name }, validateMode),
+		Datastores: newDatastoreCollection(),
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -231,9 +240,6 @@ func New(name string, opts ...Option) *Navi {
 
 	// Execution defaults. The runner is built after options so it logs
 	// through the logger the author chose.
-	if n.sessions == nil {
-		n.sessions = datastore.NewMemoryStore()
-	}
 	if n.workers == 0 {
 		n.workers = 2
 	}
@@ -323,7 +329,7 @@ func (n *Navi) validate() error {
 	// Shape re-validation: an Add error the author ignored must not slip
 	// a malformed component into a serving navi.
 	for _, c := range []interface{ revalidate() error }{
-		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes,
+		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes, n.Datastores,
 	} {
 		if err := c.revalidate(); err != nil {
 			return err
@@ -332,7 +338,7 @@ func (n *Navi) validate() error {
 	// Duplicate names, likewise: Add catches them eagerly, this catches
 	// them whether or not Add's error was read.
 	for _, d := range []interface{ duplicates() (string, bool) }{
-		n.Skills, n.Tools, n.Models, n.Modes,
+		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores,
 	} {
 		if name, dup := d.duplicates(); dup {
 			return fmt.Errorf("%w: %q", ErrDuplicate, name)
@@ -466,6 +472,7 @@ func (n *Navi) freeze() {
 	n.Connectors.freeze()
 	n.Portals.freeze()
 	n.Modes.freeze()
+	n.Datastores.freeze()
 }
 
 // Serving reports whether Run has started.

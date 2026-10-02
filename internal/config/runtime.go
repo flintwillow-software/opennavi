@@ -87,6 +87,21 @@ type HTTPEgressConfig struct {
 	Denylist         []string `yaml:"denylist,omitempty"`
 }
 
+// DatastoreConfig selects the active datastore backend and its
+// parameters (ADR 0011 decision 3): the candidate set is compiled in at
+// build time, which one is active is runtime config. The navi validates
+// the selection at assembly, so this layer only carries it.
+type DatastoreConfig struct {
+	// Backend names the compiled candidate to activate ("inmem", "fs",
+	// "sqlite"). Empty selects the compiled default.
+	Backend string `yaml:"backend,omitempty"`
+	// Params are handed to the candidate's Open (path, dsn, ...).
+	Params map[string]string `yaml:"params,omitempty"`
+	// Routing overrides the aggregate→backend map. Empty routes every
+	// aggregate to the active backend; non-default routing is NAVI-366.
+	Routing map[string]string `yaml:"routing,omitempty"`
+}
+
 // RuntimeConfig is the user-modifiable configuration (the static
 // definition vs. runtime config split): LLM provider keys,
 // session settings, tool policy overrides. It never modifies the
@@ -106,6 +121,9 @@ type RuntimeConfig struct {
 	EmbedModel string `yaml:"embed_model,omitempty"`
 	// ThoughtQueue tunes the daemon's thought queue (nil = defaults).
 	ThoughtQueue *ThoughtQueueConfig `yaml:"thought_queue,omitempty"`
+	// Datastore selects the active persistence backend (nil = compiled
+	// default).
+	Datastore *DatastoreConfig `yaml:"datastore,omitempty"`
 	// Cron declares the daemon's cron schedules (nil = none).
 	Cron *CronConfig `yaml:"cron,omitempty"`
 }
@@ -222,6 +240,22 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	if src.ThoughtQueue != nil {
 		tq := *src.ThoughtQueue
 		dst.ThoughtQueue = &tq
+	}
+	if src.Datastore != nil {
+		dc := *src.Datastore
+		if src.Datastore.Params != nil {
+			dc.Params = make(map[string]string, len(src.Datastore.Params))
+			for k, v := range src.Datastore.Params {
+				dc.Params[k] = v
+			}
+		}
+		if src.Datastore.Routing != nil {
+			dc.Routing = make(map[string]string, len(src.Datastore.Routing))
+			for k, v := range src.Datastore.Routing {
+				dc.Routing[k] = v
+			}
+		}
+		dst.Datastore = &dc
 	}
 	if src.Cron != nil {
 		c := *src.Cron

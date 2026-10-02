@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/provider"
@@ -141,6 +142,37 @@ func (n *Navi) assemble() error {
 		return err
 	}
 	n.registry = reg
+
+	// Resolve the datastore candidate set and bind the stable handle.
+	// This is assembly-time binding validation (ADR 0011 decision 4):
+	// registration checked the shape, this checks that a handle with a
+	// consumer actually resolves.
+	return n.assembleDatastore(file)
+}
+
+// assembleDatastore selects the active backend from the compiled candidates
+// and the runtime config, opens it, and binds the stable handle. The navi
+// runtime itself consumes the thought/transcript view, so declaring a
+// candidate means history is persisted through it.
+func (n *Navi) assembleDatastore(file *config.RuntimeConfig) error {
+	cfg := datastore.Config{}
+	if file != nil && file.Datastore != nil {
+		cfg.Backend = file.Datastore.Backend
+		cfg.Params = file.Datastore.Params
+		if len(file.Datastore.Routing) > 0 {
+			routing := make(map[datastore.Aggregate]string, len(file.Datastore.Routing))
+			for agg, backend := range file.Datastore.Routing {
+				routing[datastore.Aggregate(agg)] = backend
+			}
+			cfg.Routing = routing
+		}
+	}
+	if err := n.Datastores.activate(cfg); err != nil {
+		return err
+	}
+	if n.Datastores.handle.Bound() {
+		n.transcripts = n.Datastores.handle.Thoughts()
+	}
 	return nil
 }
 

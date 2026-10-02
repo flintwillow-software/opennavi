@@ -3,7 +3,6 @@ package navi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -38,17 +37,6 @@ func WithRunner(r Runner) Option {
 	}
 }
 
-// WithSessionStore sets where thought transcripts are recorded. Defaults
-// to an in-memory store, which means transcripts do not survive the
-// process — the durable store arrives with the store port.
-func WithSessionStore(s datastore.Store) Option {
-	return func(n *Navi) {
-		if s != nil {
-			n.sessions = s
-		}
-	}
-}
-
 // WithWorkers sets how many thoughts may execute concurrently. The queue's
 // own slot policy is the real limiter; extra workers simply find nothing
 // claimable.
@@ -59,11 +47,6 @@ func WithWorkers(count int) Option {
 		}
 	}
 }
-
-// SessionIDFor returns the session id recording a thought's transcript.
-// One session per thought, keyed by the thought id. Exported because
-// portals and tooling need to find a thought's history from its id.
-func SessionIDFor(thoughtID string) string { return "thought:" + thoughtID }
 
 // checkpointPrefix is the self-describing magic for the checkpoint blob
 // format. The queue treats the blob as opaque; only the runner can detect
@@ -326,14 +309,16 @@ func decodeCheckpoint(blob []byte) ([]agent.AgentMessage, error) {
 
 // ── transcript persistence ──────────────────────────────────────────────
 
-// persistConversation records the agent conversation as session entries
-// (sessions record history, #240). Creates the session if needed, then
-// appends one entry per agent message; tool results carry their output.
+// persistConversation records the agent conversation as the thought's
+// transcript. A thought is the persistence aggregate (ADR 0011 decision
+// 8): its transcript is keyed by thought id and written through the
+// thought/transcript view, never through a session handle. A navi that
+// declares no datastore keeps no history, so this is a no-op.
 func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage) error {
-	sess, err := n.sessionFor(t)
-	if err != nil {
-		return err
+	if n.transcripts == nil {
+		return nil
 	}
+	entries := make([]datastore.Entry, 0, len(msgs))
 	for _, m := range msgs {
 		content := m.Content
 		if m.Role == agent.RoleTool && m.ToolResult != "" {
@@ -342,28 +327,19 @@ func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage
 		if content == "" && len(m.ToolCalls) == 0 {
 			continue
 		}
-		sess.AppendEntry(datastore.NewEntry(datastore.Role(strings.ToLower(m.Role.String())), content))
+		e := datastore.NewEntry(datastore.Role(strings.ToLower(m.Role.String())), content)
+		switch {
+		case len(m.ToolCalls) > 0:
+			e.ToolCallID = m.ToolCalls[0].ToolCallID
+			e.ToolName = m.ToolCalls[0].Name
+			e.ToolInput = append(json.RawMessage(nil), m.ToolCalls[0].Arguments...)
+		case m.ToolCallID != "":
+			e.ToolCallID = m.ToolCallID
+		}
+		entries = append(entries, e)
 	}
-	return n.sessions.SaveSession(sess)
+	return n.transcripts.SaveTranscript(t.ID, entries)
 }
-
-// sessionFor loads the thought's session, creating it on first run.
-func (n *Navi) sessionFor(t *thought.Thought) (*datastore.Session, error) {
-	id := SessionIDFor(t.ID)
-	sess, err := n.sessions.LoadSession(id)
-	if err == nil {
-		return sess, nil
-	}
-	if !errors.Is(err, datastore.ErrSessionNotFound) {
-		return nil, fmt.Errorf("load session for thought %s: %w", t.ID, err)
-	}
-	sess = datastore.NewSession(n.name, t.ID)
-	sess.ID = id
-	return sess, nil
-}
-
-// SessionStore returns the store backing thought transcripts.
-func (n *Navi) SessionStore() datastore.Store { return n.sessions }
 
 // ── execution pool ──────────────────────────────────────────────────────
 

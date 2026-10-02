@@ -92,7 +92,7 @@ func FormatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 // through the stateful store state. opts
 // override the note caps (last one wins). Registration fails cleanly
 // when the registry, navi identity, or store handle is missing.
-func Register(reg *registry.Registry, naviID string, state datastore.StatefulToolStore, opts ...Options) error {
+func Register(reg *registry.Registry, naviID string, state datastore.ToolState, opts ...Options) error {
 	if reg == nil {
 		return fmt.Errorf("note register: registry is required")
 	}
@@ -166,7 +166,7 @@ func definitions() (registry.ToolDefinition, registry.ToolDefinition, error) {
 // Tools returns note_read and note_write as public component tools bound
 // to naviID and state — the collection form of Register for the navi
 // composition root.
-func Tools(naviID string, state datastore.StatefulToolStore, opts ...Options) ([]tool.Tool, error) {
+func Tools(naviID string, state datastore.ToolState, opts ...Options) ([]tool.Tool, error) {
 	if naviID == "" {
 		return nil, fmt.Errorf("note: navi identity is required")
 	}

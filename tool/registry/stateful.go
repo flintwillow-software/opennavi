@@ -18,7 +18,7 @@ type StateContext struct {
 	NaviID string
 	// Store is the durable stateful tool store backing this
 	// registration. State written through it survives restarts.
-	Store datastore.StatefulToolStore
+	Store datastore.ToolState
 }
 
 // StatefulHandler executes a stateful tool call. Args arrive
@@ -37,7 +37,7 @@ type StatefulHandler func(ctx context.Context, args map[string]any, state StateC
 // metadata, namespace_action name); duplicates are rejected and the
 // original registration stays intact. state and naviID are required —
 // a stateful tool without a store handle cannot be registered.
-func (r *Registry) RegisterStateful(def ToolDefinition, naviID string, state datastore.StatefulToolStore, handler StatefulHandler, opts ...Option) error {
+func (r *Registry) RegisterStateful(def ToolDefinition, naviID string, state datastore.ToolState, handler StatefulHandler, opts ...Option) error {
 	if handler == nil {
 		return fmt.Errorf("register %q: handler is required", def.Name)
 	}

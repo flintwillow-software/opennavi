@@ -17,7 +17,8 @@ are written against the public component packages. Durable design lives in
   `model/` `skill/` — public component packages
 - `tool/registry`, `tool/{builtin,http,note,thoughts,time,todo}`
   — the tool system: registry and shipped catalog
-- `store/` — public session store
+- `datastore/` — public persistence contract (views, candidates, handle);
+  `datastore/inmem` is the reference backend, `datastore/sqlite` the durable one
 - `internal/` — runtime wiring (agent loop, providers, bridge, config, cron,
   context, ops)
 - `cmd/navi/` — the reference navi; `templates/` — starter navi modules

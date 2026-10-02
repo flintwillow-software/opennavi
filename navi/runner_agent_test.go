@@ -87,12 +87,12 @@ func TestAgentRunnerDispatchesThroughTheRegistry(t *testing.T) {
 		t.Fatalf("tool handler args = %v, want x=hi", gotArgs)
 	}
 
-	// The tool exchange is recorded in the thought's session.
-	sess, err := n.SessionStore().LoadSession(SessionIDFor("t1"))
+	// The tool exchange is recorded in the thought's transcript.
+	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("t1")
 	if err != nil {
-		t.Fatalf("load session: %v", err)
+		t.Fatalf("load transcript: %v", err)
 	}
-	text := strings.Join(sessionText(sess), "|")
+	text := strings.Join(transcriptText(entries), "|")
 	if !strings.Contains(text, "echoed") || !strings.Contains(text, "done") {
 		t.Fatalf("transcript = %q, want the tool result and final reply", text)
 	}
