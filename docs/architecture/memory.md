@@ -55,6 +55,16 @@ Always in context. Injected into the prompt for every thought, with no tool call
 required. The navi may write to it during a thought, and those writes are
 visible to subsequent thoughts.
 
+**Short-term memory is the inter-thought carrier, and that makes it
+load-bearing.** Context pressure is resolved by deferring work into follow-up
+thoughts rather than by compacting a long conversation
+([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)): a thought
+approaching its budget finishes a coherent unit, writes what the next one needs
+into short-term memory, and queues follow-ups that declare which skills to load.
+So short-term memory is not a convenience on top of the queue — it is the
+handoff that makes the queue usable as the context mechanism, which is why
+NAVI-351 sits on the critical path and requires a configured datastore.
+
 **It is navi-internal, not a public component package.** It is the navi's own
 working state rather than a capability an extension supplies, and ADR 0010's
 three capability layers — [tools, connectors, portals](../adr/0010-three-capability-layers.md)
@@ -200,3 +210,5 @@ document it" — so it drifted. Capturing the model here is the fix.
   not one of the three capability layers, and long-term memory is a tool
 - [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — where history
   and memory are persisted, and why the backend is not a read path
+- [ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md) — why the
+  queue, not compaction, is how context stays bounded
