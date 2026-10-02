@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-24'
-updated: '2026-09-28'
+updated: '2026-09-30'
 tags:
   - architecture
   - security
@@ -14,7 +14,9 @@ tags:
 > binary signature attests to. Decisions: ADR
 > [0005](../adr/0005-build-time-modules-are-the-extension-path.md),
 > [0006](../adr/0006-compile-time-omission-plus-runtime-ceiling.md),
-> [0008](../adr/0008-secrets-interpolated-never-literal.md).
+> [0008](../adr/0008-secrets-interpolated-never-literal.md),
+> [0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md),
+> [0014](../adr/0014-connectors-are-bidirectional-service-integrations.md).
 
 ## The model in one sentence
 
@@ -72,6 +74,33 @@ A mode is always a subset of the compiled permission ceiling; it cannot
 escalate. Modes let one binary present a safe planning surface and a full
 execution surface without shipping two binaries.
 
+## Context and the injection boundary
+
+Agent injection is treated as the primary threat, not a content-filtering
+problem. The control is that **nothing reachable from a prompt can change how a
+navi assembles context** ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)).
+
+- **Context sources are build-time declarations.** Runtime config may narrow
+  them; it can never add one. Changing what a navi assembles requires a rebuild
+  and a redeploy, and the owner gates that redeploy.
+- **Skills are a menu selection, not a fetch.** All three loading paths —
+  author-declared auto-load, thought-declared request, agent-chosen tool — can
+  only select from the **compiled-in** set. A manipulated skill request can at
+  worst load a skill the author already shipped. There is no path from a prompt
+  to new instructions arriving at runtime.
+- **Role separation is structural.** What a navi may do is determined by which
+  components and tools exist in its binary, not by what its prompt says. Two
+  navis with identical prompts but different component sets have different
+  capabilities, and neither can be talked into using a tool it does not have
+  ([ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md)).
+- **The assembled context is recorded**, so what a thought actually ran with is
+  auditable after the fact rather than inferred.
+
+The residual risk is accepted and named: content *inside* a thought's context
+(tool output, a fetched page, an external message) can still attempt to steer
+the model. That is bounded by the capability surface, not by the assembler —
+which is exactly why the capability surface is the thing kept small.
+
 ## Provenance and audit
 
 Every tool declares its origin (`builtin`, `sdk`, `author`, `extension`) and,
@@ -94,6 +123,31 @@ supply-chain record; artifact signing is deferred (see below).
 ```go
 model.OpenRouter("anthropic/claude-sonnet-4", model.WithCredential("OPENROUTER_API_KEY"))
 ```
+
+## Egress
+
+Outbound capability is a capability, and is bounded the same way inbound work is
+([ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md)).
+
+- **Egress lives in connector-owned tools.** A connector exposes its outbound
+  operations as ordinary tool definitions the author adds explicitly via
+  `connector.SendTool()` — never auto-registered. Every way a navi can talk
+  outward is therefore visible in `main.go`, the same property tools and
+  connectors already have.
+- **Integrations are declared by composing the navi.** Which services a navi can
+  reach is a build-time decision that assigns intent. IAM-style mode permissions
+  narrow what a connected component may do; they never widen which services
+  exist.
+- **There is no generic egress payload schema.** Payloads are service-specific
+  (a message, a reply, a reaction), so there is no shared envelope to
+  accidentally over-share through.
+- **Secrets are read at the call site only** — resolved inside the request that
+  needs them, from a runtime reference (ADR 0008), and never written to the
+  thought transcript, the datastore, or logs. A secret never appears in history
+  because history is written where the secret is not read.
+- **An egress tool must tolerate an unstarted connector**: tools are bound at
+  authoring time but the client arrives at `Start`, so a call before the
+  connector serves fails cleanly rather than dereferencing a nil client.
 
 ## Trust boundary
 

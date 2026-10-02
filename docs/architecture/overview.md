@@ -45,9 +45,10 @@ trigger, a gateway webhook, a human portal — feeds the same thought queue.
 
 - **Portals** are human-facing observation and control surfaces (CLI, TUI,
   WebUI). They list, schedule, and steer thoughts.
-- **Connectors** are transport integrations that bring work in (gateway
-  webhooks, cron schedules, Discord/Slack/MQTT/email adapters). They manage
-  thought lifecycles.
+- **Connectors** are **bidirectional service integrations** (gateway webhooks,
+  cron schedules, Discord/Slack/MQTT/email adapters, GitHub). Inbound they turn
+  external stimuli into thoughts and manage their lifecycles; outbound they
+  supply the tools that act on that service. See ADR 0014.
 - **Tools** are agent-callable actions the navi invokes, including egress tools
   that send messages back out through a connector (`discord_send`).
 - **Providers** are LLM backends selected per thought.
@@ -175,4 +176,4 @@ navi exposure).
 - [security.md](./security.md) — permissions, omission, secrets, trust
 - [extension-model.md](./extension-model.md) — out-of-repo components
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones
-- [`docs/adr/`](../adr/) — decision records (0011 persistence, 0012 portal stream)
+- [`docs/adr/`](../adr/) — decision records (0011 persistence, 0012 portal stream, 0013 context assembly, 0014 connectors)

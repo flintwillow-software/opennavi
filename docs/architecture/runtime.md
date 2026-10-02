@@ -48,7 +48,7 @@ if err := n.Run(ctx); err != nil { ... }
 | Collection | Core or added | Holds | Notes |
 |---|---|---|---|
 | `Thoughts` | core | the thought system | Always present; the runtime's main loop |
-| `Skills` | added | compiled-in skill content | Baked into the system prompt at build time |
+| `Skills` | added | compiled-in skill content | Loaded **selectively** into a thought's context — author-declared auto-load, thought-declared request, or agent-chosen tool. Never baked wholesale ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)) |
 | `Tools` | added | agent-callable actions | Registered with full metadata; the active set is derived |
 | `Models` | added | provider + model + version | One marked default; config may override the default |
 | `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
@@ -119,6 +119,17 @@ constructed with `cron.WithStateStore(db)`, tick state persists
 coalesced into one thought at `Start`; without it the connector keeps state in
 memory only and a missed tick is skipped (NAVI-358).
 
+## Context assembly
+
+The thought queue **is** the context mechanism ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)). Context pressure is resolved by bounding thoughts and deferring work into follow-up thoughts, not by compacting a long conversation: a thought that approaches its budget finishes a coherent unit, writes what the next one needs into short-term memory, and queues follow-ups that declare which skills to load. A task too large for one thought becomes a plan of thoughts.
+
+- **Assembly happens at thought creation**, not per turn. A queued thought carries its assembled context and the runner consumes it; what was a rendering-time pipeline is a creation-time decision.
+- **The assembled context is recorded with the thought** as its first transcript entry (index 0), so it is readable through the same contract as the rest of the transcript ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)) and inspectable by any portal ([ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md)).
+- **Everything that shapes context is a build-time declaration** — sources, auto-loaded skills, component-derived guidance. Runtime config may only narrow it. The reason is the threat model, not tidiness: if a prompt can reach the assembler, the assembler is an injection surface (see [security.md](./security.md)).
+- **Skills are a menu, not a fetch.** All three loading paths can only select from the compiled-in set, so the worst case of a manipulated request is loading a skill the author already shipped.
+- **Core skills ship with the component types**: authored prose for semantics plus a mechanical inventory derived from component metadata, so the model is never unaware of a capability the binary has.
+- **Compaction is not a mechanism.** It is being removed rather than kept as a fallback; deferral replaces it.
+
 ## Modes
 
 A mode is a named capability profile selected per thought:
@@ -188,12 +199,7 @@ reason a connector does — observation arrives through `Deps.Observation`, a
 bounded subscription a slow surface drains (and may fall behind) without ever
 slowing the queue.
 
-- **Connectors** bring work in and manage thought lifecycles (spawn/attach/
-  route). Egress tools (`discord_send`, `websocket_send`) close over the
-  connector's live client and are added **explicitly** by the author as
-  ordinary tools — never auto-registered, so the capability surface stays
-  visible in `main.go`. (A `connector.SendTool()` helper is planned; binding
-  the tool registry is not part of the component ABI yet.)
+- **Connectors** are **bidirectional service integrations** ([ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md)). Inbound, they turn external stimuli into thoughts and manage their lifecycles (spawn/attach/route) — how a service gets the navi's attention. Outbound, they supply the tools that let the navi act on that service: egress tools (`github_issue_reply`, `discord_send`) close over the connector's live client and are added **explicitly** by the author via `connector.SendTool()` — never auto-registered, so the capability surface stays visible in `main.go`. Both halves share one connection, config, and credential. There is no generic egress payload: what is sent is service-specific. Role separation between navis is therefore **structural** — a function of which components and tools exist, not of what a prompt says.
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
   same queue and running-agent events a connector can observe — through
   `Deps.Observation`, whose bounded mailboxes keep a slow front-end from
@@ -237,4 +243,6 @@ requires a configured store — there is no volatile-memory mode.
 - [extension-model.md](./extension-model.md) — third-party components
 - [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — datastores, RAM-first persistence
 - [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping
+- [ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md) — context assembly, skills, and why the queue is the context limit
+- [ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md) — connectors and connector-owned egress
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones
