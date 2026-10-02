@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 )
 
-// StatefulStore implements store.StatefulToolStore on SQLite
+// StatefulStore implements datastore.StatefulToolStore on SQLite
 // (migration 6): durable todo and note state for
 // stateful catalog tools, in the same database as sessions/thoughts.
 // Per-navi scoping is enforced here — every query is filtered on
@@ -33,7 +33,7 @@ func NewStatefulStore(db *sql.DB) (*StatefulStore, error) {
 
 // ListTodos returns the navi's todos ordered by priority, then most
 // recent activity, optionally filtered by status ("" = all).
-func (s *StatefulStore) ListTodos(naviID string, status store.TodoStatus, limit int) ([]store.Todo, error) {
+func (s *StatefulStore) ListTodos(naviID string, status datastore.TodoStatus, limit int) ([]datastore.Todo, error) {
 	q := `SELECT id, navi_id, text, status, priority, created_at, updated_at
 		FROM todos WHERE navi_id = ?`
 	args := []any{naviID}
@@ -52,7 +52,7 @@ func (s *StatefulStore) ListTodos(naviID string, status store.TodoStatus, limit 
 	}
 	defer rows.Close()
 
-	out := []store.Todo{}
+	out := []datastore.Todo{}
 	for rows.Next() {
 		t, err := scanTodo(rows)
 		if err != nil {
@@ -65,7 +65,7 @@ func (s *StatefulStore) ListTodos(naviID string, status store.TodoStatus, limit 
 
 // ReplaceTodos atomically replaces the navi's entire todo list inside
 // one transaction; on failure the previous list is intact.
-func (s *StatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]store.Todo, error) {
+func (s *StatefulStore) ReplaceTodos(naviID string, items []datastore.Todo) ([]datastore.Todo, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: begin todo replace for %s: %w", naviID, err)
@@ -77,10 +77,10 @@ func (s *StatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]store
 	}
 
 	now := formatTime(time.Now())
-	out := make([]store.Todo, 0, len(items))
+	out := make([]datastore.Todo, 0, len(items))
 	for i, item := range items {
 		if item.Status == "" {
-			item.Status = store.TodoPending
+			item.Status = datastore.TodoPending
 		}
 		if !item.Status.Valid() {
 			return nil, fmt.Errorf("sqlite: replace todos for %s: item %d has invalid status %q", naviID, i, item.Status)
@@ -111,9 +111,9 @@ func (s *StatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]store
 
 // UpdateTodos applies partial updates atomically: an unknown id
 // rejects the whole batch and leaves prior state intact.
-func (s *StatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) ([]store.Todo, error) {
+func (s *StatefulStore) UpdateTodos(naviID string, updates []datastore.TodoUpdate) ([]datastore.Todo, error) {
 	if len(updates) == 0 {
-		return []store.Todo{}, nil
+		return []datastore.Todo{}, nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *StatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) (
 			if n, err := res.RowsAffected(); err != nil {
 				return nil, fmt.Errorf("sqlite: delete todo %s rows: %w", u.ID, err)
 			} else if n == 0 {
-				return nil, fmt.Errorf("sqlite: update todos for %s: %w (id %s)", naviID, store.ErrTodoNotFound, u.ID)
+				return nil, fmt.Errorf("sqlite: update todos for %s: %w (id %s)", naviID, datastore.ErrTodoNotFound, u.ID)
 			}
 			continue
 		}
@@ -159,7 +159,7 @@ func (s *StatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) (
 		if n, err := res.RowsAffected(); err != nil {
 			return nil, fmt.Errorf("sqlite: update todo %s rows: %w", u.ID, err)
 		} else if n == 0 {
-			return nil, fmt.Errorf("sqlite: update todos for %s: %w (id %s)", naviID, store.ErrTodoNotFound, u.ID)
+			return nil, fmt.Errorf("sqlite: update todos for %s: %w (id %s)", naviID, datastore.ErrTodoNotFound, u.ID)
 		}
 	}
 
@@ -175,7 +175,7 @@ func (s *StatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) (
 
 // ReadNotes returns notes matching the query (id, tag, or literal
 // substring on title/body), newest activity first.
-func (s *StatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.Note, error) {
+func (s *StatefulStore) ReadNotes(naviID string, q datastore.NoteQuery) ([]datastore.Note, error) {
 	where, args := `navi_id = ?`, []any{naviID}
 	if q.ID != "" {
 		where += ` AND id = ?`
@@ -202,7 +202,7 @@ func (s *StatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.Not
 	}
 	defer rows.Close()
 
-	out := []store.Note{}
+	out := []datastore.Note{}
 	for rows.Next() {
 		n, err := scanNote(rows)
 		if err != nil {
@@ -216,7 +216,7 @@ func (s *StatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.Not
 // UpsertNote stores a note verbatim; new id assigned when n.ID is
 // empty, existing note replaced when it matches. Unknown ids on
 // explicit update return ErrNoteNotFound.
-func (s *StatefulStore) UpsertNote(naviID string, n store.Note) (store.Note, error) {
+func (s *StatefulStore) UpsertNote(naviID string, n datastore.Note) (datastore.Note, error) {
 	now := formatTime(time.Now())
 	if n.ID == "" {
 		n.ID = newID()
@@ -226,12 +226,12 @@ func (s *StatefulStore) UpsertNote(naviID string, n store.Note) (store.Note, err
 		if errors.Is(err, sql.ErrNoRows) {
 			n.CreatedAt = time.Now()
 		} else if err != nil {
-			return store.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
+			return datastore.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
 		}
 	}
 	tags, err := encodeTags(n.Tags)
 	if err != nil {
-		return store.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
+		return datastore.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
 	}
 	_, err = s.db.Exec(`INSERT INTO notes (id, navi_id, title, body, tags, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -239,7 +239,7 @@ func (s *StatefulStore) UpsertNote(naviID string, n store.Note) (store.Note, err
 			title=excluded.title, body=excluded.body, tags=excluded.tags, updated_at=excluded.updated_at`,
 		n.ID, naviID, n.Title, n.Body, tags, formatTime(n.CreatedAt), now)
 	if err != nil {
-		return store.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
+		return datastore.Note{}, fmt.Errorf("sqlite: upsert note %s for %s: %w", n.ID, naviID, err)
 	}
 	n.NaviID = naviID
 	n.UpdatedAt = time.Now()
@@ -257,12 +257,12 @@ func (s *StatefulStore) RemoveNote(naviID, id string) error {
 		return fmt.Errorf("sqlite: remove note %s rows: %w", id, err)
 	}
 	if n == 0 {
-		return fmt.Errorf("sqlite: remove note for %s: %w (id %s)", naviID, store.ErrNoteNotFound, id)
+		return fmt.Errorf("sqlite: remove note for %s: %w (id %s)", naviID, datastore.ErrNoteNotFound, id)
 	}
 	return nil
 }
 
-func listTodosTx(tx *sql.Tx, naviID string, status store.TodoStatus) ([]store.Todo, error) {
+func listTodosTx(tx *sql.Tx, naviID string, status datastore.TodoStatus) ([]datastore.Todo, error) {
 	q := `SELECT id, navi_id, text, status, priority, created_at, updated_at
 		FROM todos WHERE navi_id = ?`
 	args := []any{naviID}
@@ -276,7 +276,7 @@ func listTodosTx(tx *sql.Tx, naviID string, status store.TodoStatus) ([]store.To
 		return nil, fmt.Errorf("sqlite: list todos for %s: %w", naviID, err)
 	}
 	defer rows.Close()
-	out := []store.Todo{}
+	out := []datastore.Todo{}
 	for rows.Next() {
 		t, err := scanTodo(rows)
 		if err != nil {
@@ -287,41 +287,41 @@ func listTodosTx(tx *sql.Tx, naviID string, status store.TodoStatus) ([]store.To
 	return out, rows.Err()
 }
 
-func scanTodo(row rowScanner) (store.Todo, error) {
-	t := store.Todo{}
+func scanTodo(row rowScanner) (datastore.Todo, error) {
+	t := datastore.Todo{}
 	var status, createdAt, updatedAt string
 	if err := row.Scan(&t.ID, &t.NaviID, &t.Text, &status, &t.Priority, &createdAt, &updatedAt); err != nil {
-		return store.Todo{}, fmt.Errorf("sqlite: scan todo: %w", err)
+		return datastore.Todo{}, fmt.Errorf("sqlite: scan todo: %w", err)
 	}
-	t.Status = store.TodoStatus(status)
+	t.Status = datastore.TodoStatus(status)
 	var err error
 	if t.CreatedAt, err = parseTime(createdAt); err != nil {
-		return store.Todo{}, err
+		return datastore.Todo{}, err
 	}
 	if t.UpdatedAt, err = parseTime(updatedAt); err != nil {
-		return store.Todo{}, err
+		return datastore.Todo{}, err
 	}
 	return t, nil
 }
 
-func scanNote(row rowScanner) (store.Note, error) {
-	n := store.Note{}
+func scanNote(row rowScanner) (datastore.Note, error) {
+	n := datastore.Note{}
 	var tags sql.NullString
 	var createdAt, updatedAt string
 	if err := row.Scan(&n.ID, &n.NaviID, &n.Title, &n.Body, &tags, &createdAt, &updatedAt); err != nil {
-		return store.Note{}, fmt.Errorf("sqlite: scan note: %w", err)
+		return datastore.Note{}, fmt.Errorf("sqlite: scan note: %w", err)
 	}
 	if tags.Valid && tags.String != "" {
 		if err := json.Unmarshal([]byte(tags.String), &n.Tags); err != nil {
-			return store.Note{}, fmt.Errorf("sqlite: decode note tags: %w", err)
+			return datastore.Note{}, fmt.Errorf("sqlite: decode note tags: %w", err)
 		}
 	}
 	var err error
 	if n.CreatedAt, err = parseTime(createdAt); err != nil {
-		return store.Note{}, err
+		return datastore.Note{}, err
 	}
 	if n.UpdatedAt, err = parseTime(updatedAt); err != nil {
-		return store.Note{}, err
+		return datastore.Note{}, err
 	}
 	return n, nil
 }

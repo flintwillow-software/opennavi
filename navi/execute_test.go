@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/llm"
-	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -214,7 +214,7 @@ func TestInterruptedThoughtIsParkedNotFailed(t *testing.T) {
 
 // --- helpers ----------------------------------------------------------
 
-func sessionText(s *store.Session) []string {
+func sessionText(s *datastore.Session) []string {
 	out := make([]string, 0, len(s.Entries))
 	for _, e := range s.Entries {
 		out = append(out, e.Message)

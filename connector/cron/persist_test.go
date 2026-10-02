@@ -3,7 +3,7 @@ package cron
 import (
 	"database/sql"
 
-	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"testing"
 	"time"
 )

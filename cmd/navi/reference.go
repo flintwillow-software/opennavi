@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector/cron"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 	"github.com/flintwillow-software/opennavi/model"
@@ -23,7 +24,6 @@ import (
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/portal/tui"
-	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/builtin"

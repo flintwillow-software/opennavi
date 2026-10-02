@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/builtin"
 	toolhttp "github.com/flintwillow-software/opennavi/tool/http"

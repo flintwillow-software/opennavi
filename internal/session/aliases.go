@@ -6,44 +6,44 @@
 // and tests unchanged.
 package session
 
-import "github.com/flintwillow-software/opennavi/store"
+import "github.com/flintwillow-software/opennavi/datastore"
 
 type (
-	Status       = store.Status
-	Session      = store.Session
-	SessionEntry = store.SessionEntry
-	Role         = store.Role
-	ListOptions  = store.ListOptions
-	SessionInfo  = store.SessionInfo
-	Store        = store.Store
-	MemoryStore  = store.MemoryStore
+	Status       = datastore.Status
+	Session      = datastore.Session
+	SessionEntry = datastore.SessionEntry
+	Role         = datastore.Role
+	ListOptions  = datastore.ListOptions
+	SessionInfo  = datastore.SessionInfo
+	Store        = datastore.Store
+	MemoryStore  = datastore.MemoryStore
 )
 
 const (
-	StatusActive = store.StatusActive
-	StatusPaused = store.StatusPaused
-	StatusClosed = store.StatusClosed
+	StatusActive = datastore.StatusActive
+	StatusPaused = datastore.StatusPaused
+	StatusClosed = datastore.StatusClosed
 
-	RoleUser      = store.RoleUser
-	RoleAssistant = store.RoleAssistant
-	RoleTool      = store.RoleTool
-	RoleSystem    = store.RoleSystem
+	RoleUser      = datastore.RoleUser
+	RoleAssistant = datastore.RoleAssistant
+	RoleTool      = datastore.RoleTool
+	RoleSystem    = datastore.RoleSystem
 )
 
 var (
-	ErrEntryNotFound   = store.ErrEntryNotFound
-	ErrSessionNotFound = store.ErrSessionNotFound
-	ErrInvalidStatus   = store.ErrInvalidStatus
+	ErrEntryNotFound   = datastore.ErrEntryNotFound
+	ErrSessionNotFound = datastore.ErrSessionNotFound
+	ErrInvalidStatus   = datastore.ErrInvalidStatus
 )
 
-// NewSession builds an active session (see store.NewSession).
-func NewSession(agentID, workDir string) *Session { return store.NewSession(agentID, workDir) }
+// NewSession builds an active session (see datastore.NewSession).
+func NewSession(agentID, workDir string) *Session { return datastore.NewSession(agentID, workDir) }
 
-// NewEntry creates an entry with a fresh UUID (see store.NewEntry).
-func NewEntry(role Role, message string) SessionEntry { return store.NewEntry(role, message) }
+// NewEntry creates an entry with a fresh UUID (see datastore.NewEntry).
+func NewEntry(role Role, message string) SessionEntry { return datastore.NewEntry(role, message) }
 
-// NewUUID returns a random RFC 4122 version-4 UUID (see store.NewUUID).
-func NewUUID() string { return store.NewUUID() }
+// NewUUID returns a random RFC 4122 version-4 UUID (see datastore.NewUUID).
+func NewUUID() string { return datastore.NewUUID() }
 
-// NewMemoryStore creates an empty in-memory store (see store.NewMemoryStore).
-func NewMemoryStore() *MemoryStore { return store.NewMemoryStore() }
+// NewMemoryStore creates an empty in-memory store (see datastore.NewMemoryStore).
+func NewMemoryStore() *MemoryStore { return datastore.NewMemoryStore() }

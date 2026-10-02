@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/bridge"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
-	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -41,7 +41,7 @@ func WithRunner(r Runner) Option {
 // WithSessionStore sets where thought transcripts are recorded. Defaults
 // to an in-memory store, which means transcripts do not survive the
 // process — the durable store arrives with the store port.
-func WithSessionStore(s store.Store) Option {
+func WithSessionStore(s datastore.Store) Option {
 	return func(n *Navi) {
 		if s != nil {
 			n.sessions = s
@@ -342,28 +342,28 @@ func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage
 		if content == "" && len(m.ToolCalls) == 0 {
 			continue
 		}
-		sess.AppendEntry(store.NewEntry(store.Role(strings.ToLower(m.Role.String())), content))
+		sess.AppendEntry(datastore.NewEntry(datastore.Role(strings.ToLower(m.Role.String())), content))
 	}
 	return n.sessions.SaveSession(sess)
 }
 
 // sessionFor loads the thought's session, creating it on first run.
-func (n *Navi) sessionFor(t *thought.Thought) (*store.Session, error) {
+func (n *Navi) sessionFor(t *thought.Thought) (*datastore.Session, error) {
 	id := SessionIDFor(t.ID)
 	sess, err := n.sessions.LoadSession(id)
 	if err == nil {
 		return sess, nil
 	}
-	if !errors.Is(err, store.ErrSessionNotFound) {
+	if !errors.Is(err, datastore.ErrSessionNotFound) {
 		return nil, fmt.Errorf("load session for thought %s: %w", t.ID, err)
 	}
-	sess = store.NewSession(n.name, t.ID)
+	sess = datastore.NewSession(n.name, t.ID)
 	sess.ID = id
 	return sess, nil
 }
 
 // SessionStore returns the store backing thought transcripts.
-func (n *Navi) SessionStore() store.Store { return n.sessions }
+func (n *Navi) SessionStore() datastore.Store { return n.sessions }
 
 // ── execution pool ──────────────────────────────────────────────────────
 

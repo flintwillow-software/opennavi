@@ -7,23 +7,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 )
 
 // seedSearchSessions creates sessions with distinctive content.
-func seedSearchSessions(t *testing.T, st *Store) (*store.Session, *store.Session) {
+func seedSearchSessions(t *testing.T, st *Store) (*datastore.Session, *datastore.Session) {
 	t.Helper()
-	deploy := store.NewSession("agent-1", "/w")
+	deploy := datastore.NewSession("agent-1", "/w")
 	deploy.Name = "deploy discussion"
-	deploy.AppendEntry(store.NewEntry(store.RoleUser, "how do we deploy the kubernetes cluster"))
-	deploy.AppendEntry(store.NewEntry(store.RoleAssistant, "use the deploy script via kubectl rollout"))
+	deploy.AppendEntry(datastore.NewEntry(datastore.RoleUser, "how do we deploy the kubernetes cluster"))
+	deploy.AppendEntry(datastore.NewEntry(datastore.RoleAssistant, "use the deploy script via kubectl rollout"))
 	if err := st.SaveSession(deploy); err != nil {
 		t.Fatal(err)
 	}
 
-	garden := store.NewSession("agent-1", "/w")
+	garden := datastore.NewSession("agent-1", "/w")
 	garden.Name = "garden notes"
-	garden.AppendEntry(store.NewEntry(store.RoleUser, "tomato plants need watering daily"))
+	garden.AppendEntry(datastore.NewEntry(datastore.RoleUser, "tomato plants need watering daily"))
 	if err := st.SaveSession(garden); err != nil {
 		t.Fatal(err)
 	}
@@ -58,8 +58,8 @@ func TestSearchFindsAndRanks(t *testing.T) {
 func TestSearchRespectsLimit(t *testing.T) {
 	st := openTestStore(t, Options{})
 	for i := 0; i < 5; i++ {
-		s := store.NewSession("a", "")
-		s.AppendEntry(store.NewEntry(store.RoleUser, "shared keyword everywhere"))
+		s := datastore.NewSession("a", "")
+		s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "shared keyword everywhere"))
 		if err := st.SaveSession(s); err != nil {
 			t.Fatal(err)
 		}
@@ -92,14 +92,14 @@ func TestSearchAfterResaveNoDuplicateOrStaleIndex(t *testing.T) {
 	// so the external-content delete triggers fire constantly. Verifies
 	// the index stays consistent (no duplicates, no stale rows).
 	st := openTestStore(t, Options{})
-	s := store.NewSession("a", "")
-	s.AppendEntry(store.NewEntry(store.RoleUser, "kubernetes rollout story"))
+	s := datastore.NewSession("a", "")
+	s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "kubernetes rollout story"))
 
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
 	// Resave twice more: delete+reinsert cycles.
-	s.AppendEntry(store.NewEntry(store.RoleUser, "more kubernetes details"))
+	s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "more kubernetes details"))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,8 @@ func TestSearchAfterResaveNoDuplicateOrStaleIndex(t *testing.T) {
 
 func TestSearchExcludesDeletedSessions(t *testing.T) {
 	st := openTestStore(t, Options{})
-	s := store.NewSession("a", "")
-	s.AppendEntry(store.NewEntry(store.RoleUser, "delete me from search"))
+	s := datastore.NewSession("a", "")
+	s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "delete me from search"))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +165,8 @@ func TestSearchEncryptedContentNotMatched(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := openTestStore(t, Options{Cipher: cipher})
-	s := store.NewSession("a", "")
-	s.AppendEntry(store.NewEntry(store.RoleUser, "classified kubernetes secrets"))
+	s := datastore.NewSession("a", "")
+	s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "classified kubernetes secrets"))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -185,10 +185,10 @@ func TestImportLargeMessage(t *testing.T) {
 	// file_read at 512KB) — large sessions exported fine but failed to
 	// import with 'token too long'.
 	st := openTestStore(t, Options{})
-	s := store.NewSession("a", "")
+	s := datastore.NewSession("a", "")
 	s.Name = "big output"
 	big := strings.Repeat("x", 100*1024) + " terminus"
-	s.AppendEntry(store.NewEntry(store.RoleTool, big))
+	s.AppendEntry(datastore.NewEntry(datastore.RoleTool, big))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +209,8 @@ func TestImportLargeMessage(t *testing.T) {
 
 func TestSearchApostropheTerms(t *testing.T) {
 	st := openTestStore(t, Options{})
-	s := store.NewSession("a", "")
-	s.AppendEntry(store.NewEntry(store.RoleUser, "cannot find the dont entry"))
+	s := datastore.NewSession("a", "")
+	s.AppendEntry(datastore.NewEntry(datastore.RoleUser, "cannot find the dont entry"))
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
@@ -225,12 +225,12 @@ func TestSearchApostropheTerms(t *testing.T) {
 
 func TestTagsWithCommasSurviveListing(t *testing.T) {
 	st := openTestStore(t, Options{})
-	s := store.NewSession("a", "")
+	s := datastore.NewSession("a", "")
 	s.Tags = []string{"one,two", "three"}
 	if err := st.SaveSession(s); err != nil {
 		t.Fatal(err)
 	}
-	list, err := st.ListSessions(store.ListOptions{})
+	list, err := st.ListSessions(datastore.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestTagsWithCommasSurviveListing(t *testing.T) {
 		t.Fatalf("tags = %v, want [one,two three]", list[0].Tags)
 	}
 	// Tag filter with the comma tag works too.
-	filtered, err := st.ListSessions(store.ListOptions{Tags: []string{"one,two"}})
+	filtered, err := st.ListSessions(datastore.ListOptions{Tags: []string{"one,two"}})
 	if err != nil || len(filtered) != 1 {
 		t.Fatalf("comma-tag filter: %v, %d", err, len(filtered))
 	}
@@ -257,7 +257,7 @@ func TestExportImportJSONLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Import into a fresh store.
+	// Import into a fresh datastore.
 	st2 := openTestStore(t, Options{})
 	imported, err := st2.ImportJSONL(path)
 	if err != nil {
@@ -279,7 +279,7 @@ func TestExportImportJSONLRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Imported session is searchable in the new store.
+	// Imported session is searchable in the new datastore.
 	results, err := st2.Search("hello", 10)
 	if err != nil {
 		t.Fatal(err)

@@ -24,12 +24,12 @@ import (
 	"sync"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/skill"
-	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/registry"
@@ -101,7 +101,7 @@ type Navi struct {
 
 	// Execution.
 	runner   Runner
-	sessions store.Store
+	sessions datastore.Store
 	workers  int
 	dispatch *dispatch
 
@@ -232,7 +232,7 @@ func New(name string, opts ...Option) *Navi {
 	// Execution defaults. The runner is built after options so it logs
 	// through the logger the author chose.
 	if n.sessions == nil {
-		n.sessions = store.NewMemoryStore()
+		n.sessions = datastore.NewMemoryStore()
 	}
 	if n.workers == 0 {
 		n.workers = 2

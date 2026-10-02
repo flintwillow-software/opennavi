@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 

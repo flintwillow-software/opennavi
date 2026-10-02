@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/llm"
-	"github.com/flintwillow-software/opennavi/store"
-	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -98,12 +98,12 @@ func todoProbe(st *sqlite.Store, naviID string) *todoHealth {
 	}
 	th := &todoHealth{}
 	for _, probe := range []struct {
-		status store.TodoStatus
+		status datastore.TodoStatus
 		target *int
 	}{
-		{store.TodoPending, &th.Pending},
-		{store.TodoInProgress, &th.InProgress},
-		{store.TodoDone, &th.Done},
+		{datastore.TodoPending, &th.Pending},
+		{datastore.TodoInProgress, &th.InProgress},
+		{datastore.TodoDone, &th.Done},
 	} {
 		items, err := ss.ListTodos(naviID, probe.status, 0)
 		if err != nil {

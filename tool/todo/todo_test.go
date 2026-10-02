@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
@@ -16,7 +16,7 @@ import (
 // the registry tests' helper — enough for tool-layer semantics; the
 // SQLite-backed durability/scoping tests live in store/sqlite.
 type memStatefulStore struct {
-	todos map[string][]store.Todo
+	todos map[string][]datastore.Todo
 	seq   int
 	// failReplace makes ReplaceTodos fail mid-write (after clearing),
 	// simulating a store error partway through (rollback
@@ -27,11 +27,11 @@ type memStatefulStore struct {
 }
 
 func newMemStatefulStore() *memStatefulStore {
-	return &memStatefulStore{todos: map[string][]store.Todo{}}
+	return &memStatefulStore{todos: map[string][]datastore.Todo{}}
 }
 
-func (m *memStatefulStore) ListTodos(naviID string, status store.TodoStatus, limit int) ([]store.Todo, error) {
-	var out []store.Todo
+func (m *memStatefulStore) ListTodos(naviID string, status datastore.TodoStatus, limit int) ([]datastore.Todo, error) {
+	var out []datastore.Todo
 	for _, t := range m.todos[naviID] {
 		if status == "" || t.Status == status {
 			out = append(out, t)
@@ -51,11 +51,11 @@ func (m *memStatefulStore) ListTodos(naviID string, status store.TodoStatus, lim
 	return out, nil
 }
 
-func (m *memStatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]store.Todo, error) {
+func (m *memStatefulStore) ReplaceTodos(naviID string, items []datastore.Todo) ([]datastore.Todo, error) {
 	if m.failReplace {
 		return nil, errors.New("simulated store failure partway")
 	}
-	out := make([]store.Todo, 0, len(items))
+	out := make([]datastore.Todo, 0, len(items))
 	for _, item := range items {
 		m.seq++
 		item.ID = fmt.Sprintf("t-%d", m.seq)
@@ -66,7 +66,7 @@ func (m *memStatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]st
 	return out, nil
 }
 
-func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) ([]store.Todo, error) {
+func (m *memStatefulStore) UpdateTodos(naviID string, updates []datastore.TodoUpdate) ([]datastore.Todo, error) {
 	list := m.todos[naviID]
 	// Guarantee: atomic batch — validate every id BEFORE applying any
 	// update, so an unknown id leaves prior state untouched.
@@ -76,7 +76,7 @@ func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate
 	}
 	for _, u := range updates {
 		if _, ok := index[u.ID]; !ok {
-			return nil, fmt.Errorf("%w: %s", store.ErrTodoNotFound, u.ID)
+			return nil, fmt.Errorf("%w: %s", datastore.ErrTodoNotFound, u.ID)
 		}
 	}
 	for _, u := range updates {
@@ -100,15 +100,15 @@ func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate
 		}
 	}
 	m.todos[naviID] = list
-	return append([]store.Todo(nil), list...), nil
+	return append([]datastore.Todo(nil), list...), nil
 }
 
-func (m *memStatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.Note, error) {
+func (m *memStatefulStore) ReadNotes(naviID string, q datastore.NoteQuery) ([]datastore.Note, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (m *memStatefulStore) UpsertNote(naviID string, n store.Note) (store.Note, error) {
-	return store.Note{}, errors.New("not implemented")
+func (m *memStatefulStore) UpsertNote(naviID string, n datastore.Note) (datastore.Note, error) {
+	return datastore.Note{}, errors.New("not implemented")
 }
 
 func (m *memStatefulStore) RemoveNote(naviID, id string) error {
@@ -222,10 +222,10 @@ func TestTodoReadListingAndFilter(t *testing.T) {
 		}
 	}
 	// Write with no explicit status defaults to pending.
-	if items[0]["status"] != string(store.TodoInProgress) {
+	if items[0]["status"] != string(datastore.TodoInProgress) {
 		t.Fatalf("first item status = %v, want in_progress", items[0]["status"])
 	}
-	if items[1]["status"] != string(store.TodoPending) {
+	if items[1]["status"] != string(datastore.TodoPending) {
 		t.Fatalf("defaulted status = %v, want pending", items[1]["status"])
 	}
 
@@ -330,7 +330,7 @@ func TestTodoUpdateTransitionsAndEdit(t *testing.T) {
 			found = item
 		}
 	}
-	if found == nil || found["status"] != string(store.TodoDone) {
+	if found == nil || found["status"] != string(datastore.TodoDone) {
 		t.Fatalf("transition result missing/wrong: %s", out)
 	}
 
@@ -366,8 +366,8 @@ func TestTodoUpdateUnknownIDRejectsBatch(t *testing.T) {
 	if !strings.Contains(err.Error(), "no-such-id") {
 		t.Fatalf("error must identify the unknown id: %v", err)
 	}
-	if !errors.Is(err, store.ErrTodoNotFound) {
-		t.Fatalf("error should wrap store.ErrTodoNotFound: %v", err)
+	if !errors.Is(err, datastore.ErrTodoNotFound) {
+		t.Fatalf("error should wrap datastore.ErrTodoNotFound: %v", err)
 	}
 	todos, _ := st.ListTodos("navi-a", "", 0)
 	if len(todos) != 1 || todos[0].Text != "keep me" {
@@ -386,7 +386,7 @@ func TestTodoUpdateUnknownIDRejectsBatch(t *testing.T) {
 
 func TestTodoPerNaviScoping(t *testing.T) {
 	reg, st := newToolRegistry(t)
-	// Second registration for navi-b over the SAME store.
+	// Second registration for navi-b over the SAME datastore.
 	regB := registry.New()
 	if err := RegisterTools(regB, "navi-b", st); err != nil {
 		t.Fatalf("RegisterTools(navi-b): %v", err)

@@ -5,7 +5,7 @@
 //
 // All three register through tool/registry.RegisterStateful: each
 // handler receives a per-navi store handle at dispatch and persists
-// through store.StatefulToolStore, so todo state survives restarts
+// through datastore.StatefulToolStore, so todo state survives restarts
 // and is scoped per navi identity. Register the package with
 // RegisterTools (or one tool with RegisterOne) on a bound registry.
 package todo
@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
@@ -40,7 +40,7 @@ func Definitions() []registry.ToolDefinition {
 
 // RegisterTools registers all three todo tools on reg for the navi
 // identity naviID, persisting through state (seam).
-func RegisterTools(reg *registry.Registry, naviID string, state store.StatefulToolStore) error {
+func RegisterTools(reg *registry.Registry, naviID string, state datastore.StatefulToolStore) error {
 	if reg == nil {
 		return errors.New("todo: registry is required")
 	}
@@ -65,7 +65,7 @@ func RegisterTools(reg *registry.Registry, naviID string, state store.StatefulTo
 // RegisterOne registers a single todo tool by name on reg — for
 // selective activation (a navi may enable todo_read without the
 // writers).
-func RegisterOne(reg *registry.Registry, naviID string, state store.StatefulToolStore, name string) error {
+func RegisterOne(reg *registry.Registry, naviID string, state datastore.StatefulToolStore, name string) error {
 	switch name {
 	case "todo_read":
 		return reg.RegisterStateful(readDef(), naviID, state, handleRead)
@@ -81,7 +81,7 @@ func RegisterOne(reg *registry.Registry, naviID string, state store.StatefulTool
 // Tools returns the three todo tools as public component tools bound to
 // naviID and state — the collection form of RegisterTools for the navi
 // composition root.
-func Tools(naviID string, state store.StatefulToolStore) ([]tool.Tool, error) {
+func Tools(naviID string, state datastore.StatefulToolStore) ([]tool.Tool, error) {
 	if naviID == "" {
 		return nil, errors.New("todo: navi identity is required")
 	}
@@ -226,7 +226,7 @@ func updateDef() registry.ToolDefinition {
 // by priority then most recent activity, optionally filtered by
 // status, optionally capped.
 func handleRead(ctx context.Context, args map[string]any, state registry.StateContext) (string, error) {
-	status := store.TodoStatus("")
+	status := datastore.TodoStatus("")
 	if raw, ok := args["status"]; ok {
 		s, err := parseStatus(raw)
 		if err != nil {
@@ -256,13 +256,13 @@ func handleWrite(ctx context.Context, args map[string]any, state registry.StateC
 	if !ok {
 		return "", errors.New("todo_write: items must be an array")
 	}
-	items := make([]store.Todo, 0, len(rawItems))
+	items := make([]datastore.Todo, 0, len(rawItems))
 	for i, raw := range rawItems {
 		obj, ok := raw.(map[string]any)
 		if !ok {
 			return "", fmt.Errorf("todo_write: items[%d] must be an object", i)
 		}
-		item := store.Todo{Status: store.TodoPending}
+		item := datastore.Todo{Status: datastore.TodoPending}
 		text, err := stringField(obj, "text")
 		if err != nil {
 			return "", fmt.Errorf("todo_write: items[%d]: %w", i, err)
@@ -301,13 +301,13 @@ func handleUpdate(ctx context.Context, args map[string]any, state registry.State
 	if !ok || len(rawUpdates) == 0 {
 		return "", errors.New("todo_update: updates must be a non-empty array")
 	}
-	updates := make([]store.TodoUpdate, 0, len(rawUpdates))
+	updates := make([]datastore.TodoUpdate, 0, len(rawUpdates))
 	for i, raw := range rawUpdates {
 		obj, ok := raw.(map[string]any)
 		if !ok {
 			return "", fmt.Errorf("todo_update: updates[%d] must be an object", i)
 		}
-		u := store.TodoUpdate{}
+		u := datastore.TodoUpdate{}
 		id, err := stringField(obj, "id")
 		if err != nil {
 			return "", fmt.Errorf("todo_update: updates[%d]: %w", i, err)
@@ -353,12 +353,12 @@ func handleUpdate(ctx context.Context, args map[string]any, state registry.State
 	return marshalTodos(items)
 }
 
-func parseStatus(raw any) (store.TodoStatus, error) {
+func parseStatus(raw any) (datastore.TodoStatus, error) {
 	s, ok := raw.(string)
 	if !ok {
 		return "", errors.New("status must be a string")
 	}
-	st := store.TodoStatus(s)
+	st := datastore.TodoStatus(s)
 	if !st.Valid() {
 		return "", fmt.Errorf("status must be one of pending, in_progress, done (got %q)", s)
 	}
@@ -394,17 +394,17 @@ func parseIntArg(raw any) (int, error) {
 	}
 }
 
-func marshalTodos(items []store.Todo) (string, error) {
+func marshalTodos(items []datastore.Todo) (string, error) {
 	type todoView struct {
-		ID        string           `json:"id"`
-		Text      string           `json:"text"`
-		Status    store.TodoStatus `json:"status"`
-		Priority  int              `json:"priority"`
-		CreatedAt string           `json:"created_at"`
-		UpdatedAt string           `json:"updated_at"`
+		ID        string               `json:"id"`
+		Text      string               `json:"text"`
+		Status    datastore.TodoStatus `json:"status"`
+		Priority  int                  `json:"priority"`
+		CreatedAt string               `json:"created_at"`
+		UpdatedAt string               `json:"updated_at"`
 	}
 	if items == nil {
-		items = []store.Todo{}
+		items = []datastore.Todo{}
 	}
 	views := make([]todoView, 0, len(items))
 	for _, t := range items {

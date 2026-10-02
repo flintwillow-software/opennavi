@@ -201,7 +201,7 @@ func TestThoughtsCreateFollowUpWithOriginTag(t *testing.T) {
 	if got.Priority != thought.SelfScheduledHighBound {
 		t.Fatalf("priority = %d, want clamped to %d (self-scheduled band)", got.Priority, thought.SelfScheduledHighBound)
 	}
-	// Durable: persisted through the queue's store.
+	// Durable: persisted through the queue's datastore.
 	if got.Status != thought.ThoughtPending {
 		t.Fatalf("status = %s, want pending", got.Status)
 	}
