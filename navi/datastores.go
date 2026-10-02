@@ -36,6 +36,13 @@ func newDatastoreCollection() *DatastoreCollection {
 // aggregate from it — typically at declaration, before Run.
 func (d *DatastoreCollection) Handle() *datastore.Datastore { return d.handle }
 
+// StartToolStateFlusher starts the RAM-first tool-state flusher (a no-op
+// when no backend is bound). The runtime calls it at serve and the stop
+// function at shutdown.
+func (d *DatastoreCollection) StartToolStateFlusher() func() {
+	return d.handle.StartToolStateFlusher()
+}
+
 // activate resolves the compiled candidates against runtime config, opens
 // the active backend, and binds the handle. It runs at assembly, after
 // validation: registration validates shape, assembly validates binding

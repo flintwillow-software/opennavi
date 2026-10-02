@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/datastore"
@@ -78,6 +79,10 @@ type Navi struct {
 	// durable navi supplies a sqlite store and enables both.
 	thoughtStore thought.Store
 	queueConfig  *thought.Config
+
+	// datastoreFlushInterval tunes the datastore's RAM-first flush cadence
+	// (WithDatastoreFlushInterval).
+	datastoreFlushInterval time.Duration
 
 	// inflight is the steering bridge's lookup: maps a running
 	// thought to its agent so RouteMessage can inject at the turn boundary.
@@ -139,6 +144,13 @@ func WithThoughtStore(s thought.Store) Option {
 // correct for the in-memory store; a durable navi enables both.
 func WithQueueConfig(cfg thought.Config) Option {
 	return func(n *Navi) { n.queueConfig = &cfg }
+}
+
+// WithDatastoreFlushInterval sets the datastore's RAM-first flush cadence
+// (0 selects the default, negative is synchronous write-through). The
+// pattern mirrors thought.Config's FlushInterval.
+func WithDatastoreFlushInterval(d time.Duration) Option {
+	return func(n *Navi) { n.datastoreFlushInterval = d }
 }
 
 // WithProviderFallback declares a fallback provider for thoughts that name
@@ -527,6 +539,9 @@ func (n *Navi) serve(ctx context.Context) error {
 	// durable navi sets intervals and needs them to persist at all.
 	stopReconcile := n.Thoughts.StartReconcile()
 	stopFlusher := n.Thoughts.StartFlusher()
+	// The datastore's RAM-first tool-state flusher (no-op when no
+	// datastore is bound or it is in synchronous mode).
+	stopToolState := n.Datastores.StartToolStateFlusher()
 
 	workers := n.startWorkers(ctx)
 
@@ -538,10 +553,11 @@ func (n *Navi) serve(ctx context.Context) error {
 	stopAll()
 	workers.Wait()
 
-	// Final drain after the pool stops: the flusher persists whatever the
+	// Final drain after the pool stops: the flushers persist whatever the
 	// run left dirty (the park checkpoints are already synchronous).
 	stopReconcile()
 	stopFlusher()
+	stopToolState()
 	return nil
 }
 

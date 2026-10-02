@@ -155,6 +155,15 @@ func (n *Navi) assemble() error {
 // runtime itself consumes the thought/transcript view, so declaring a
 // candidate means history is persisted through it.
 func (n *Navi) assembleDatastore(file *config.RuntimeConfig) error {
+	// The tool-state view is RAM-first: configure its flush cadence before
+	// the handle binds the active backend.
+	n.Datastores.handle.SetToolStateConfig(datastore.ToolStateConfig{
+		FlushInterval: n.datastoreFlushInterval,
+		OnError: func(err error) {
+			n.log.Error("tool state flush failed; will retry next tick", "err", err)
+		},
+	})
+
 	cfg := datastore.Config{}
 	if file != nil && file.Datastore != nil {
 		cfg.Backend = file.Datastore.Backend

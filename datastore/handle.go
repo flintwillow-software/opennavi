@@ -23,6 +23,8 @@ type Datastore struct {
 	thoughts  Thoughts
 	toolState ToolState
 	memory    Memory
+	ram       *toolStateRAM
+	ramCfg    ToolStateConfig
 	claimed   bool
 }
 
@@ -31,14 +33,50 @@ type Datastore struct {
 func NewDatastore() *Datastore { return &Datastore{} }
 
 // Bind resolves the handle to the active backend's views. Assembly calls
-// it once, after Resolve and Open.
+// it once, after Resolve and Open. The tool-state view is wrapped in the
+// RAM-first layer: mutations land in memory and the bound backend is the
+// asynchronous persistence sink (backend-agnostic — fs, sqlite, inmem).
 func (d *Datastore) Bind(b Backend) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.backend = b
 	d.thoughts = b.Thoughts()
-	d.toolState = b.ToolState()
 	d.memory = b.Memory()
+	ram := newToolStateRAM(b.ToolState(), d.ramCfg)
+	d.ram = ram
+	d.toolState = ram
+}
+
+// SetToolStateConfig configures the RAM-first tool-state layer. It must be
+// called before Bind to take effect.
+func (d *Datastore) SetToolStateConfig(cfg ToolStateConfig) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ramCfg = cfg
+}
+
+// StartToolStateFlusher starts the RAM-first tool-state flusher, returning
+// a stop function that drains once more. It is a no-op before Bind or in
+// synchronous mode.
+func (d *Datastore) StartToolStateFlusher() func() {
+	d.mu.RLock()
+	ram := d.ram
+	d.mu.RUnlock()
+	if ram == nil {
+		return func() {}
+	}
+	return ram.startFlusher()
+}
+
+// FlushToolState drains pending tool-state writes now. Tests and
+// durability-critical callers use it; the runtime relies on the flusher.
+func (d *Datastore) FlushToolState() {
+	d.mu.RLock()
+	ram := d.ram
+	d.mu.RUnlock()
+	if ram != nil {
+		ram.flush()
+	}
 }
 
 // Bound reports whether a backend is bound.
