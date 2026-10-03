@@ -899,3 +899,44 @@ func TestCompletedThoughtResponseVisible(t *testing.T) {
 		t.Fatalf("prompt missing from live view:\n%s", view)
 	}
 }
+
+// TestModelShowsBlockedDependency is NAVI-378's portal gate: a pending
+// thought whose dependency has not completed reads "blocked", and the row
+// clears the moment the dependency completes.
+func TestModelShowsBlockedDependency(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	second := th("t2", 4)
+	second.DependsOn = []string{"t1"}
+	if err := q.Enqueue(second); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	if !strings.Contains(m.View(), "blocked") {
+		t.Errorf("dependent not shown as blocked:\n%s", m.View())
+	}
+
+	// Running the dependency does not release the dependent.
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+	if !strings.Contains(m.View(), "blocked") {
+		t.Errorf("dependent released while its dependency only runs:\n%s", m.View())
+	}
+
+	// Completing it does.
+	if err := q.Complete("t1", "done"); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	if strings.Contains(m.View(), "blocked") {
+		t.Errorf("dependent still blocked after its dependency completed:\n%s", m.View())
+	}
+}

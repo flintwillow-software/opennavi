@@ -75,6 +75,8 @@ type Thought struct {
     Status       ThoughtStatus // pending | running | paused | complete | failed | cancelled
     Provider, Model string   // per-thought overrides (ADR 0009)
     Mode         string      // capability profile (ADR 0007)
+    Skills       []string    // compiled-in skills to load (ADR 0013)
+    DependsOn    []string    // thoughts this one waits for (ADR 0015)
     DeferUntil   time.Time   // durable not-before schedule
     SessionID    string      // persisted transcript, when one exists
     Foreground   bool
@@ -118,6 +120,39 @@ constructed with `cron.WithStateStore(db)`, tick state persists
 (`last_fired`/`fire_count`) and a tick that came due while the navi was down is
 coalesced into one thought at `Start`; without it the connector keeps state in
 memory only and a missed tick is skipped (NAVI-358).
+
+## Thought dependencies
+
+A plan is a chain, and a chain needs an order that priority cannot express: once
+more than one worker runs, the next stage is claimable the instant a slot frees.
+`Thought.DependsOn` is that order ([ADR 0015](../adr/0015-thought-dependencies-order-a-plan.md)):
+
+- **A dependency is a scheduling relation, not a lifecycle status.** The thought
+  is queued immediately — its record and position are visible — but `Dequeue`
+  will not claim it until every id in `DependsOn` has reached `complete`.
+  Completing a dependency already emits an event that wakes the pool, so the
+  dependent is claimed on the next drain; there is no release step. "Blocked" is
+  *derived* from the edges for display (`blocked_by` on the tool view, `blocked`
+  in the portal row), so the scheduler and the record keep one vocabulary.
+- **A paused dependency is not complete.** Preempting the head of a chain parks
+  the whole chain, which is the honest reading: the work it stands for is not
+  done.
+- **A dead dependency cannot hang its dependents.** A dependency that fails,
+  is cancelled, or is removed fails its pending dependents (transitively) with
+  a detail naming the dependency; `Retry` re-applies the gate, so the recovery
+  is retry-the-dependency-first. A dependency that is already dead when the
+  graph loads (crash recovery or external adoption) settles the same way.
+- **Edges are validated at the door.** Every id must already be known (a
+  successor is enqueued after its predecessor), self-dependency is rejected,
+  and an edge that would close a cycle is refused. Together with unique ids that
+  makes an in-process graph acyclic by construction.
+- **Edges are durable.** `depends_on` persists with the thought row (migration
+  15) and recovery preserves the graph, so a restart cannot silently reorder a
+  plan. A dependency recovered as `complete` satisfies its dependents.
+
+The model expresses the relation through its own deferral surface:
+`thoughts_create` takes `depends_on`, and each call returns the id the next
+stage names — "this continues `t1`".
 
 ## Context assembly
 

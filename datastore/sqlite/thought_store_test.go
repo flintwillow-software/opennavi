@@ -340,3 +340,62 @@ func TestThoughtStoreResultRoundTrip(t *testing.T) {
 		t.Fatalf("unset result became %q", p.Result)
 	}
 }
+
+// TestThoughtStoreDependsOnRoundTrip covers migration 15 (NAVI-378): the
+// dependency graph survives persistence, populated and empty, on both the
+// single-row and bulk load paths.
+func TestThoughtStoreDependsOnRoundTrip(t *testing.T) {
+	st, ts := openThoughtStore(t)
+
+	columns, err := tableColumns(st, "thoughts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !columns["depends_on"] {
+		t.Fatalf("migration 15 did not add thoughts.depends_on: %v", columns)
+	}
+
+	want := &thought.Thought{
+		ID:        "t-dep",
+		Prompt:    "stage two",
+		Status:    thought.ThoughtPending,
+		DependsOn: []string{"t-dep-1", "t-dep-2"},
+	}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-dep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DependsOn) != 2 || got.DependsOn[0] != "t-dep-1" || got.DependsOn[1] != "t-dep-2" {
+		t.Fatalf("depends_on = %v, want [t-dep-1 t-dep-2]", got.DependsOn)
+	}
+
+	// A thought with no dependencies stays empty rather than becoming a
+	// JSON fragment.
+	if err := ts.SaveThought(&thought.Thought{ID: "t-nodep", Prompt: "alone", Status: thought.ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	none, err := ts.LoadThought("t-nodep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none.DependsOn) != 0 {
+		t.Fatalf("empty depends_on = %v", none.DependsOn)
+	}
+
+	all, err := ts.LoadThoughts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range all {
+		if x.ID == "t-dep" {
+			if len(x.DependsOn) != 2 {
+				t.Fatalf("LoadThoughts depends_on = %v", x.DependsOn)
+			}
+			return
+		}
+	}
+	t.Fatal("t-dep missing from LoadThoughts")
+}
