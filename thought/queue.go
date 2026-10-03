@@ -552,14 +552,17 @@ func (q *Queue) Pause(id string) error { return q.PauseWithCheckpoint(id, nil) }
 // runner snapshotted, so a resumed thought continues rather than
 // restarts (NAVI-338: the checkpoint is on disk at park time).
 func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
 	if t == nil {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: %s: %w (not running)", id, ErrThoughtNotFound)
 	}
 	t.Checkpoint = checkpoint
 	if err := t.Transition(ThoughtPaused); err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	q.freeSlot(id)
@@ -572,22 +575,29 @@ func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
 	// kill-and-lose promise — the checkpoint MUST be on disk at park
 	// time. Synchronous write, then emit.
 	if err := q.syncSave(t); err != nil {
+		q.mu.Unlock()
 		return err
 	}
-	q.emit([]Event{{Kind: EventPaused, ThoughtID: id, At: time.Now().UTC()}})
+	collect(&evts, EventPaused, id, "")
+	q.mu.Unlock()
+
+	q.emit(evts)
 	return nil
 }
 
 // Resume moves a paused thought back to pending (it re-acquires a slot
 // via the normal scheduling path).
 func (q *Queue) Resume(id string) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	t, idx := q.findIn(q.paused, id)
 	if t == nil {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: %s: %w (not paused)", id, ErrThoughtNotFound)
 	}
 	if err := t.Transition(ThoughtPending); err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
@@ -595,7 +605,10 @@ func (q *Queue) Resume(id string) error {
 	q.sortPending()
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
-	q.emit([]Event{{Kind: EventResumed, ThoughtID: id, At: time.Now().UTC()}})
+	collect(&evts, EventResumed, id, "")
+	q.mu.Unlock()
+
+	q.emit(evts)
 	return nil
 }
 
@@ -651,13 +664,16 @@ func (q *Queue) Cancel(id string) error {
 // thought's output is readable from the queue itself rather than only
 // from its session transcript.
 func (q *Queue) Complete(id string, result string) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
 	if t == nil {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: %s: %w (not running)", id, ErrThoughtNotFound)
 	}
 	if err := t.Transition(ThoughtComplete); err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	t.Result = result
@@ -667,9 +683,12 @@ func (q *Queue) Complete(id string, result string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.terminal = append(q.terminal, t)
-	q.emit([]Event{{Kind: EventCompleted, ThoughtID: id, At: time.Now().UTC()}})
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
+	collect(&evts, EventCompleted, id, "")
+	q.mu.Unlock()
+
+	q.emit(evts)
 	return nil
 }
 
@@ -914,31 +933,38 @@ func (q *Queue) save(t *Thought) error {
 // Retry returns a failed thought to the pending queue for
 // re-acquisition (failed → pending).
 func (q *Queue) Retry(id string) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	// Fail parks failed thoughts in q.pending: flip in place —
 	// appending again would duplicate the entry (ghost thought).
 	if t, _ := q.findIn(q.pending, id); t != nil {
 		if t.Status != ThoughtFailed {
+			q.mu.Unlock()
 			return fmt.Errorf("thought: %s: %w: status %s is not failed", id, ErrInvalidTransition, t.Status)
 		}
 		if err := t.Retry(); err != nil {
+			q.mu.Unlock()
 			return err
 		}
 		q.sortPending()
-		q.emit([]Event{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
+		collect(&evts, EventEnqueued, id, "retry")
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
+		q.mu.Unlock()
+		q.emit(evts)
 		return nil
 	}
 
 	// Coming from elsewhere (e.g. the terminal list): re-queue.
 	t, err := q.lookup(id)
 	if err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	if err := t.Retry(); err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	q.pending = append(q.pending, t)
@@ -946,9 +972,12 @@ func (q *Queue) Retry(id string) error {
 		q.terminal = append(q.terminal[:idx], q.terminal[idx+1:]...)
 	}
 	q.sortPending()
-	q.emit([]Event{{Kind: EventEnqueued, ThoughtID: id, Detail: "retry", At: time.Now().UTC()}})
+	collect(&evts, EventEnqueued, id, "retry")
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
+	q.mu.Unlock()
+
+	q.emit(evts)
 	return nil
 }
 
@@ -958,7 +987,11 @@ func collect(evts *[]Event, kind EventKind, thoughtID, detail string) {
 }
 
 // emit fans events out to registered observers. MUST be called without
-// q.mu held — handlers may re-enter the queue.
+// q.mu held — handlers may re-enter the queue (GetThought/GetThoughts),
+// and a handler that does so while the emitting transition still holds
+// q.mu deadlocks (NAVI-67). Every transition site follows the
+// collect-under-lock / emit-after-unlock pattern: build the events in a
+// local slice, release q.mu, then emit.
 func (q *Queue) emit(evts []Event) {
 	q.eventsMu.Lock()
 	handlers := append([]func(Event){}, q.handlers...)
