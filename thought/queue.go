@@ -77,6 +77,13 @@ type Queue struct {
 
 	store Store
 
+	// assemble is the creation-time context assembler (ADR 0013 decision
+	// 2), installed by the composition root via SetAssembler. The queue
+	// cannot assemble itself — the content is navi-specific (compiled
+	// skills, short-term memory) — so this is a seam, like Store. It is
+	// set before serving begins and read outside q.mu.
+	assemble func(*Thought) error
+
 	// steeringRouter delivers messages to a running thought's agent
 	// (running-path); invoked OUTSIDE q.mu — implementations
 	// must not re-enter the queue. Wired by the runtime (NAVI-320).
@@ -220,6 +227,15 @@ func (q *Queue) OnEvent(fn func(Event)) {
 // (Metadata origin `self`/`tool`) have their priority clamped to the
 // conservative band — a navi cannot enqueue its own work ahead
 // of external work by default.
+// SetAssembler installs the creation-time context assembler (ADR 0013
+// decision 2). Enqueue calls it outside q.mu once the thought is validated,
+// so a thought carries its assembled context and a thought that cannot be
+// assembled is rejected at the door rather than mid-run. Set it before
+// serving begins; with no assembler, Enqueue schedules as before.
+func (q *Queue) SetAssembler(fn func(*Thought) error) {
+	q.assemble = fn
+}
+
 func (q *Queue) Enqueue(t *Thought) error {
 	if t.ID == "" {
 		return fmt.Errorf("thought: enqueue requires an ID")
@@ -237,6 +253,15 @@ func (q *Queue) Enqueue(t *Thought) error {
 	}
 	if origin, ok := t.Metadata["origin"]; ok && (origin == OriginSelf || origin == OriginTool) {
 		t.Priority = t.EffectiveSelfPriority()
+	}
+
+	// Context assembly at the door (ADR 0013 decision 2). Runs outside q.mu:
+	// the assembler reads the navi's compiled skills and in-RAM memory, never
+	// the queue.
+	if q.assemble != nil {
+		if err := q.assemble(t); err != nil {
+			return fmt.Errorf("thought: enqueue %s: assemble: %w", t.ID, err)
+		}
 	}
 
 	// Events collected under lock, emitted after unlock — OnEvent

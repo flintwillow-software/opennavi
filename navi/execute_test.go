@@ -132,13 +132,17 @@ func TestRunExecutesAThoughtThroughAMockProvider(t *testing.T) {
 		t.Fatalf("provider did not receive the prompt: %q", last)
 	}
 
-	// The exchange is recorded in the thought's transcript.
+	// The exchange is recorded in the thought's transcript, with the
+	// assembled context as the first entry (ADR 0013 decision 3).
 	flushTranscripts(t, n)
 	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("t1")
 	if err != nil {
 		t.Fatalf("load transcript: %v", err)
 	}
-	if got, want := transcriptText(entries), []string{"say pong", "pong"}; !equalStrings(got, want) {
+	if len(entries) == 0 || entries[0].Role != datastore.RoleSystem || strings.TrimSpace(entries[0].Message) == "" {
+		t.Fatalf("the assembled context must be the first transcript entry: %+v", entries)
+	}
+	if got, want := transcriptText(entries[1:]), []string{"say pong", "pong"}; !equalStrings(got, want) {
 		t.Fatalf("transcript = %v, want %v", got, want)
 	}
 }

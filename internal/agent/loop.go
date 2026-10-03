@@ -18,6 +18,7 @@ func (a *Agent) runLoop(ctx context.Context) {
 		maxTurns = DefaultMaxTurns
 	}
 	turns := 0
+	budgetWarned := false
 loop:
 	for {
 		select {
@@ -34,7 +35,17 @@ loop:
 			a.setState(a.state.AppendMessage(AgentMessage{Role: RoleUser, Content: msg}))
 		}
 
-		// 2. Transform context to LLM format
+		// 2. Deferral notice, then transform context to LLM format. When the
+		// run approaches the thought's context budget, tell the agent once
+		// (ADR 0013): there is no compaction, so it should finish a coherent
+		// unit, write the handoff, and queue follow-ups.
+		if !budgetWarned && a.budgetWarning > 0 && a.Config.ContextBudget > 0 {
+			threshold := int(float64(a.Config.ContextBudget) * a.budgetWarning)
+			if estimateMessagesTokens(a.state.Messages) >= threshold {
+				a.setState(a.state.AppendMessage(AgentMessage{Role: RoleUser, Content: budgetNotice}))
+				budgetWarned = true
+			}
+		}
 		messages := TransformContext(a.Config, a.state.Messages)
 
 		// 3. Convert executor tools to agent tool descriptors
