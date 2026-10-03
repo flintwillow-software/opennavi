@@ -23,8 +23,8 @@ type Datastore struct {
 	thoughts  Thoughts
 	toolState ToolState
 	memory    Memory
-	ram       *toolStateRAM
-	ramCfg    ToolStateConfig
+	writer    *Writer
+	writerCfg WriterConfig
 	claimed   bool
 }
 
@@ -33,50 +33,90 @@ type Datastore struct {
 func NewDatastore() *Datastore { return &Datastore{} }
 
 // Bind resolves the handle to the active backend's views. Assembly calls
-// it once, after Resolve and Open. The tool-state view is wrapped in the
-// RAM-first layer: mutations land in memory and the bound backend is the
-// asynchronous persistence sink (backend-agnostic — fs, sqlite, inmem).
+// it once, after Resolve and Open. It also builds the ordered writer and
+// wraps the tool-state view in the RAM-first layer (NAVI-374): mutations
+// land in memory and stage writes on the writer, which persists through the
+// bound backend asynchronously — backend-agnostic (fs, sqlite, inmem).
 func (d *Datastore) Bind(b Backend) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.backend = b
 	d.thoughts = b.Thoughts()
 	d.memory = b.Memory()
-	ram := newToolStateRAM(b.ToolState(), d.ramCfg)
-	d.ram = ram
-	d.toolState = ram
+	w := NewWriter(d.writerCfg)
+	w.SetBackend(b)
+	d.writer = w
+	d.toolState = newToolStateRAM(b.ToolState(), w.Submit)
 }
 
-// SetToolStateConfig configures the RAM-first tool-state layer. It must be
-// called before Bind to take effect.
-func (d *Datastore) SetToolStateConfig(cfg ToolStateConfig) {
+// SetWriterConfig configures the ordered writer. It must be called before
+// Bind to take effect.
+func (d *Datastore) SetWriterConfig(cfg WriterConfig) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.ramCfg = cfg
+	d.writerCfg = cfg
 }
 
-// StartToolStateFlusher starts the RAM-first tool-state flusher, returning
-// a stop function that drains once more. It is a no-op before Bind or in
-// synchronous mode.
-func (d *Datastore) StartToolStateFlusher() func() {
+// Submit queues a write on the ordered writer and returns immediately; a
+// slow backend never blocks the producer.
+func (d *Datastore) Submit(op Write) {
 	d.mu.RLock()
-	ram := d.ram
+	w := d.writer
 	d.mu.RUnlock()
-	if ram == nil {
+	if w != nil {
+		w.Submit(op)
+	}
+}
+
+// SubmitSync queues a write and waits for it to be applied, ordered after
+// everything queued before it. It is the durability path (park checkpoints,
+// deletes).
+func (d *Datastore) SubmitSync(op Write) error {
+	d.mu.RLock()
+	w := d.writer
+	d.mu.RUnlock()
+	if w == nil {
+		return ErrUnbound
+	}
+	return w.SubmitSync(op)
+}
+
+// SubmitTranscript queues a thought's transcript for asynchronous
+// persistence. Transcripts get no synchronous exception (ADR 0011 decision
+// 6): a hard kill may lose the unflushed tail.
+func (d *Datastore) SubmitTranscript(thoughtID string, entries []Entry) {
+	copied := cloneEntries(entries)
+	d.Submit(Write{
+		Aggregate: AggregateThoughts,
+		Key:       "transcript/" + thoughtID,
+		Apply: func(b Backend) error {
+			return b.Thoughts().SaveTranscript(thoughtID, copied)
+		},
+	})
+}
+
+// StartWriter launches the ordered writer's drain goroutine, returning a
+// stop function that drains once more. A no-op before Bind.
+func (d *Datastore) StartWriter() func() {
+	d.mu.RLock()
+	w := d.writer
+	d.mu.RUnlock()
+	if w == nil {
 		return func() {}
 	}
-	return ram.startFlusher()
+	return w.Start()
 }
 
-// FlushToolState drains pending tool-state writes now. Tests and
-// durability-critical callers use it; the runtime relies on the flusher.
-func (d *Datastore) FlushToolState() {
+// FlushWrites drains every pending write now and returns the first error.
+// Tests and shutdown use it; the runtime relies on the writer's cadence.
+func (d *Datastore) FlushWrites() error {
 	d.mu.RLock()
-	ram := d.ram
+	w := d.writer
 	d.mu.RUnlock()
-	if ram != nil {
-		ram.flush()
+	if w == nil {
+		return nil
 	}
+	return w.Flush()
 }
 
 // Bound reports whether a backend is bound.
@@ -149,6 +189,65 @@ func (d *Datastore) memoryView() (Memory, error) {
 		return nil, ErrUnbound
 	}
 	return d.memory, nil
+}
+
+// ── thought-row persistence (the queue's store adapter) ─────────────────
+//
+// These feed the ordered writer and read the bound backend. They do NOT
+// claim the handle: a navi may run without a datastore (its thoughts then
+// stay in memory), and only a component taking a view is a hard
+// dependency. The queue's store adapter uses them (NAVI-374).
+
+// SaveThought persists a thought row durably, ordered after queued work.
+func (d *Datastore) SaveThought(t *thought.Thought) error {
+	clone := t.Clone()
+	return d.SubmitSync(Write{
+		Aggregate: AggregateThoughts,
+		Key:       "thoughts/" + clone.ID,
+		Apply:     func(b Backend) error { return b.Thoughts().SaveThought(clone) },
+	})
+}
+
+// EnqueueThought stages a thought-row write on the ordered writer. It
+// returns immediately; the queue's flusher is a producer, not a writer.
+func (d *Datastore) EnqueueThought(t *thought.Thought) {
+	clone := t.Clone()
+	d.Submit(Write{
+		Aggregate: AggregateThoughts,
+		Key:       "thoughts/" + clone.ID,
+		Apply:     func(b Backend) error { return b.Thoughts().SaveThought(clone) },
+	})
+}
+
+// LoadThoughts returns every persisted thought, or ErrUnbound before Bind.
+func (d *Datastore) LoadThoughts() ([]*thought.Thought, error) {
+	d.mu.RLock()
+	backend := d.backend
+	d.mu.RUnlock()
+	if backend == nil {
+		return nil, ErrUnbound
+	}
+	return backend.Thoughts().LoadThoughts()
+}
+
+// LoadThought returns one persisted thought, or ErrUnbound before Bind.
+func (d *Datastore) LoadThought(id string) (*thought.Thought, error) {
+	d.mu.RLock()
+	backend := d.backend
+	d.mu.RUnlock()
+	if backend == nil {
+		return nil, ErrUnbound
+	}
+	return backend.Thoughts().LoadThought(id)
+}
+
+// DeleteThought removes a thought row durably, ordered after queued work.
+func (d *Datastore) DeleteThought(id string) error {
+	return d.SubmitSync(Write{
+		Aggregate: AggregateThoughts,
+		Key:       "thoughts/" + id,
+		Apply:     func(b Backend) error { return b.Thoughts().DeleteThought(id) },
+	})
 }
 
 // ── view proxies ────────────────────────────────────────────────────────

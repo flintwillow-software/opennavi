@@ -88,6 +88,15 @@ func withDatastore(t *testing.T, n *Navi) *Navi {
 	return n
 }
 
+// flushTranscripts drains the ordered writer so a test can read a
+// transcript that the runner wrote asynchronously (NAVI-374).
+func flushTranscripts(t *testing.T, n *Navi) {
+	t.Helper()
+	if err := n.Datastores.Handle().FlushWrites(); err != nil {
+		t.Fatalf("flush transcripts: %v", err)
+	}
+}
+
 // --- the gate: a thought actually executes through a provider ---------
 
 // streamEvents scripts one assistant turn: a content delta then stop. The
@@ -124,6 +133,7 @@ func TestRunExecutesAThoughtThroughAMockProvider(t *testing.T) {
 	}
 
 	// The exchange is recorded in the thought's transcript.
+	flushTranscripts(t, n)
 	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("t1")
 	if err != nil {
 		t.Fatalf("load transcript: %v", err)

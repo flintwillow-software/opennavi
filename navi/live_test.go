@@ -180,6 +180,7 @@ func runLiveThought(t *testing.T, n *Navi) string {
 	}
 	waitStatusWithin(t, n, "live-1", "complete", 2*time.Minute)
 
+	flushTranscripts(t, n)
 	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("live-1")
 	if err != nil {
 		t.Fatalf("load transcript: %v", err)

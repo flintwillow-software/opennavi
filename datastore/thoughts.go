@@ -77,6 +77,22 @@ func NewID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
+// cloneEntries deep-copies a transcript slice so a queued write owns its
+// data and a later caller mutation cannot reach it.
+func cloneEntries(in []Entry) []Entry {
+	if in == nil {
+		return nil
+	}
+	out := make([]Entry, len(in))
+	copy(out, in)
+	for i := range out {
+		if out[i].ToolInput != nil {
+			out[i].ToolInput = append([]byte(nil), out[i].ToolInput...)
+		}
+	}
+	return out
+}
+
 // Thoughts is the thought/transcript aggregate view. A thought is the
 // persistence aggregate (ADR 0011 decision 8): its transcript is keyed by
 // thought id and reached through this view, never through a session

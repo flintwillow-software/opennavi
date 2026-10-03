@@ -88,6 +88,7 @@ func TestAgentRunnerDispatchesThroughTheRegistry(t *testing.T) {
 	}
 
 	// The tool exchange is recorded in the thought's transcript.
+	flushTranscripts(t, n)
 	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("t1")
 	if err != nil {
 		t.Fatalf("load transcript: %v", err)
