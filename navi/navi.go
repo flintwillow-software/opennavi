@@ -91,6 +91,11 @@ type Navi struct {
 	// assembly when declared.
 	shortMemory *memory.Service
 
+	// skillIndex is the compiled skill set (authored + generated core),
+	// built at assembly; skillOrder preserves declaration order.
+	skillIndex map[string]skill.Skill
+	skillOrder []string
+
 	// inflight is the steering bridge's lookup: maps a running
 	// thought to its agent so RouteMessage can inject at the turn boundary.
 	inflight *inFlightAgents
@@ -581,6 +586,9 @@ func (n *Navi) serve(ctx context.Context) error {
 func validateSkill(s skill.Skill) error {
 	if strings.TrimSpace(s.Name) == "" {
 		return fmt.Errorf("%w: skill requires a name", ErrInvalid)
+	}
+	if strings.HasPrefix(s.Name, "core_") {
+		return fmt.Errorf("%w: skill %q uses the reserved core_ namespace (SDK core skills)", ErrInvalid, s.Name)
 	}
 	return nil
 }

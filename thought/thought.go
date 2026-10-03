@@ -63,6 +63,11 @@ type Thought struct {
 	// Mode names the capability profile this thought runs under (empty =
 	// the navi's default; ADR 0007).
 	Mode string
+	// Skills names the skills this thought loads (ADR 0013 decision 5, the
+	// thought-declared path): a thought tells its follow-ups what to load.
+	// Names resolve against the compiled-in set; an unknown name is an
+	// error, not a fetch.
+	Skills []string
 	// DeferUntil is the not-before timestamp: the thought
 	// is queued — and persisted — immediately but is not claimable until
 	// this time passes. Zero = claimable now. Durability is real state
@@ -179,6 +184,9 @@ func (t *Thought) Clone() *Thought {
 	}
 	if t.Checkpoint != nil {
 		out.Checkpoint = append([]byte(nil), t.Checkpoint...)
+	}
+	if t.Skills != nil {
+		out.Skills = append([]string(nil), t.Skills...)
 	}
 	return &out
 }

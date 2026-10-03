@@ -233,7 +233,16 @@ func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state
 	if err := n.Tools.Add(hp); err != nil {
 		return err
 	}
-	return add(thoughts.Tools(n.Thoughts))
+	if err := add(thoughts.Tools(n.Thoughts)); err != nil {
+		return err
+	}
+	// The agent-chosen skill-loading path (ADR 0013 decision 5): added
+	// explicitly like any other tool.
+	skillTool, err := n.SkillTool()
+	if err != nil {
+		return err
+	}
+	return n.Tools.Add(skillTool)
 }
 
 // addCron wires configured schedules as the cron connector (ADR 0010),
