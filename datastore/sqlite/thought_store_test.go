@@ -31,6 +31,8 @@ func TestThoughtStoreRoundTrip(t *testing.T) {
 		Priority:  2,
 		Status:    thought.ThoughtPending,
 		LogPath:   "/tmp/x",
+		Skills:    []string{"deploy_runbook"},
+		Assembled: "assembled context block",
 		CreatedAt: testNow(),
 		UpdatedAt: testNow(),
 	}
@@ -47,6 +49,12 @@ func TestThoughtStoreRoundTrip(t *testing.T) {
 	}
 	if got.Metadata["source"] != "cron" {
 		t.Fatalf("metadata = %v", got.Metadata)
+	}
+	if got.Assembled != want.Assembled {
+		t.Fatalf("assembled = %q, want %q", got.Assembled, want.Assembled)
+	}
+	if len(got.Skills) != 1 || got.Skills[0] != "deploy_runbook" {
+		t.Fatalf("skills = %v", got.Skills)
 	}
 }
 

@@ -85,6 +85,10 @@ type Navi struct {
 	// (WithDatastoreFlushInterval).
 	datastoreFlushInterval time.Duration
 
+	// thoughtBudget is the assembled-context budget in tokens
+	// (WithThoughtBudget); <= 0 disables truncation and the deferral notice.
+	thoughtBudget int
+
 	// shortTermMemory records the WithShortTermMemory declaration.
 	shortTermMemory bool
 	// shortMemory is the always-loaded short-term memory tier, built at
@@ -172,6 +176,14 @@ func WithShortTermMemory() Option {
 	return func(n *Navi) { n.shortTermMemory = true }
 }
 
+// WithThoughtBudget sets the per-thought context budget in tokens. Assembly
+// truncates past it with a reported marker, and a running thought is told as
+// it approaches it so it can defer (ADR 0013). Zero or negative disables
+// both; the default is DefaultThoughtBudget.
+func WithThoughtBudget(tokens int) Option {
+	return func(n *Navi) { n.thoughtBudget = tokens }
+}
+
 // WithProviderFallback declares a fallback provider for thoughts that name
 // no provider (ADR 0009). The runtime config file's provider.fallback is
 // used when this option is absent; an unknown fallback fails assembly.
@@ -232,6 +244,9 @@ func New(name string, opts ...Option) *Navi {
 		Modes: newCollection("mode",
 			func(m Mode) string { return m.Name }, validateMode),
 		Datastores: newDatastoreCollection(),
+		// The assembled-context budget defaults on; WithThoughtBudget
+		// overrides or disables it.
+		thoughtBudget: DefaultThoughtBudget,
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -268,6 +283,10 @@ func New(name string, opts ...Option) *Navi {
 		n.initErr = fmt.Errorf("navi: thought queue: %w", err)
 	} else {
 		n.Thoughts = q
+		// Context assembly is part of the navi's core thought system (ADR
+		// 0013 decision 2): the navi installs its assembler on its own
+		// queue, so every enqueue path assembles once, at the door.
+		n.Thoughts.SetAssembler(n.assembleThought)
 	}
 
 	// Execution defaults. The runner is built after options so it logs

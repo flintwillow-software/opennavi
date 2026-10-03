@@ -32,6 +32,10 @@ type Agent struct {
 	Barrier       *AgentEndBarrier
 	Executor      *ToolExecutor
 
+	// budgetWarning is the fraction of a thought's context budget at which
+	// the deferral notice fires; resolved from Config at construction.
+	budgetWarning float64
+
 	mu     sync.RWMutex // guards state swaps and run handles
 	state  *AgentState
 	cancel context.CancelFunc
@@ -53,6 +57,7 @@ func NewAgent(config AgentConfig) *Agent {
 		followUpQueue: NewFollowUpQueue(),
 		Barrier:       NewAgentEndBarrier(),
 		Executor:      NewToolExecutor("parallel", 4),
+		budgetWarning: resolveBudgetWarning(config.BudgetWarning),
 	}
 	// No tools are seeded here: the agent loop is generic, and tools reach
 	// it only through the registry + internal/bridge (NAVI-356). The

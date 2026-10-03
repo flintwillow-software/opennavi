@@ -80,16 +80,14 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		// An unknown provider/mode fails THIS thought, loudly (ADR 0009).
 		return err
 	}
-	sysPrompt, err := r.navi.systemPromptFor(t)
-	if err != nil {
-		// An unknown declared skill fails THIS thought, loudly (ADR 0013).
-		return err
-	}
 
+	// The thought carries the context it was created with (ADR 0013 decision
+	// 2): the runner consumes it rather than rebuilding it per turn.
 	a := agent.NewAgent(agent.AgentConfig{
-		Provider:     provider.Name(),
-		Model:        modelName,
-		SystemPrompt: sysPrompt,
+		Provider:      provider.Name(),
+		Model:         modelName,
+		SystemPrompt:  t.Assembled,
+		ContextBudget: r.navi.thoughtBudget,
 	})
 	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
 
@@ -181,33 +179,6 @@ func (n *Navi) resolveForMode(t *thought.Thought) (llm.Provider, string, error) 
 	clone := *t
 	clone.Model = m.Model
 	return n.resolveFor(&clone)
-}
-
-// systemPromptFor assembles the system prompt: the navi's personality
-// seed, the thought mode's fragment when the mode declares one, the skills
-// the thought loads (auto-loaded core skills plus its own declared
-// requests), and the always-loaded short-term memory block when the navi
-// keeps memory. Every thought is a fresh agent run, so this is where
-// per-thought context injection happens. An unknown declared skill is an
-// error.
-func (n *Navi) systemPromptFor(t *thought.Thought) (string, error) {
-	prompt := n.personality
-	if t.Mode != "" {
-		if m, ok := n.Modes.Get(t.Mode); ok && m.Prompt != "" {
-			prompt = joinBlocks(prompt, m.Prompt)
-		}
-	}
-
-	skills, err := n.skillsBlock(t)
-	if err != nil {
-		return "", err
-	}
-	prompt = joinBlocks(prompt, skills)
-
-	if n.shortMemory != nil {
-		prompt = joinBlocks(prompt, n.shortMemory.Inject())
-	}
-	return prompt, nil
 }
 
 // joinBlocks joins two context blocks, tolerating either being empty.
@@ -338,7 +309,13 @@ func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage
 	if n.transcripts == nil {
 		return nil
 	}
-	entries := make([]datastore.Entry, 0, len(msgs))
+	entries := make([]datastore.Entry, 0, len(msgs)+1)
+	if t.Assembled != "" {
+		// The assembled context is the thought's first transcript entry
+		// (index 0, ADR 0013 decision 3), so it is readable through the same
+		// contract as the rest of the transcript.
+		entries = append(entries, datastore.NewEntry(datastore.RoleSystem, t.Assembled))
+	}
 	for _, m := range msgs {
 		content := m.Content
 		if m.Role == agent.RoleTool && m.ToolResult != "" {

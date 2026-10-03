@@ -246,6 +246,14 @@ var migrations = []string{
 	// mechanism, so deferral replaces compaction entirely).
 	`DROP INDEX IF EXISTS idx_messages_compacted`,
 	`ALTER TABLE messages DROP COLUMN is_compacted`,
+	// 13: the thought's assembled context (NAVI-368) — the context the
+	// thought was created with (ADR 0013), persisted so recovery adopts it
+	// as-queued rather than recomputing against current memory.
+	`ALTER TABLE thoughts ADD COLUMN assembled TEXT`,
+	// 14: the thought's declared skills (NAVI-372/NAVI-368) — the
+	// thought-declared loading path, persisted so recovery keeps what the
+	// thought asked to load alongside the context it assembled.
+	`ALTER TABLE thoughts ADD COLUMN skills TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

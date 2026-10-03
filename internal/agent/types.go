@@ -123,6 +123,13 @@ type AgentConfig struct {
 	// observation iterations). Guards against a model issuing tool
 	// calls forever. 0 means the default (32).
 	MaxTurns int `json:"max_turns,omitempty"`
+	// ContextBudget is the thought's context budget in tokens (0 =
+	// disabled). As the run approaches it, the loop injects one deferral
+	// notice (ADR 0013) — there is no compaction.
+	ContextBudget int `json:"context_budget,omitempty"`
+	// BudgetWarning is the fraction of ContextBudget at which the deferral
+	// notice fires (default 0.8).
+	BudgetWarning float64 `json:"budget_warning,omitempty"`
 }
 
 // DefaultMaxTurns is the effective MaxTurns when unset.

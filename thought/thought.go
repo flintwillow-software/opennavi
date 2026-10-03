@@ -68,6 +68,12 @@ type Thought struct {
 	// Names resolve against the compiled-in set; an unknown name is an
 	// error, not a fetch.
 	Skills []string
+	// Assembled is the context the thought was created with (ADR 0013
+	// decision 2): the composition root fills it at Enqueue, the runner
+	// consumes it instead of rebuilding per turn, and it is recorded as the
+	// thought's first transcript entry. Empty when no assembler is
+	// installed or nothing was assembled.
+	Assembled string
 	// DeferUntil is the not-before timestamp: the thought
 	// is queued — and persisted — immediately but is not claimable until
 	// this time passes. Zero = claimable now. Durability is real state
