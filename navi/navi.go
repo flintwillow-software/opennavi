@@ -27,6 +27,7 @@ import (
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
@@ -83,6 +84,12 @@ type Navi struct {
 	// datastoreFlushInterval tunes the datastore's RAM-first flush cadence
 	// (WithDatastoreFlushInterval).
 	datastoreFlushInterval time.Duration
+
+	// shortTermMemory records the WithShortTermMemory declaration.
+	shortTermMemory bool
+	// shortMemory is the always-loaded short-term memory tier, built at
+	// assembly when declared.
+	shortMemory *memory.Service
 
 	// inflight is the steering bridge's lookup: maps a running
 	// thought to its agent so RouteMessage can inject at the turn boundary.
@@ -151,6 +158,15 @@ func WithQueueConfig(cfg thought.Config) Option {
 // pattern mirrors thought.Config's FlushInterval.
 func WithDatastoreFlushInterval(d time.Duration) Option {
 	return func(n *Navi) { n.datastoreFlushInterval = d }
+}
+
+// WithShortTermMemory declares that the navi keeps short-term memory: the
+// always-loaded tier of user and session notes (ADR 0013), injected into
+// every thought's system prompt and updated through the built-in
+// memory_write tool. It requires a configured datastore — Run fails at
+// assembly without one rather than silently keeping memory volatile.
+func WithShortTermMemory() Option {
+	return func(n *Navi) { n.shortTermMemory = true }
 }
 
 // WithProviderFallback declares a fallback provider for thoughts that name

@@ -91,6 +91,7 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithCompactBudget(p.compactBudget),
+		navi.WithShortTermMemory(),
 	)
 
 	// The reference navi declares the non-durable reference datastore: it
