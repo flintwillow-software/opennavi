@@ -361,9 +361,12 @@ type row struct {
 	activity   string    // live preview: latest tool call / delta snippet (NAVI-335)
 }
 
-// feedMsg delivers a drained mailbox batch to the model.
+// feedMsg delivers a drained mailbox batch to the model. next is the
+// cursor the batch ends at; Update advances the model's cursor with it
+// (NAVI-380 — advancing it in the poll command raced and replayed events).
 type feedMsg struct {
 	evs  []portal.Event
+	next int
 	lost bool
 }
 
@@ -428,18 +431,23 @@ func NewModel(tr Transport) *tuiModel {
 // slow UI just drains fewer events per tick) —, the
 // "within one event delivery" guarantee holds per mailbox push.
 func (m *tuiModel) poll() tea.Cmd {
+	// Capture the mutable state HERE, on the Update goroutine: the returned
+	// command runs on a Bubble Tea goroutine and must not read or write the
+	// model. A cursor advanced there could lose the write, and every poll
+	// would then re-read already-applied events (NAVI-380).
+	cursor := m.cursor
+	running := m.anyRunning()
 	return tea.Every(150*time.Millisecond, func(t time.Time) tea.Msg {
-		evs, next, lost := m.feed.ReadAfter(m.cursor)
+		evs, next, lost := m.feed.ReadAfter(cursor)
 		if len(evs) == 0 && !lost {
 			// Idle: repaint only while a thought runs (ticking clocks,
 			// live preview); a quiet home re-renders nothing (NAVI-335).
-			if m.anyRunning() {
+			if running {
 				return tickMsg{}
 			}
 			return nil
 		}
-		m.cursor = next
-		return feedMsg{evs: evs, lost: lost}
+		return feedMsg{evs: evs, next: next, lost: lost}
 	})
 }
 
@@ -472,6 +480,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.poll()
 	case feedMsg:
+		// The cursor advances on the Update goroutine, with the batch it
+		// describes (NAVI-380).
+		m.cursor = msg.next
 		m.applyFeed(msg)
 		return m, m.poll()
 	case tickMsg:

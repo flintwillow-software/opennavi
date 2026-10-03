@@ -2,14 +2,43 @@ package navi
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
+
+// TestAgentDetailPreservesDeltaSpacingAndToolOutput pins NAVI-380: a content
+// delta is a fragment (whitespace preserved), and a tool result reports the
+// tool's output rather than its input.
+func TestAgentDetailPreservesDeltaSpacingAndToolOutput(t *testing.T) {
+	delta := agent.AgentEvent{Type: agent.AgentEventContentDelta, Message: &agent.AgentMessage{Content: " world"}}
+	if got := agentDetail(delta); got != " world" {
+		t.Fatalf("a content delta must keep its whitespace: %q", got)
+	}
+
+	result := agent.AgentEvent{Type: agent.AgentEventToolResult, Tool: &agent.ToolUpdate{
+		Name: "shell_exec", Input: json.RawMessage(`{"command":"false"}`), Result: "boom", IsError: true,
+	}}
+	got := agentDetail(result)
+	if !strings.Contains(got, "boom") || strings.Contains(got, "command") {
+		t.Fatalf("a tool result must report the output, not the input: %q", got)
+	}
+	if !strings.Contains(got, "error:") {
+		t.Fatalf("an errored tool result must be marked: %q", got)
+	}
+
+	call := agent.AgentEvent{Type: agent.AgentEventToolCall, Tool: &agent.ToolUpdate{Name: "shell_exec", Input: json.RawMessage(`{"command":"ls"}`)}}
+	if got := agentDetail(call); !strings.Contains(got, "ls") {
+		t.Fatalf("a tool call must show its input: %q", got)
+	}
+}
 
 // observingPortal is a minimal portal component built on the public
 // interface alone (NAVI-352): it subscribes to the observation stream it

@@ -102,8 +102,8 @@ func drain(m *tuiModel) {
 	if len(evs) == 0 && !lost {
 		return
 	}
-	m.cursor = next
-	_, _ = m.Update(feedMsg{evs: evs, lost: lost})
+	// The cursor advances inside Update, with the batch (NAVI-380).
+	_, _ = m.Update(feedMsg{evs: evs, next: next, lost: lost})
 }
 
 // TestDepsTransport is the TUI-as-portal gate: the portal's transport is
@@ -183,6 +183,27 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	drain(m)
 	if !strings.Contains(m.View(), "complete") {
 		t.Errorf("lifecycle update lost:\n%s", m.View())
+	}
+}
+
+// TestFeedMsgAdvancesCursorInUpdate pins NAVI-380: the feed cursor is
+// advanced on the Update goroutine, with the batch it describes, so an
+// applied batch is never re-read.
+func TestFeedMsgAdvancesCursorInUpdate(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+
+	updated, _ := m.Update(feedMsg{
+		evs:  []portal.Event{{Category: portal.CategoryQueue, Kind: "enqueued", ThoughtID: "t1"}},
+		next: 7,
+	})
+	mm, ok := updated.(*tuiModel)
+	if !ok {
+		t.Fatalf("Update returned %T, want *tuiModel", updated)
+	}
+	if mm.cursor != 7 {
+		t.Fatalf("cursor = %d, want 7", mm.cursor)
 	}
 }
 

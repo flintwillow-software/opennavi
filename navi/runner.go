@@ -249,26 +249,42 @@ func agentObservation(thoughtID string, ev agent.AgentEvent) portal.Event {
 }
 
 // agentDetail summarizes an agent event for the stream (bounded length;
-// never raw credentials).
+// never raw credentials). A content delta is a FRAGMENT — its whitespace is
+// preserved so a consumer that concatenates deltas joins words correctly
+// (NAVI-380). A tool result reports the tool's OUTPUT, not its input.
 func agentDetail(ev agent.AgentEvent) string {
 	if ev.Tool != nil {
-		snippet := string(ev.Tool.Input)
-		if len(snippet) > 120 {
-			snippet = snippet[:120] + "…"
+		if ev.Type == agent.AgentEventToolResult || ev.Tool.Result != "" {
+			out := strings.TrimSpace(ev.Tool.Result)
+			if ev.Tool.IsError {
+				out = "error: " + out
+			}
+			return clip(out, 256)
 		}
-		return strings.TrimSpace(ev.Tool.Name + " " + snippet)
+		input := string(ev.Tool.Input)
+		if len(input) > 120 {
+			input = input[:120] + "…"
+		}
+		return strings.TrimSpace(ev.Tool.Name + " " + input)
 	}
 	if ev.Message != nil {
-		c := strings.TrimSpace(ev.Message.Content)
-		if len(c) > 256 {
-			c = c[:256] + "…"
+		if ev.Type == agent.AgentEventContentDelta {
+			return clip(ev.Message.Content, 256)
 		}
-		return c
+		return clip(strings.TrimSpace(ev.Message.Content), 256)
 	}
 	if ev.Error != nil {
 		return ev.Error.Error()
 	}
 	return ""
+}
+
+// clip bounds a detail string, appending an ellipsis when it truncates.
+func clip(s string, limit int) string {
+	if len(s) > limit {
+		return s[:limit] + "…"
+	}
+	return s
 }
 
 // ── checkpoint codec (versioned, self-describing) ───────────────────────
