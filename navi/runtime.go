@@ -155,12 +155,13 @@ func (n *Navi) assemble() error {
 // runtime itself consumes the thought/transcript view, so declaring a
 // candidate means history is persisted through it.
 func (n *Navi) assembleDatastore(file *config.RuntimeConfig) error {
-	// The tool-state view is RAM-first: configure its flush cadence before
-	// the handle binds the active backend.
-	n.Datastores.handle.SetToolStateConfig(datastore.ToolStateConfig{
-		FlushInterval: n.datastoreFlushInterval,
-		OnError: func(err error) {
-			n.log.Error("tool state flush failed; will retry next tick", "err", err)
+	// The run path is RAM-first: the ordered writer owns persistence,
+	// configured before the handle binds the active backend.
+	n.Datastores.handle.SetWriterConfig(datastore.WriterConfig{
+		Interval: n.datastoreFlushInterval,
+		OnError: func(w datastore.Write, err error) {
+			n.log.Error("datastore write failed; will retry next drain",
+				"aggregate", string(w.Aggregate), "key", w.Key, "err", err)
 		},
 	})
 
@@ -181,6 +182,10 @@ func (n *Navi) assembleDatastore(file *config.RuntimeConfig) error {
 	}
 	if n.Datastores.handle.Bound() {
 		n.transcripts = n.Datastores.handle.Thoughts()
+		// The queue was built before the datastore resolved; adopt any
+		// thoughts persisted in a previous process now that its store is
+		// bound. Idempotent.
+		n.Thoughts.Recover()
 	}
 	return nil
 }

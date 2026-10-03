@@ -182,6 +182,16 @@ func (q *Queue) recover() error {
 	return nil
 }
 
+// Recover loads persisted thoughts into the queue. NewQueue calls the
+// private recover once at construction; the runtime calls Recover again at
+// assemble, after a late-bound store (the navi's datastore adapter) is
+// ready, so work persisted in a previous process is adopted. It is
+// idempotent: thoughts already known to the queue are skipped, so calling
+// it more than once adopts nothing new.
+func (q *Queue) Recover() {
+	q.reconcileOnce()
+}
+
 func (q *Queue) sortPending() {
 	sort.SliceStable(q.pending, func(i, j int) bool {
 		return q.pending[i].EffectivePriority() < q.pending[j].EffectivePriority()

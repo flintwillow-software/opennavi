@@ -9,44 +9,24 @@ import (
 	"time"
 )
 
-// The RAM-first tool-state layer (ADR 0011 decisions 1, 6, 7, 9; the
-// tool-state slice of NAVI-374).
+// The RAM-first tool-state layer (ADR 0011 decisions 1, 6, 7, 9; NAVI-374).
 //
-// Tool state — todos and notes — is the source of truth in RAM. The bound
-// backend's ToolState view is the persistence sink: mutations land in RAM
-// under the lock (zero I/O), a flusher persists dirty navis outside the
-// lock on a cadence, and a failed flush re-marks the navi and surfaces via
-// the error callback rather than blocking a producer. This is the pattern
-// thought.Queue uses for thoughts, applied to a datastore aggregate; it is
-// deliberately backend-agnostic, so fs, sqlite, and inmem all serve it and
-// no backend does per-call I/O on a tool dispatch.
+// Tool state — todos and notes — is the source of truth in RAM. Mutations
+// land in RAM under the lock (zero I/O) and submit a write to the ordered
+// writer at the datastore level; the writer coalesces a burst by key and
+// persists through the bound backend's ToolState view. A producer never
+// blocks on the backend, and the backend is arbitrary — fs, sqlite, inmem
+// — so no backend does per-call I/O on a tool dispatch.
 //
 // Hydration is lazy per navi identity: the first access loads that navi's
-// state from the sink. NAVI-374 moves hydration to cold start and folds
-// this per-aggregate flusher into the single ordered writer at the
-// datastore level; the shape of this layer is what that work generalizes.
-
-// DefaultToolStateFlushInterval is the flusher cadence default.
-const DefaultToolStateFlushInterval = 250 * time.Millisecond
-
-// ToolStateConfig tunes the RAM-first tool-state layer.
-type ToolStateConfig struct {
-	// FlushInterval is the flush cadence: 0 selects the default, a
-	// negative value is synchronous write-through (no flusher — the same
-	// mode thought.Config exposes).
-	FlushInterval time.Duration
-	// OnError observes a failed flush. Failures never block a producer;
-	// they re-mark the navi dirty for the next tick.
-	OnError func(error)
-}
+// state from the sink. NAVI-377 moves hydration to cold start and bounds
+// the detail RAM by access.
 
 // toolStateRAM is the RAM-first ToolState the handle serves. Only the
 // handle constructs it, over the active backend's own ToolState view.
 type toolStateRAM struct {
-	sink     ToolState
-	sync     bool
-	interval time.Duration
-	onError  func(error)
+	sink   ToolState
+	submit func(Write)
 
 	mu    sync.Mutex
 	navis map[string]*ramNavi
@@ -55,9 +35,6 @@ type toolStateRAM struct {
 	// cannot race a stale snapshot over a fresh one. Hydration I/O runs
 	// outside r.mu and st.mu.
 	loadMu sync.Mutex
-
-	flushMu sync.Mutex
-	stop    chan struct{}
 }
 
 // ramNavi is one navi's in-RAM tool state, with its own lock so a slow
@@ -67,128 +44,62 @@ type ramNavi struct {
 
 	loaded bool
 
-	todos      []Todo
-	todosDirty bool
-
+	todos []Todo
 	notes []Note
 	// persistedNotes is the last state known to be in the sink, so a flush
 	// writes only the difference. Note ids are RAM-assigned.
 	persistedNotes map[string]Note
 }
 
-func newToolStateRAM(sink ToolState, cfg ToolStateConfig) *toolStateRAM {
-	interval := cfg.FlushInterval
-	sync := interval < 0
-	if !sync && interval == 0 {
-		interval = DefaultToolStateFlushInterval
-	}
+func newToolStateRAM(sink ToolState, submit func(Write)) *toolStateRAM {
 	return &toolStateRAM{
-		sink:     sink,
-		sync:     sync,
-		interval: interval,
-		onError:  cfg.OnError,
-		navis:    map[string]*ramNavi{},
+		sink:   sink,
+		submit: submit,
+		navis:  map[string]*ramNavi{},
 	}
 }
 
-// ── lifecycle ───────────────────────────────────────────────────────────
+// ── persistence staging ─────────────────────────────────────────────────
 
-// startFlusher launches the dirty flusher (idempotent). Synchronous mode
-// starts nothing — mutations are written through. The returned stop
-// function stops the ticker and drains once more.
-func (r *toolStateRAM) startFlusher() func() {
-	if r.sync {
-		return func() {}
-	}
-
-	r.flushMu.Lock()
-	if r.stop != nil {
-		r.flushMu.Unlock()
-		return func() {}
-	}
-	done := make(chan struct{})
-	r.stop = done
-	r.flushMu.Unlock()
-
-	go func() {
-		ticker := time.NewTicker(r.interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				r.flush()
-			}
-		}
-	}()
-
-	return func() {
-		r.flushMu.Lock()
-		select {
-		case <-done:
-		default:
-			close(done)
-		}
-		r.stop = nil
-		r.flushMu.Unlock()
-		r.flush()
-	}
-}
-
-// flush drains every navi with pending changes, persisting outside the
-// locks. Failures re-mark the navi and go to OnError.
-func (r *toolStateRAM) flush() {
-	for id, st := range r.dirtyNavis() {
-		if err := r.flushNavi(id, st); err != nil && r.onError != nil {
-			r.onError(err)
-		}
-	}
-}
-
-func (r *toolStateRAM) dirtyNavis() map[string]*ramNavi {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := map[string]*ramNavi{}
-	for id, st := range r.navis {
-		st.mu.RLock()
-		dirty := st.todosDirty || notesDifferLocked(st)
-		st.mu.RUnlock()
-		if dirty {
-			out[id] = st
-		}
-	}
-	return out
-}
-
-// flushNavi persists one navi: it snapshots under the per-navi lock and
-// writes outside it. A failed write re-marks the navi for the next tick,
-// so nothing is lost.
-func (r *toolStateRAM) flushNavi(naviID string, st *ramNavi) error {
-	st.mu.Lock()
+// stage submits the navi's current RAM state to the ordered writer. A
+// later stage with the same key coalesces over an earlier pending one, so a
+// burst of mutations becomes one write.
+func (r *toolStateRAM) stage(naviID string, st *ramNavi) {
+	st.mu.RLock()
 	todos := cloneTodos(st.todos)
-	todosDirty := st.todosDirty
-	// Clear before writing: a mutation that lands while the write runs
-	// re-sets the flag, so the newer state is not lost.
-	st.todosDirty = false
 	current := indexNotes(st.notes)
 	previous := st.persistedNotes
-	st.mu.Unlock()
+	st.mu.RUnlock()
 
-	if todosDirty {
-		if _, err := r.sink.ReplaceTodos(naviID, todos); err != nil {
+	sink := r.sink
+	r.submit(Write{
+		Aggregate: AggregateToolState,
+		Key:       "toolstate/" + naviID,
+		Apply: func(Backend) error {
+			if err := writeToolState(sink, naviID, todos, current, previous); err != nil {
+				return err
+			}
+			// Record what this write persisted; a mutation that landed
+			// meanwhile is absent and so differs on the next stage.
 			st.mu.Lock()
-			st.todosDirty = true
+			st.persistedNotes = current
 			st.mu.Unlock()
-			return err
-		}
-	}
+			return nil
+		},
+	})
+}
 
+// writeToolState replaces the navi's todo list and writes only the note
+// difference against the last persisted snapshot.
+func writeToolState(sink ToolState, naviID string, todos []Todo, current, previous map[string]Note) error {
+	if _, err := sink.ReplaceTodos(naviID, todos); err != nil {
+		return err
+	}
 	for id, n := range current {
 		if prev, ok := previous[id]; ok && notesEqual(prev, n) {
 			continue
 		}
-		if _, err := r.sink.UpsertNote(naviID, n); err != nil {
+		if _, err := sink.UpsertNote(naviID, n); err != nil {
 			return err
 		}
 	}
@@ -196,16 +107,10 @@ func (r *toolStateRAM) flushNavi(naviID string, st *ramNavi) error {
 		if _, ok := current[id]; ok {
 			continue
 		}
-		if err := r.sink.RemoveNote(naviID, id); err != nil && !errors.Is(err, ErrNoteNotFound) {
+		if err := sink.RemoveNote(naviID, id); err != nil && !errors.Is(err, ErrNoteNotFound) {
 			return err
 		}
 	}
-
-	// persistedNotes records what this flush wrote; a change that landed
-	// during the write is absent and so still reads as different.
-	st.mu.Lock()
-	st.persistedNotes = current
-	st.mu.Unlock()
 	return nil
 }
 
@@ -263,22 +168,6 @@ func (r *toolStateRAM) ensure(naviID string) (*ramNavi, error) {
 	return st, nil
 }
 
-// syncFlush writes a navi through immediately in synchronous mode.
-func (r *toolStateRAM) syncFlush(naviID string) {
-	if !r.sync {
-		return
-	}
-	r.mu.Lock()
-	st := r.navis[naviID]
-	r.mu.Unlock()
-	if st == nil {
-		return
-	}
-	if err := r.flushNavi(naviID, st); err != nil && r.onError != nil {
-		r.onError(err)
-	}
-}
-
 // ── ToolState implementation ────────────────────────────────────────────
 
 func (r *toolStateRAM) ListTodos(naviID string, status TodoStatus, limit int) ([]Todo, error) {
@@ -319,10 +208,9 @@ func (r *toolStateRAM) ReplaceTodos(naviID string, items []Todo) ([]Todo, error)
 
 	st.mu.Lock()
 	st.todos = next
-	st.todosDirty = true
 	st.mu.Unlock()
 
-	r.syncFlush(naviID)
+	r.stage(naviID, st)
 	return cloneTodos(next), nil
 }
 
@@ -363,10 +251,9 @@ func (r *toolStateRAM) UpdateTodos(naviID string, updates []TodoUpdate) ([]Todo,
 		next[idx].UpdatedAt = time.Now().UTC()
 	}
 	st.todos = next
-	st.todosDirty = true
 	st.mu.Unlock()
 
-	r.syncFlush(naviID)
+	r.stage(naviID, st)
 	out := cloneTodos(next)
 	sortTodos(out)
 	return out, nil
@@ -412,7 +299,7 @@ func (r *toolStateRAM) UpsertNote(naviID string, n Note) (Note, error) {
 	}
 	st.mu.Unlock()
 
-	r.syncFlush(naviID)
+	r.stage(naviID, st)
 	return n, nil
 }
 
@@ -431,7 +318,7 @@ func (r *toolStateRAM) RemoveNote(naviID, id string) error {
 	st.notes = append(st.notes[:idx], st.notes[idx+1:]...)
 	st.mu.Unlock()
 
-	r.syncFlush(naviID)
+	r.stage(naviID, st)
 	return nil
 }
 
@@ -537,21 +424,6 @@ func equalTags(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-// notesDifferLocked reports whether the navi's notes differ from what the
-// sink last received. Caller holds st.mu.
-func notesDifferLocked(st *ramNavi) bool {
-	current := indexNotes(st.notes)
-	if len(current) != len(st.persistedNotes) {
-		return true
-	}
-	for id, n := range current {
-		if prev, ok := st.persistedNotes[id]; !ok || !notesEqual(prev, n) {
-			return true
-		}
-	}
-	return false
 }
 
 func cloneTodos(in []Todo) []Todo {

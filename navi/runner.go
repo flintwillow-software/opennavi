@@ -312,8 +312,11 @@ func decodeCheckpoint(blob []byte) ([]agent.AgentMessage, error) {
 // persistConversation records the agent conversation as the thought's
 // transcript. A thought is the persistence aggregate (ADR 0011 decision
 // 8): its transcript is keyed by thought id and written through the
-// thought/transcript view, never through a session handle. A navi that
-// declares no datastore keeps no history, so this is a no-op.
+// thought/transcript view, never through a session handle. The write is
+// asynchronous (NAVI-374): it is staged on the datastore's ordered writer,
+// so a slow backend cannot block the run, and a hard kill may lose the
+// unflushed tail. A navi that declares no datastore keeps no history, so
+// this is a no-op.
 func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage) error {
 	if n.transcripts == nil {
 		return nil
@@ -338,7 +341,8 @@ func (n *Navi) persistConversation(t *thought.Thought, msgs []agent.AgentMessage
 		}
 		entries = append(entries, e)
 	}
-	return n.transcripts.SaveTranscript(t.ID, entries)
+	n.Datastores.Handle().SubmitTranscript(t.ID, entries)
+	return nil
 }
 
 // ── execution pool ──────────────────────────────────────────────────────
@@ -402,10 +406,11 @@ func (n *Navi) runOne(ctx context.Context, t *thought.Thought) {
 	}
 
 	// Cancellation is shutdown, not failure: park the thought so it
-	// resumes rather than being marked failed. This is the
-	// park-not-kill promise the queue already keeps for the runtime.
+	// resumes rather than being marked failed, carrying the checkpoint the
+	// runner snapshotted so resume continues rather than restarts. This is
+	// the park-not-kill promise the queue already keeps for the runtime.
 	if ctx.Err() != nil {
-		if perr := n.Thoughts.Pause(t.ID); perr != nil {
+		if perr := n.Thoughts.PauseWithCheckpoint(t.ID, t.Checkpoint); perr != nil {
 			n.log.Error("park interrupted thought", "thought", t.ID, "err", perr)
 		}
 		return

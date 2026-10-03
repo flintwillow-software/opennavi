@@ -114,13 +114,27 @@ func (f *fakeSink) readCount() int {
 	return f.reads
 }
 
-func TestToolStateRAMHydratesOnceAndReadsStayInRAM(t *testing.T) {
+// fakeBackend is a Backend whose only real aggregate is tool state, so the
+// handle's RAM-first wrapping can be tested without a full backend.
+type fakeBackend struct{ sink *fakeSink }
+
+func (b fakeBackend) Thoughts() Thoughts   { return nil }
+func (b fakeBackend) ToolState() ToolState { return b.sink }
+func (b fakeBackend) Memory() Memory       { return nil }
+
+func testHandle(sink *fakeSink, cfg WriterConfig) *Datastore {
+	h := NewDatastore()
+	h.SetWriterConfig(cfg)
+	h.Bind(fakeBackend{sink: sink})
+	return h
+}
+
+func TestToolStateRAMReadsStayInRAM(t *testing.T) {
 	sink := newFakeSink()
 	sink.todos["navi-a"] = []Todo{{ID: "t1", NaviID: "navi-a", Text: "seeded", Status: TodoPending}}
+	h := testHandle(sink, WriterConfig{Interval: -1})
 
-	ram := newToolStateRAM(sink, ToolStateConfig{})
-
-	got, err := ram.ListTodos("navi-a", "", 0)
+	got, err := h.Stateful().ListTodos("navi-a", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +149,7 @@ func TestToolStateRAMHydratesOnceAndReadsStayInRAM(t *testing.T) {
 	// Mutate the sink behind the layer: RAM is authoritative, so the read
 	// does not change and no further backend read happens.
 	sink.todos["navi-a"] = append(sink.todos["navi-a"], Todo{ID: "t2", NaviID: "navi-a", Text: "behind"})
-	again, err := ram.ListTodos("navi-a", "", 0)
+	again, err := h.Stateful().ListTodos("navi-a", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,22 +163,21 @@ func TestToolStateRAMHydratesOnceAndReadsStayInRAM(t *testing.T) {
 
 func TestToolStateRAMDefersWritesUntilFlush(t *testing.T) {
 	sink := newFakeSink()
-	ram := newToolStateRAM(sink, ToolStateConfig{})
+	h := testHandle(sink, WriterConfig{})
 
-	stored, err := ram.ReplaceTodos("navi-a", []Todo{{Text: "one", Priority: 1}})
+	stored, err := h.Stateful().ReplaceTodos("navi-a", []Todo{{Text: "one", Priority: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ram.UpsertNote("navi-a", Note{Title: "n", Body: "b"}); err != nil {
+	if _, err := h.Stateful().UpsertNote("navi-a", Note{Title: "n", Body: "b"}); err != nil {
 		t.Fatal(err)
 	}
 	if sink.writeCount() != 0 {
 		t.Fatalf("mutations must not write through, writes = %d", sink.writeCount())
 	}
 
-	ram.flush()
-	if sink.writeCount() == 0 {
-		t.Fatal("flush must persist the pending state")
+	if err := h.FlushWrites(); err != nil {
+		t.Fatal(err)
 	}
 	if got := sink.todos["navi-a"]; len(got) != 1 || got[0].ID != stored[0].ID {
 		t.Fatalf("flushed todos = %+v, want the RAM list", got)
@@ -175,7 +188,9 @@ func TestToolStateRAMDefersWritesUntilFlush(t *testing.T) {
 
 	// A second flush with no changes writes nothing more.
 	before := sink.writeCount()
-	ram.flush()
+	if err := h.FlushWrites(); err != nil {
+		t.Fatal(err)
+	}
 	if sink.writeCount() != before {
 		t.Fatalf("a clean flush must be a no-op: writes %d -> %d", before, sink.writeCount())
 	}
@@ -183,9 +198,9 @@ func TestToolStateRAMDefersWritesUntilFlush(t *testing.T) {
 
 func TestToolStateRAMSynchronousMode(t *testing.T) {
 	sink := newFakeSink()
-	ram := newToolStateRAM(sink, ToolStateConfig{FlushInterval: -1})
+	h := testHandle(sink, WriterConfig{Interval: -1})
 
-	if _, err := ram.ReplaceTodos("navi-a", []Todo{{Text: "immediate"}}); err != nil {
+	if _, err := h.Stateful().ReplaceTodos("navi-a", []Todo{{Text: "immediate"}}); err != nil {
 		t.Fatal(err)
 	}
 	if sink.writeCount() == 0 {
@@ -196,23 +211,27 @@ func TestToolStateRAMSynchronousMode(t *testing.T) {
 	}
 }
 
-func TestToolStateRAMFailureRemarksDirtyAndRetries(t *testing.T) {
+func TestToolStateRAMFailureSurfacesAndRetries(t *testing.T) {
 	sink := newFakeSink()
 	sink.failReplace = errors.New("disk on fire")
 	var seen []error
-	ram := newToolStateRAM(sink, ToolStateConfig{OnError: func(err error) { seen = append(seen, err) }})
+	h := testHandle(sink, WriterConfig{OnError: func(_ Write, err error) { seen = append(seen, err) }})
 
-	if _, err := ram.ReplaceTodos("navi-a", []Todo{{Text: "must survive"}}); err != nil {
+	if _, err := h.Stateful().ReplaceTodos("navi-a", []Todo{{Text: "must survive"}}); err != nil {
 		t.Fatal(err)
 	}
-	ram.flush()
+	if err := h.FlushWrites(); err == nil {
+		t.Fatal("a failed flush must return the error")
+	}
 	if len(seen) != 1 {
 		t.Fatalf("flush failure must reach OnError, got %v", seen)
 	}
 
-	// The navi stays dirty; a later successful flush persists it.
+	// The failed write is re-queued; a later successful flush persists it.
 	sink.failReplace = nil
-	ram.flush()
+	if err := h.FlushWrites(); err != nil {
+		t.Fatal(err)
+	}
 	if got := sink.todos["navi-a"]; len(got) != 1 || got[0].Text != "must survive" {
 		t.Fatalf("retry did not persist: %+v", got)
 	}
@@ -223,80 +242,50 @@ func TestToolStateRAMFailureRemarksDirtyAndRetries(t *testing.T) {
 
 func TestToolStateRAMFlushesNoteRemoval(t *testing.T) {
 	sink := newFakeSink()
-	ram := newToolStateRAM(sink, ToolStateConfig{})
+	h := testHandle(sink, WriterConfig{})
 
-	note, err := ram.UpsertNote("navi-a", Note{Title: "temp", Body: "x"})
+	note, err := h.Stateful().UpsertNote("navi-a", Note{Title: "temp", Body: "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ram.flush()
+	if err := h.FlushWrites(); err != nil {
+		t.Fatal(err)
+	}
 	if len(sink.notes["navi-a"]) != 1 {
 		t.Fatalf("note not flushed: %+v", sink.notes["navi-a"])
 	}
 
-	if err := ram.RemoveNote("navi-a", note.ID); err != nil {
+	if err := h.Stateful().RemoveNote("navi-a", note.ID); err != nil {
 		t.Fatal(err)
 	}
-	ram.flush()
+	if err := h.FlushWrites(); err != nil {
+		t.Fatal(err)
+	}
 	if len(sink.notes["navi-a"]) != 0 {
 		t.Fatalf("removal not flushed: %+v", sink.notes["navi-a"])
 	}
 }
 
-// fakeBackend is a Backend whose only real aggregate is tool state, so the
-// handle's RAM-first wrapping can be tested end to end.
-type fakeBackend struct{ sink *fakeSink }
-
-func (b fakeBackend) Thoughts() Thoughts   { return nil }
-func (b fakeBackend) ToolState() ToolState { return b.sink }
-func (b fakeBackend) Memory() Memory       { return nil }
-
-func TestHandleServesRAMFirstToolState(t *testing.T) {
-	sink := newFakeSink()
+func TestHandleWriterIsNoopBeforeBind(t *testing.T) {
 	h := NewDatastore()
-	h.Bind(fakeBackend{sink: sink})
-
-	stored, err := h.Stateful().ReplaceTodos("navi-a", []Todo{{Text: "ram first"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stored) != 1 || stored[0].ID == "" {
-		t.Fatalf("ReplaceTodos = %+v", stored)
-	}
-	if sink.writeCount() != 0 {
-		t.Fatalf("the handle's tool-state view must not write through, writes = %d", sink.writeCount())
-	}
-
-	h.FlushToolState()
-	if got := sink.todos["navi-a"]; len(got) != 1 {
-		t.Fatalf("FlushToolState did not persist: %+v", got)
-	}
-
-	// The flusher is startable and stoppable; stopping drains once more.
-	stop := h.StartToolStateFlusher()
-	if _, err := h.Stateful().UpsertNote("navi-a", Note{Title: "flushed by ticker"}); err != nil {
-		t.Fatal(err)
-	}
-	stop()
-	if len(sink.notes["navi-a"]) != 1 {
-		t.Fatalf("stop must drain pending writes: %+v", sink.notes["navi-a"])
-	}
-}
-
-func TestHandleFlusherIsNoopBeforeBind(t *testing.T) {
-	h := NewDatastore()
-	stop := h.StartToolStateFlusher()
+	stop := h.StartWriter()
 	stop() // must not panic
-	h.FlushToolState()
+	if err := h.FlushWrites(); err != nil {
+		t.Fatalf("FlushWrites before Bind = %v", err)
+	}
+	h.Submit(Write{Key: "x", Apply: func(Backend) error { return nil }}) // must not panic
+	if err := h.SubmitSync(Write{Key: "y"}); !errors.Is(err, ErrUnbound) {
+		t.Fatalf("SubmitSync before Bind = %v, want ErrUnbound", err)
+	}
 }
 
-func TestToolStateRAMFlusherTicks(t *testing.T) {
+func TestHandleWriterTicks(t *testing.T) {
 	sink := newFakeSink()
-	ram := newToolStateRAM(sink, ToolStateConfig{FlushInterval: 5 * time.Millisecond})
-	stop := ram.startFlusher()
+	h := testHandle(sink, WriterConfig{Interval: 5 * time.Millisecond})
+	stop := h.StartWriter()
 	defer stop()
 
-	if _, err := ram.ReplaceTodos("navi-a", []Todo{{Text: "tick"}}); err != nil {
+	if _, err := h.Stateful().ReplaceTodos("navi-a", []Todo{{Text: "tick"}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -304,6 +293,6 @@ func TestToolStateRAMFlusherTicks(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	if sink.writeCount() == 0 {
-		t.Fatal("the flusher never ticked")
+		t.Fatal("the writer never ticked")
 	}
 }

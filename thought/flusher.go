@@ -139,7 +139,7 @@ func (q *Queue) flushOnce() {
 
 	var failed []*Thought
 	for _, t := range batch {
-		if err := q.save(t); err != nil {
+		if err := q.enqueue(t); err != nil {
 			// Re-mark for the next tick (in-memory, no lock needed —
 			// markDirty takes it) and surface the failure.
 			failed = append(failed, t)
@@ -161,6 +161,17 @@ func (q *Queue) flushOnce() {
 		}
 		q.emit(evts)
 	}
+}
+
+// enqueue is the flusher's write path. It prefers the store's
+// non-blocking EnqueueThought capability — a store backed by the
+// datastore's ordered writer implements it — and falls back to the
+// synchronous SaveThought for stores that do not.
+func (q *Queue) enqueue(t *Thought) error {
+	if s, ok := q.store.(interface{ EnqueueThought(*Thought) error }); ok {
+		return s.EnqueueThought(t)
+	}
+	return q.save(t)
 }
 
 // syncSave is the durability-critical write path: persist THIS thought

@@ -36,11 +36,11 @@ func newDatastoreCollection() *DatastoreCollection {
 // aggregate from it — typically at declaration, before Run.
 func (d *DatastoreCollection) Handle() *datastore.Datastore { return d.handle }
 
-// StartToolStateFlusher starts the RAM-first tool-state flusher (a no-op
-// when no backend is bound). The runtime calls it at serve and the stop
-// function at shutdown.
-func (d *DatastoreCollection) StartToolStateFlusher() func() {
-	return d.handle.StartToolStateFlusher()
+// StartWriter launches the datastore's ordered writer (a no-op when no
+// backend is bound). The runtime calls it at serve and the stop function at
+// shutdown, which drains once more.
+func (d *DatastoreCollection) StartWriter() func() {
+	return d.handle.StartWriter()
 }
 
 // activate resolves the compiled candidates against runtime config, opens

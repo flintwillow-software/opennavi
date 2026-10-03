@@ -127,9 +127,9 @@ type Navi struct {
 // collection is populated, so they configure defaults rather than items.
 type Option func(*Navi)
 
-// WithThoughtStore sets the durable thought store the queue persists to.
-// Defaults to an in-memory store, which means thoughts do not survive the
-// process.
+// WithThoughtStore overrides where the queue persists thoughts. The
+// default adapts the datastore's ordered writer (NAVI-374), so thoughts
+// persist through the active backend; an explicit store bypasses that.
 func WithThoughtStore(s thought.Store) Option {
 	return func(n *Navi) {
 		if s != nil {
@@ -226,14 +226,18 @@ func New(name string, opts ...Option) *Navi {
 		}
 	}
 
-	// The thought system is constructed here, not added. Background
-	// loops (dirty-set flusher, store reconcile) stay off until a
-	// durable store is wired — with the in-memory store they would
-	// guard nothing.
+	// The thought system is constructed here, not added.
+	//
+	// FlushInterval defaults to the async dirty-set flusher (0 → 250ms):
+	// the default store is the datastore's ordered writer, so mutations
+	// must not write through synchronously under q.mu — a slow backend
+	// would then block a lifecycle transition. Reconcile stays off unless
+	// configured (the reference navi enables it), because a navi with no
+	// external writers needs no adoption loop.
 	cfg := thought.Config{
 		MaxConcurrent:     2,
 		ReconcileInterval: -1,
-		FlushInterval:     -1,
+		FlushInterval:     0,
 		SlotExhaustion:    thought.PolicyQueue,
 	}
 	if n.queueConfig != nil {
@@ -241,7 +245,10 @@ func New(name string, opts ...Option) *Navi {
 	}
 	queueStore := n.thoughtStore
 	if queueStore == nil {
-		queueStore = thought.NewMemoryStore()
+		// Default: persist through the datastore's ordered writer (NAVI-374).
+		// Before assembly binds a backend the adapter keeps thoughts in
+		// memory; assembly re-runs recovery once the datastore resolves.
+		queueStore = newDatastoreThoughtStore(n.Datastores.handle)
 	}
 	q, err := thought.NewQueue(cfg, queueStore)
 	if err != nil {
@@ -539,9 +546,9 @@ func (n *Navi) serve(ctx context.Context) error {
 	// durable navi sets intervals and needs them to persist at all.
 	stopReconcile := n.Thoughts.StartReconcile()
 	stopFlusher := n.Thoughts.StartFlusher()
-	// The datastore's RAM-first tool-state flusher (no-op when no
-	// datastore is bound or it is in synchronous mode).
-	stopToolState := n.Datastores.StartToolStateFlusher()
+	// The datastore's ordered writer (no-op when no datastore is bound or
+	// it is in synchronous mode).
+	stopWriter := n.Datastores.StartWriter()
 
 	workers := n.startWorkers(ctx)
 
@@ -557,7 +564,7 @@ func (n *Navi) serve(ctx context.Context) error {
 	// run left dirty (the park checkpoints are already synchronous).
 	stopReconcile()
 	stopFlusher()
-	stopToolState()
+	stopWriter()
 	return nil
 }
 

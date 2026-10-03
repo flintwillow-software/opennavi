@@ -75,10 +75,6 @@ func serveReferenceNavi(p runParams) error {
 		return err
 	}
 	defer store.Close()
-	thoughtStore, err := sqlite.NewThoughtStore(store.DB())
-	if err != nil {
-		return err
-	}
 
 	naviID := p.naviID
 	if naviID == "" {
@@ -93,7 +89,6 @@ func serveReferenceNavi(p runParams) error {
 			DenyTools:  rc.Tools.Blocked,
 		}),
 		navi.WithWorkers(p.workers),
-		navi.WithThoughtStore(thoughtStore),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithCompactBudget(p.compactBudget),
 	)
