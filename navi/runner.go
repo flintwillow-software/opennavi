@@ -180,20 +180,30 @@ func (n *Navi) resolveForMode(t *thought.Thought) (llm.Provider, string, error) 
 }
 
 // systemPromptFor assembles the system prompt: the navi's personality
-// seed, plus the thought mode's fragment when the mode declares one.
+// seed, the thought mode's fragment when the mode declares one, and the
+// always-loaded short-term memory block when the navi keeps memory. Every
+// thought is a fresh agent run, so this is where per-thought injection
+// happens without a tool call.
 func (n *Navi) systemPromptFor(t *thought.Thought) string {
 	prompt := n.personality
-	if t.Mode == "" {
-		return prompt
+	if t.Mode != "" {
+		if m, ok := n.Modes.Get(t.Mode); ok && m.Prompt != "" {
+			if prompt == "" {
+				prompt = m.Prompt
+			} else {
+				prompt += "\n\n" + m.Prompt
+			}
+		}
 	}
-	m, ok := n.Modes.Get(t.Mode)
-	if !ok || m.Prompt == "" {
-		return prompt
+	if n.shortMemory != nil {
+		if block := n.shortMemory.Inject(); block != "" {
+			if prompt == "" {
+				return block
+			}
+			return prompt + "\n\n" + block
+		}
 	}
-	if prompt == "" {
-		return m.Prompt
-	}
-	return prompt + "\n\n" + m.Prompt
+	return prompt
 }
 
 // userPrompt builds the user turn for a thought: its prompt plus the

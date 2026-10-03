@@ -8,6 +8,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/config"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/thought"
@@ -135,6 +136,20 @@ func (n *Navi) assemble() error {
 		}
 	}
 
+	// Resolve the datastore candidate set and bind the stable handle.
+	// This is assembly-time binding validation (ADR 0011 decision 4):
+	// registration checked the shape, this checks that a handle with a
+	// consumer actually resolves.
+	if err := n.assembleDatastore(file); err != nil {
+		return err
+	}
+
+	// Short-term memory (when declared) needs the bound datastore, and adds
+	// its write tool to the catalog before the registry is built.
+	if err := n.assembleMemory(); err != nil {
+		return err
+	}
+
 	// Build the runtime tool registry from the declared collection and set
 	// the compiled default active set under the permission ceiling.
 	reg, err := n.buildRegistry()
@@ -142,12 +157,41 @@ func (n *Navi) assemble() error {
 		return err
 	}
 	n.registry = reg
+	return nil
+}
 
-	// Resolve the datastore candidate set and bind the stable handle.
-	// This is assembly-time binding validation (ADR 0011 decision 4):
-	// registration checked the shape, this checks that a handle with a
-	// consumer actually resolves.
-	return n.assembleDatastore(file)
+// assembleMemory builds the short-term memory service when the navi declares
+// it (WithShortTermMemory). Memory requires a datastore (ADR 0011 decision
+// 9): declaring it with no bound candidate fails here with a clear error
+// rather than silently dropping what the navi believed it was keeping.
+func (n *Navi) assembleMemory() error {
+	if !n.shortTermMemory {
+		return nil
+	}
+	if !n.Datastores.handle.Bound() {
+		return fmt.Errorf("%w: short-term memory requires a datastore, but no candidate is bound", ErrInvalid)
+	}
+
+	svc, err := memory.New(memory.Config{
+		Memory:  n.Datastores.handle.Memory(),
+		Submit:  n.Datastores.handle.Submit,
+		Subject: n.name,
+	})
+	if err != nil {
+		return fmt.Errorf("navi: short-term memory: %w", err)
+	}
+	n.shortMemory = svc
+
+	tools, err := memory.Tools(svc)
+	if err != nil {
+		return fmt.Errorf("navi: short-term memory tools: %w", err)
+	}
+	for _, t := range tools {
+		if err := n.Tools.Add(t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // assembleDatastore selects the active backend from the compiled candidates
