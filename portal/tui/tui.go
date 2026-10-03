@@ -372,9 +372,16 @@ type feedMsg struct {
 	lost bool
 }
 
-// tickMsg refreshes the home view (ages, activity line) when a thought
-// is running even with zero new events (NAVI-335 ticking clocks).
-type tickMsg struct{}
+// unseen drops the events at or before the consumer cursor. Mailbox
+// sequences are assigned in delivery order, so already-applied events
+// form a prefix — the filter is allocation-free.
+func unseen(evs []portal.Event, cursor int) []portal.Event {
+	start := 0
+	for start < len(evs) && evs[start].Seq < cursor {
+		start++
+	}
+	return evs[start:]
+}
 
 // tuiModel is the Bubble Tea model: pure state + Init/Update/View, so
 // all of it is unit-testable without a terminal (the tea program is
@@ -383,11 +390,17 @@ type tuiModel struct {
 	transport Transport
 	feed      portal.Subscription
 	cursor    int
-	rows      []row
-	byID      map[string]int
-	sel       int
-	mode      ModeKind
-	liveID    string
+	// polling is true while a feed-drain command is in flight. Every
+	// Update path re-arms the drain, so without the guard a key press
+	// during an in-flight poll stacks a second timer; two timers read
+	// overlapping ranges from the non-destructive mailbox and each applies
+	// them, which rendered every event once per timer (NAVI-380 follow-up).
+	polling bool
+	rows    []row
+	byID    map[string]int
+	sel     int
+	mode    ModeKind
+	liveID  string
 	// turns is the reconstructed chat for the live view (NAVI-330):
 	// prompt as the opening user turn, assistant deltas accumulated,
 	// tool blocks, lifecycle system lines, steers as user turns.
@@ -428,27 +441,29 @@ func NewModel(tr Transport) *tuiModel {
 	}
 }
 
-// poll returns the re-arming feed-drain command: a non-blocking
-// mailbox read, so the tea event loop never blocks on the portal (a
-// slow UI just drains fewer events per tick) —, the
-// "within one event delivery" guarantee holds per mailbox push.
+// poll arms the feed-drain command: one non-blocking mailbox read a
+// cadence, so the tea event loop never blocks on the portal (a slow UI
+// just drains fewer events per tick). AT MOST ONE DRAIN IS IN FLIGHT:
+// the guard makes the re-arm idempotent, and Update's cursor filter
+// keeps a duplicate delivery harmless if one ever slips through
+// (NAVI-380 follow-up — the read is non-destructive, so re-reading an
+// applied range re-appends it).
+//
+// The wrapper message is always non-nil (even for an empty read): the
+// idle decision — stop draining until the next user input — belongs to
+// Update, because a command runs on a Bubble Tea goroutine and must
+// never touch the model (NAVI-380).
 func (m *tuiModel) poll() tea.Cmd {
-	// Capture the mutable state HERE, on the Update goroutine: the returned
-	// command runs on a Bubble Tea goroutine and must not read or write the
-	// model. A cursor advanced there could lose the write, and every poll
-	// would then re-read already-applied events (NAVI-380).
+	if m.polling {
+		return nil // a drain is already armed; re-arming would stack a timer
+	}
+	m.polling = true
+	// Capture the cursor HERE, on the Update goroutine: the returned
+	// command runs on a Bubble Tea goroutine and must not read or write
+	// the model (NAVI-380).
 	cursor := m.cursor
-	running := m.anyRunning()
-	return tea.Every(150*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Every(150*time.Millisecond, func(time.Time) tea.Msg {
 		evs, next, lost := m.feed.ReadAfter(cursor)
-		if len(evs) == 0 && !lost {
-			// Idle: repaint only while a thought runs (ticking clocks,
-			// live preview); a quiet home re-renders nothing (NAVI-335).
-			if running {
-				return tickMsg{}
-			}
-			return nil
-		}
 		return feedMsg{evs: evs, next: next, lost: lost}
 	})
 }
@@ -482,13 +497,25 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.poll()
 	case feedMsg:
-		// The cursor advances on the Update goroutine, with the batch it
-		// describes (NAVI-380).
-		m.cursor = msg.next
+		// The drain delivered: clear the guard, apply the batch, and
+		// re-arm — unless the mailbox was genuinely empty and nothing is
+		// running (the idle-free tick of NAVI-335).
+		m.polling = false
+		raw := msg.evs
+		// Apply only events past the consumer cursor, and never move the
+		// cursor backwards: a duplicate delivery of an applied range must
+		// not re-append its turns (NAVI-380 follow-up).
+		msg.evs = unseen(msg.evs, m.cursor)
+		if len(raw) > 0 && len(msg.evs) == 0 {
+			msg.lost = false // a fully-applied duplicate reports no gap
+		}
+		if msg.next > m.cursor {
+			m.cursor = msg.next
+		}
 		m.applyFeed(msg)
-		return m, m.poll()
-	case tickMsg:
-		// Zero new events but work is running: repaint (ages tick).
+		if len(raw) == 0 && !msg.lost && !m.anyRunning() {
+			return m, nil // idle: sleep until user input re-arms the drain
+		}
 		return m, m.poll()
 	}
 	return m, m.poll()

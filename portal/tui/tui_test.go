@@ -784,17 +784,34 @@ func TestHomeViewAgentPreview(t *testing.T) {
 	}
 }
 
-func TestTickingClockWhileRunning(t *testing.T) {
+// TestPollIsSingleFlightAndIdleFree pins the NAVI-380 follow-up: every
+// Update re-arms the drain, so the guard must make re-arming idempotent
+// (two in-flight timers read the same non-destructive mailbox range and
+// each apply it), while an idle read still stops the drain instead of
+// busy-looping — and a running thought keeps it alive so ages tick.
+func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
 	q := newQueue(t)
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
-	_ = m.Init()
+	_ = m.Init() // arms the drain
 
-	// Idle: the poll cmd yields no message (no busy-loop).
-	if msg := m.poll()(); msg != nil {
-		t.Error("idle poll produced a message")
+	// Armed: re-arming from a key press must be a no-op.
+	if cmd := m.poll(); cmd != nil {
+		t.Fatal("poll re-armed while a drain is already in flight")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}); cmd != nil {
+		t.Fatal("key press stacked a second drain")
 	}
 
+	// Idle with no events: the drain stops until the next user input.
+	if _, cmd := m.Update(feedMsg{}); cmd != nil {
+		t.Error("idle drain re-armed — busy loop")
+	}
+	if m.polling {
+		t.Error("idle drain left the poll armed")
+	}
+
+	// Running: an eventless read keeps the drain alive (ticking clocks).
 	if err := q.Enqueue(th("run2", 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -805,13 +822,63 @@ func TestTickingClockWhileRunning(t *testing.T) {
 	if !m.anyRunning() {
 		t.Fatal("no running row after claim")
 	}
-	// Running: the poll cmd yields a tick even with zero events.
-	msg := m.poll()()
-	if msg == nil {
-		t.Fatal("poll produced nothing while running")
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Fatal("drain stopped while a thought runs")
 	}
-	if _, ok := msg.(tickMsg); !ok {
-		t.Error("expected a tick message while running")
+}
+
+// TestDuplicateBatchDoesNotReplayTurns is the observed NAVI-380 follow-up
+// bug: the mailbox read is non-destructive (a bounded replay ring), so
+// two drains that captured the same cursor applied the same batch twice —
+// the chat showed ALPHA, then the run's system lines, then ALPHA again,
+// once per in-flight timer. A duplicate delivery must not re-append.
+func TestDuplicateBatchDoesNotReplayTurns(t *testing.T) {
+	q := newQueue(t)
+	tport, broker := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+	m.enterLive("t1")
+
+	// One realistic batch: the assistant's content delta followed by the
+	// run's end marker (the shape the screenshot showed repeated).
+	broker.Publish(portal.Event{Category: portal.CategoryAgent, Kind: "content_delta", ThoughtID: "t1", Detail: "ALPHA"})
+	broker.Publish(portal.Event{Category: portal.CategoryAgent, Kind: "message_end", ThoughtID: "t1"})
+
+	evs, next, lost := m.feed.ReadAfter(m.cursor)
+	if len(evs) != 2 {
+		t.Fatalf("feed batch = %d events, want 2", len(evs))
+	}
+	// First delivery applies the delta and the end marker.
+	_, _ = m.Update(feedMsg{evs: evs, next: next, lost: lost})
+	// A second drain that captured the same cursor (the stacked-timer bug)
+	// delivers the identical range; it must be ignored, not re-applied.
+	_, _ = m.Update(feedMsg{evs: evs, next: next, lost: lost})
+
+	assistant, ends := 0, 0
+	for _, turn := range m.transcripts["t1"] {
+		switch {
+		case turn.role == TurnAssistant && turn.text == "ALPHA":
+			assistant++
+		case turn.role == TurnSystem && turn.text == "message_end":
+			ends++
+		}
+	}
+	if assistant != 1 || ends != 1 {
+		t.Fatalf("assistant turns = %d, end markers = %d, want 1 and 1 (batch replayed)", assistant, ends)
+	}
+	if got := strings.Count(m.View(), "ALPHA"); got != 1 {
+		t.Fatalf("ALPHA rendered %d times, want 1", got)
+	}
+	if m.cursor != next {
+		t.Fatalf("cursor = %d, want %d (a duplicate must not move it)", m.cursor, next)
 	}
 }
 
