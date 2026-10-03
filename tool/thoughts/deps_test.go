@@ -135,3 +135,46 @@ func TestThoughtsCreateAcceptsMultipleDependencies(t *testing.T) {
 		t.Fatalf("join depends_on = %v, want %v", got.DependsOn, ids)
 	}
 }
+
+// TestThoughtsCreateTagsAVerification pins the closing-check convention of
+// ADR 0016 at the tool surface: the model can express "this is the check"
+// and the record shows it.
+func TestThoughtsCreateTagsAVerification(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+
+	firstOut, err := dispatch(t, reg, "thoughts_create", `{"prompt":"stage one"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(firstOut), &first); err != nil {
+		t.Fatal(err)
+	}
+	firstID := first["id"].(string)
+
+	out, err := dispatch(t, reg, "thoughts_create",
+		fmt.Sprintf(`{"prompt":"check the plan","depends_on":[%q],"metadata":{"role":"verification"}}`, firstID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created map[string]any
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := q.GetThought(created["id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsVerification() {
+		t.Fatalf("created thought is not tagged as a verification: %v", got.Metadata)
+	}
+	if len(got.DependsOn) != 1 || got.DependsOn[0] != firstID {
+		t.Fatalf("verification depends_on = %v, want [%s]", got.DependsOn, firstID)
+	}
+	meta, ok := created["metadata"].(map[string]any)
+	if !ok || meta["role"] != "verification" {
+		t.Fatalf("record metadata = %v, want role verification", created["metadata"])
+	}
+}

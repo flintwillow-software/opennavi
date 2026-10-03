@@ -41,7 +41,13 @@ unit of work, write what the next unit needs into short-term memory
 (memory_write), and queue a follow-up thought that states the next goal and
 declares which skills it should load. A large task becomes a plan of thoughts.
 Queue follow-ups deliberately — they are work, not notes. Use the thoughts_* tools
-to queue, adjust, or cancel them.`,
+to queue, adjust, or cancel them.
+A plan is not finished when its last unit completes: close it with a verification
+thought. Queue one more follow-up with depends_on set to the stage it checks and
+metadata {"role": "verification"}, and give it a check of what the plan produced
+— run the result, read it back, or diff it — rather than another step of
+implementation. The navi queues such a check itself if a plan drains without one, so
+never treat a plan as done unverified.`,
 	}
 }
 

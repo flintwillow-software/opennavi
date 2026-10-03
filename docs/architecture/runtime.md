@@ -154,6 +154,33 @@ The model expresses the relation through its own deferral surface:
 `thoughts_create` takes `depends_on`, and each call returns the id the next
 stage names — "this continues `t1`".
 
+## Closing a plan
+
+A plan of thoughts is not finished when its last stage completes
+([ADR 0016](../adr/0016-a-plan-closes-with-a-verification-thought.md)): it closes
+with a **verification thought** that checks what the plan produced rather than
+extending it. The gap was found in the first end-to-end multi-thought run, where
+the model noticed an inaccuracy at the end of a stage and moved on.
+
+- **Guidance owns the check's content.** `core_thoughts` tells the model to end a
+  multi-stage plan with a verification thought — `depends_on` the stage it checks,
+  metadata `role: verification` — and says what a check is: run the result, read
+  it back, diff it. What "verified" means is task-specific, so only the model that
+  did the work can write it.
+- **The runtime owns the guarantee.** When a plan drains with no check behind it,
+  the navi queues one (`WithPlanCloseCheck`, on by default; false turns the
+  backstop off and leaves the guidance). The rule is mechanical: the plan is the
+  dependency-connected component of the completed thought, every member must be
+  `complete`, a plan containing a verification is left alone (a check never spawns
+  another), and the synthesized check depends on the plan's **sinks** — released
+  only once the whole plan drained, parallel branches included. Its id derives from
+  those sinks, so a replayed event or a restart cannot queue a duplicate.
+- **A check is identifiable.** `role: verification` on the thought record and a
+  `V` flag in the portal row, so a plan's closing check reads as a check rather
+  than as more work.
+- **A failed plan is not closed.** A stage that fails fails its dependents
+  (ADR 0015), and there is nothing verified to report.
+
 ## Context assembly
 
 The thought queue **is** the context mechanism ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)). Context pressure is resolved by bounding thoughts and deferring work into follow-up thoughts, not by compacting a long conversation: a thought that approaches its budget finishes a coherent unit, writes what the next one needs into short-term memory, and queues follow-ups that declare which skills to load. A task too large for one thought becomes a plan of thoughts.

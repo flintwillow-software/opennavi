@@ -55,8 +55,10 @@ func (r *stagedRunner) started() []string {
 // whose later stages depend on earlier ones cannot start early, even with
 // two workers free to claim them.
 func TestStagedPlanRunsInOrderWithTwoWorkers(t *testing.T) {
+	// The closing check is off here: this test pins ordering alone (the
+	// verification the navi appends to a drained plan has its own tests).
 	r := newStagedRunner()
-	n := New("staged-plan", WithRunner(r), WithWorkers(2))
+	n := New("staged-plan", WithRunner(r), WithWorkers(2), WithPlanCloseCheck(false))
 
 	cancel, done := startServing(t, n)
 	defer stopServing(t, cancel, done)
@@ -106,7 +108,7 @@ func TestAgentExpressesDependencyThroughThoughtsCreate(t *testing.T) {
 		streamEvents("queued the next stage"),
 		streamEvents("continued"),
 	)
-	n := New("dep-plan", WithProvider(mock), WithWorkers(2))
+	n := New("dep-plan", WithProvider(mock), WithWorkers(2), WithPlanCloseCheck(false))
 	if err := n.Datastores.Add(memoryCandidate(backend)); err != nil {
 		t.Fatal(err)
 	}
