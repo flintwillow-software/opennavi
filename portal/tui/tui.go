@@ -350,17 +350,20 @@ const (
 
 // row is one queue row.
 type row struct {
-	thoughtID  string
-	status     string
-	blocked    bool     // pending with an unmet dependency (derived, not a lifecycle status)
-	deps       []string // ids this thought waits for (empty when unknown, e.g. remote convergence)
-	priority   int
-	prompt     string
-	at         time.Time // last activity time — the render computes the age (ticking clock)
-	model      string    // per-thought provider overrides/selected model (abbreviated)
-	checkpoint bool      // thought carries a checkpoint (parked/resumable)
-	session    string    // session-log pointer
-	activity   string    // live preview: latest tool call / delta snippet (NAVI-335)
+	thoughtID string
+	status    string
+	blocked   bool     // pending with an unmet dependency (derived, not a lifecycle status)
+	deps      []string // ids this thought waits for (empty when unknown, e.g. remote convergence)
+	// verification marks a plan's closing check (ADR 0016), so the plan's
+	// last stage is visible as a check rather than more work.
+	verification bool
+	priority     int
+	prompt       string
+	at           time.Time // last activity time — the render computes the age (ticking clock)
+	model        string    // per-thought provider overrides/selected model (abbreviated)
+	checkpoint   bool      // thought carries a checkpoint (parked/resumable)
+	session      string    // session-log pointer
+	activity     string    // live preview: latest tool call / delta snippet (NAVI-335)
 }
 
 // feedMsg delivers a drained mailbox batch to the model. next is the
@@ -529,6 +532,9 @@ func (m *tuiModel) rebuild(thoughts []*thought.Thought) {
 	m.byID = make(map[string]int)
 	for _, t := range thoughts {
 		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.SessionID, t.DependsOn, t.UpdatedAt)
+		if i, ok := m.byID[t.ID]; ok {
+			m.rows[i].verification = t.IsVerification()
+		}
 	}
 	m.refreshBlocked()
 }
@@ -1135,6 +1141,9 @@ func (m *tuiModel) renderList() string {
 		}
 		if r.session != "" {
 			flags += "S"
+		}
+		if r.verification {
+			flags += "V"
 		}
 		suffix := ""
 		if r.activity != "" {

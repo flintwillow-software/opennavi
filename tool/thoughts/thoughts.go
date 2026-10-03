@@ -161,6 +161,7 @@ func createDef() registry.ToolDefinition {
 		PromptGuidelines: []string{
 			"Priority is clamped to the conservative band for self-scheduled thoughts — urgent external work always wins.",
 			"A plan is a chain: create the first stage, then pass its returned id in depends_on when creating the next, so a later stage never runs before an earlier one has finished.",
+			"Close a plan with a verification thought: depends_on set to the stage it checks and metadata {\"role\": \"verification\"}, carrying a concrete check of the result rather than another implementation step.",
 			"Use skills to tell a follow-up which compiled-in skills to load; an unknown name fails the thought.",
 			"defer_until defers one-shot work; recurring schedules belong to the cron mechanism.",
 		},

@@ -126,6 +126,31 @@ type Thought struct {
 const OriginSelf = "self"
 const OriginTool = "tool"
 
+// Metadata keys and role values the thought system understands. They live
+// here so every layer spells them the same way; the metadata map itself
+// stays free-form (an author may carry anything).
+const (
+	// MetadataOrigin is the key whose OriginSelf/OriginTool value tags a
+	// thought as self-scheduled (the priority clamp).
+	MetadataOrigin = "origin"
+	// MetadataRole names what a thought is for, when that is not obvious
+	// from its prompt.
+	MetadataRole = "role"
+	// RoleVerification marks a plan's closing check (ADR 0016): a thought
+	// whose job is to verify what a plan produced rather than to extend
+	// it. The runtime never queues a verification of a verification, so the
+	// tag bounds the plan automatically.
+	RoleVerification = "verification"
+	// MetadataPlan carries the synthesized verification's plan id.
+	MetadataPlan = "plan"
+)
+
+// IsVerification reports whether the thought is a plan-closing check
+// (metadata role verification, ADR 0016).
+func (t *Thought) IsVerification() bool {
+	return t != nil && t.Metadata[MetadataRole] == RoleVerification
+}
+
 // SelfScheduledHighBound is the default priority floor for self-scheduled
 // thoughts ("priority clamp"): any priority above it
 // (numerically lower) is clamped down, so self-directed work can never

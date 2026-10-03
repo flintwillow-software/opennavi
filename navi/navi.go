@@ -131,6 +131,10 @@ type Navi struct {
 	runner   Runner
 	workers  int
 	dispatch *dispatch
+	// planClose is the closing-check listener (ADR 0016), started with the
+	// workers. Nil when WithPlanCloseCheck(false) turned it off.
+	planClose      *planClose
+	planCloseCheck bool
 
 	mu      sync.Mutex
 	serving bool
@@ -165,6 +169,15 @@ func WithQueueConfig(cfg thought.Config) Option {
 // pattern mirrors thought.Config's FlushInterval.
 func WithDatastoreFlushInterval(d time.Duration) Option {
 	return func(n *Navi) { n.datastoreFlushInterval = d }
+}
+
+// WithPlanCloseCheck controls the runtime's closing check (ADR 0016):
+// when a multi-stage plan drains with no verification thought behind it,
+// the navi queues one that depends on the plan's last stage. It defaults
+// on; pass false for a navi that must not spend thoughts on checks (the
+// guidance in core_thoughts then carries the closing step alone).
+func WithPlanCloseCheck(enabled bool) Option {
+	return func(n *Navi) { n.planCloseCheck = enabled }
 }
 
 // WithShortTermMemory declares that the navi keeps short-term memory: the
@@ -247,6 +260,9 @@ func New(name string, opts ...Option) *Navi {
 		// The assembled-context budget defaults on; WithThoughtBudget
 		// overrides or disables it.
 		thoughtBudget: DefaultThoughtBudget,
+		// A plan closes with a verification thought unless the author turns
+		// it off (ADR 0016; WithPlanCloseCheck).
+		planCloseCheck: true,
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -312,6 +328,17 @@ func New(name string, opts ...Option) *Navi {
 	if n.Thoughts != nil {
 		n.Thoughts.OnEvent(func(ev thought.Event) {
 			n.observation.Publish(portal.QueueEvent(ev))
+		})
+	}
+	// The closing check (ADR 0016) listens for completions and sweeps on
+	// its own goroutine — never here: the queue emits some events under its
+	// own lock, so a listener that enqueued synchronously would deadlock.
+	if n.Thoughts != nil && n.planCloseCheck {
+		n.planClose = newPlanClose(n)
+		n.Thoughts.OnEvent(func(ev thought.Event) {
+			if ev.Kind == thought.EventCompleted {
+				n.planClose.signal(ev.ThoughtID)
+			}
 		})
 	}
 	return n
@@ -584,6 +611,17 @@ func (n *Navi) serve(ctx context.Context) error {
 
 	workers := n.startWorkers(ctx)
 
+	// The closing-check listener (ADR 0016) batches completed thoughts and
+	// queues a verification for any drained plan that lacks one.
+	var planCloseDone chan struct{}
+	if n.planClose != nil {
+		planCloseDone = make(chan struct{})
+		go func() {
+			defer close(planCloseDone)
+			n.planClose.run(ctx)
+		}()
+	}
+
 	<-ctx.Done()
 
 	// Stop the doors first, then let in-flight executions finish: a
@@ -591,6 +629,9 @@ func (n *Navi) serve(ctx context.Context) error {
 	// rather than failing it.
 	stopAll()
 	workers.Wait()
+	if planCloseDone != nil {
+		<-planCloseDone
+	}
 
 	// Final drain after the pool stops: the flushers persist whatever the
 	// run left dirty (the park checkpoints are already synchronous).

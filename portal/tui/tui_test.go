@@ -1007,3 +1007,31 @@ func TestModelShowsBlockedDependency(t *testing.T) {
 		t.Errorf("dependent still blocked after its dependency completed:\n%s", m.View())
 	}
 }
+
+// TestModelShowsVerificationFlag is ADR 0016's portal gate: a plan's
+// closing check is visible as a check in the queue view, not just in its
+// record metadata.
+func TestModelShowsVerificationFlag(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	check := th("verify-abcd1234", 5)
+	check.Metadata = map[string]string{thought.MetadataRole: thought.RoleVerification}
+	if err := q.Enqueue(check); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+
+	i, ok := m.byID["verify-abcd1234"]
+	if !ok {
+		t.Fatalf("verification row missing:\n%s", m.View())
+	}
+	if !m.rows[i].verification {
+		t.Fatal("verification flag not derived from the record metadata")
+	}
+	if !strings.Contains(m.View(), "V ") {
+		t.Errorf("verification flag not rendered:\n%s", m.View())
+	}
+}
