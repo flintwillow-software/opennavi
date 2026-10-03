@@ -108,7 +108,7 @@ func readDef() registry.ToolDefinition {
 	}`))
 	return registry.ToolDefinition{
 		Name:          "thoughts_read",
-		Description:   "Returns a snapshot of the navi's thought queue: id, status, priority, prompt summary, timestamps, and metadata per thought, ordered by priority then most recent activity. Optionally filter by lifecycle status and cap the result count.",
+		Description:   "Returns a snapshot of the navi's thought queue: id, status, priority, prompt summary, timestamps, metadata, and dependencies per thought, ordered by priority then most recent activity. A pending thought with an unmet dependency is reported as blocked in blocked_by — the plan's order, visible without a lifecycle status of its own. Optionally filter by lifecycle status and cap the result count.",
 		InputSchema:   schema,
 		OutputFormat:  "json",
 		Access:        registry.AccessReadOnly,
@@ -138,13 +138,18 @@ func createDef() registry.ToolDefinition {
 				"items": { "type": "string" },
 				"description": "Compiled-in skills this thought should load (ADR 0013 thought-declared request). An unknown name fails the thought."
 			},
+			"depends_on": {
+				"type": "array",
+				"items": { "type": "string" },
+				"description": "Ids of thoughts this one waits for: it is queued now but not claimable until each has completed. Use the id returned by an earlier thoughts_create to chain a plan (\"this continues t1\"); the predecessor must already be queued."
+			},
 			"defer_until": { "type": "string", "format": "date-time" }
 		},
 		"additionalProperties": false
 	}`))
 	return registry.ToolDefinition{
 		Name:          "thoughts_create",
-		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, priority, and skills to load, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. Self-scheduled work is tagged origin:tool and its priority clamped to the conservative band (it never preempts external work). One-shot deferral only — recurring schedules belong to cron.",
+		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, priority, skills to load, dependencies, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. depends_on names thoughts this one waits for: the thought is queued now but the scheduler will not claim it until each dependency has completed, which is how a plan of thoughts keeps its order with more than one worker and with preemption in play (a paused dependency is not complete). Pass the ids returned by earlier thoughts_create calls to chain stages. Self-scheduled work is tagged origin:tool and its priority clamped to the conservative band (it never preempts external work). One-shot deferral only — recurring schedules belong to cron.",
 		InputSchema:   schema,
 		OutputFormat:  "json",
 		Access:        registry.AccessWrite,
@@ -152,9 +157,10 @@ func createDef() registry.ToolDefinition {
 		Recovery:      "none",
 		Mode:          registry.ToolModeSequential,
 		Tags:          []string{"thoughts", "queue", "scheduling"},
-		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional context, skills, defer_until, clamped priority)",
+		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional context, skills, depends_on, defer_until, clamped priority)",
 		PromptGuidelines: []string{
 			"Priority is clamped to the conservative band for self-scheduled thoughts — urgent external work always wins.",
+			"A plan is a chain: create the first stage, then pass its returned id in depends_on when creating the next, so a later stage never runs before an earlier one has finished.",
 			"Use skills to tell a follow-up which compiled-in skills to load; an unknown name fails the thought.",
 			"defer_until defers one-shot work; recurring schedules belong to the cron mechanism.",
 		},
@@ -314,6 +320,19 @@ func handleCreate(ctx context.Context, args map[string]any, handle registry.Queu
 			t.Skills = append(t.Skills, s)
 		}
 	}
+	if raw, ok := args["depends_on"]; ok {
+		items, ok := raw.([]any)
+		if !ok {
+			return "", errors.New("thoughts_create: depends_on must be an array of thought ids")
+		}
+		for _, item := range items {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return "", errors.New("thoughts_create: depends_on must be an array of non-empty thought ids")
+			}
+			t.DependsOn = append(t.DependsOn, s)
+		}
+	}
 	if raw, ok := args["priority"]; ok {
 		p, err := parseIntArg(raw)
 		if err != nil {
@@ -335,7 +354,7 @@ func handleCreate(ctx context.Context, args map[string]any, handle registry.Queu
 	if err := handle.Queue.Enqueue(t); err != nil {
 		return "", fmt.Errorf("thoughts_create: enqueue: %w", err)
 	}
-	return marshalCreated(t)
+	return marshalOne(t, handle.Queue)
 }
 
 // handleUpdate implements thoughts_update: partial updates
@@ -414,7 +433,7 @@ func handleUpdate(ctx context.Context, args map[string]any, handle registry.Queu
 	if gerr != nil {
 		return "", fmt.Errorf("thoughts_update: %w", gerr)
 	}
-	return marshalSnapshotted(snap)
+	return marshalOne(snap, q)
 }
 
 // handleDelete implements thoughts_delete: record removal —
@@ -473,11 +492,16 @@ func marshalString(s string) string {
 }
 
 // marshalThoughts renders the read snapshot: prompt summarized
-// timestamps, metadata, defer_until when set.
+// timestamps, metadata, defer_until when set, and the dependency edges
+// with their derived blocked_by.
 func marshalThoughts(items []thought.Thought) (string, error) {
+	ptrs := make([]*thought.Thought, len(items))
+	for i := range items {
+		ptrs[i] = &items[i]
+	}
 	views := make([]thoughtView, 0, len(items))
-	for _, t := range items {
-		views = append(views, view(&t))
+	for _, t := range ptrs {
+		views = append(views, viewBlocked(t, ptrs))
 	}
 	if views == nil {
 		views = []thoughtView{}
@@ -496,6 +520,8 @@ type thoughtView struct {
 	Prompt     string            `json:"prompt"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 	Skills     []string          `json:"skills,omitempty"`
+	DependsOn  []string          `json:"depends_on,omitempty"`
+	BlockedBy  []string          `json:"blocked_by,omitempty"`
 	DeferUntil string            `json:"defer_until,omitempty"`
 	CreatedAt  string            `json:"created_at"`
 	UpdatedAt  string            `json:"updated_at"`
@@ -509,23 +535,37 @@ func view(t *thought.Thought) thoughtView {
 		Prompt:     summarize(t.Prompt, promptSummaryMax),
 		Metadata:   t.Metadata,
 		Skills:     t.Skills,
+		DependsOn:  t.DependsOn,
 		DeferUntil: deferStamp(t.DeferUntil),
 		CreatedAt:  t.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:  t.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
-func marshalCreated(t *thought.Thought) (string, error) {
+// viewBlocked is view plus the derived blocked state: the dependencies
+// that have not completed. "Blocked" is a derivation from the snapshot,
+// not a lifecycle status, so it is computed where the snapshot is known
+// and omitted once the thought is no longer pending.
+func viewBlocked(t *thought.Thought, all []*thought.Thought) thoughtView {
 	v := view(t)
-	blob, err := json.Marshal(v)
+	if t.Status == thought.ThoughtPending {
+		v.BlockedBy = thought.UnmetDependencies(t, all)
+	}
+	return v
+}
+
+// marshalOne renders a single thought's record; the queue snapshot
+// supplies the states blocked_by derives from.
+func marshalOne(t *thought.Thought, q *thought.Queue) (string, error) {
+	var all []*thought.Thought
+	if q != nil {
+		all = q.GetThoughts()
+	}
+	blob, err := json.Marshal(viewBlocked(t, all))
 	if err != nil {
 		return "", fmt.Errorf("thoughts: encode output: %w", err)
 	}
 	return string(blob), nil
-}
-
-func marshalSnapshotted(t *thought.Thought) (string, error) {
-	return marshalCreated(t)
 }
 
 func summarize(s string, max int) string {

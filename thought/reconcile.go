@@ -115,7 +115,6 @@ func (q *Queue) reconcileOnce() {
 
 	q.mu.Lock()
 	var evts []Event
-	adopted := 0
 	for _, t := range loaded {
 		if _, known := q.findByID(t.ID); known {
 			continue // queue-owned row (or already adopted)
@@ -130,20 +129,20 @@ func (q *Queue) reconcileOnce() {
 				Detail:    "external-adopted",
 				At:        time.Now().UTC(),
 			})
-			adopted++
 		case ThoughtPaused:
 			// Externally paused work stays paused (not claimable);
 			// record it so Resume can find it, no event.
 			q.paused = append(q.paused, t)
-			adopted++
 		case ThoughtFailed:
 			// Failed joins pending awaiting Retry (retry-in-place):
 			// the row stays Status=failed, so Dequeue's transition gate
 			// skips it — adoption just makes it visible to Retry/observers
-			// without dodging the failure record.
+			// without dodging the failure record. It must be visible for
+			// dependency settling: an adopted dependent whose dependency
+			// is failed has to be failed too.
+			q.pending = append(q.pending, t)
 		case ThoughtComplete, ThoughtCancelled:
 			q.terminal = append(q.terminal, t)
-			adopted++
 		default:
 			// Running: the store row says a worker claimed it, but a
 			// running navi's own claims are already in-memory (queue-
@@ -161,12 +160,15 @@ func (q *Queue) reconcileOnce() {
 				Detail:    "external-adopted",
 				At:        time.Now().UTC(),
 			})
-			adopted++
 		}
 	}
+	// A dependency adopted as failed/cancelled can never release its
+	// dependents, so the settled graph fails them here rather than leaving
+	// them blocked on a dead dependency.
+	q.settlePendingDependents(&evts)
 	q.mu.Unlock()
 
-	if adopted > 0 {
+	if len(evts) > 0 {
 		q.emit(evts)
 	}
 }

@@ -352,6 +352,8 @@ const (
 type row struct {
 	thoughtID  string
 	status     string
+	blocked    bool     // pending with an unmet dependency (derived, not a lifecycle status)
+	deps       []string // ids this thought waits for (empty when unknown, e.g. remote convergence)
 	priority   int
 	prompt     string
 	at         time.Time // last activity time — the render computes the age (ticking clock)
@@ -499,11 +501,37 @@ func (m *tuiModel) rebuild(thoughts []*thought.Thought) {
 	m.rows = []row{}
 	m.byID = make(map[string]int)
 	for _, t := range thoughts {
-		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.SessionID, t.UpdatedAt)
+		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.SessionID, t.DependsOn, t.UpdatedAt)
+	}
+	m.refreshBlocked()
+}
+
+// refreshBlocked derives the display-only "blocked" state: a pending row
+// whose dependency has not completed (NAVI-378). The dependency relation
+// is not a lifecycle status, so it is computed here from the rows the
+// model already holds — which works both for the in-process snapshot
+// (whose rows carry depends_on) and for event-driven convergence.
+func (m *tuiModel) refreshBlocked() {
+	status := make(map[string]string, len(m.rows))
+	for _, r := range m.rows {
+		status[r.thoughtID] = r.status
+	}
+	for i := range m.rows {
+		r := &m.rows[i]
+		r.blocked = false
+		if r.status != string(thought.ThoughtPending) || len(r.deps) == 0 {
+			continue
+		}
+		for _, dep := range r.deps {
+			if status[dep] != string(thought.ThoughtComplete) {
+				r.blocked = true
+				break
+			}
+		}
 	}
 }
 
-func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, session string, at time.Time) {
+func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, session string, deps []string, at time.Time) {
 	if i, ok := m.byID[id]; ok && i < len(m.rows) {
 		m.rows[i].status = status
 		m.rows[i].priority = prio
@@ -513,6 +541,7 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		m.rows[i].model = model
 		m.rows[i].checkpoint = checkpoint
 		m.rows[i].session = session
+		m.rows[i].deps = deps
 		m.rows[i].at = at
 		return
 	}
@@ -524,6 +553,7 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		model:      model,
 		checkpoint: checkpoint,
 		session:    session,
+		deps:       deps,
 		at:         at,
 	})
 	m.byID[id] = len(m.rows) - 1
@@ -567,7 +597,7 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 		if thoughts, _ := m.transport.Snapshot(); len(thoughts) > 0 {
 			m.rebuild(thoughts)
 		} else {
-			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, "", time.Now().UTC())
+			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, "", nil, time.Now().UTC())
 		}
 		_ = ok
 	}
@@ -579,6 +609,9 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 			m.activeID = ""
 		}
 	}
+	// A dependency's completion releases its dependents: recompute the
+	// derived blocked state from the rows.
+	m.refreshBlocked()
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
 	if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Kind != "enqueued" {
@@ -1080,8 +1113,12 @@ func (m *tuiModel) renderList() string {
 		if r.activity != "" {
 			suffix = " «" + m.clip(sanitizeLine(r.activity), 24)
 		}
+		status := r.status
+		if r.blocked {
+			status = "blocked"
+		}
 		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s%s\n",
-			mark, sanitizeLine(r.thoughtID), sanitizeLine(r.status), r.priority, m.age(r.at), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30), suffix)
+			mark, sanitizeLine(r.thoughtID), sanitizeLine(status), r.priority, m.age(r.at), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30), suffix)
 	}
 	return out
 }

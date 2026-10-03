@@ -68,6 +68,15 @@ type Thought struct {
 	// Names resolve against the compiled-in set; an unknown name is an
 	// error, not a fetch.
 	Skills []string
+	// DependsOn names the thoughts this one waits for: the thought is
+	// queued immediately but is not claimable until every id here has
+	// reached "complete". It is how a plan of thoughts keeps its order
+	// with more than one worker and with preemption in play — priority
+	// alone cannot express "after", because self-scheduled work is
+	// clamped to one band. Validated at the door (ids must already
+	// exist, no self-dependency, no cycles) and persisted with the row.
+	// "Blocked" is derived from this field, never a lifecycle status.
+	DependsOn []string
 	// Assembled is the context the thought was created with (ADR 0013
 	// decision 2): the composition root fills it at Enqueue, the runner
 	// consumes it instead of rebuilding per turn, and it is recorded as the
@@ -139,7 +148,11 @@ var (
 
 // validTransitions is the lifecycle state machine.
 var validTransitions = map[ThoughtStatus][]ThoughtStatus{
-	ThoughtPending:   {ThoughtRunning, ThoughtCancelled},
+	// pending → failed is the blocked-dependent path: a pending thought
+	// whose dependency failed or was cancelled can never become
+	// claimable, so it is failed (retryable once the dependency is
+	// retried) rather than left blocked forever.
+	ThoughtPending:   {ThoughtRunning, ThoughtFailed, ThoughtCancelled},
 	ThoughtRunning:   {ThoughtComplete, ThoughtPaused, ThoughtFailed},
 	ThoughtPaused:    {ThoughtRunning, ThoughtPending, ThoughtCancelled},
 	ThoughtFailed:    {ThoughtPending}, // retry
@@ -194,6 +207,9 @@ func (t *Thought) Clone() *Thought {
 	if t.Skills != nil {
 		out.Skills = append([]string(nil), t.Skills...)
 	}
+	if t.DependsOn != nil {
+		out.DependsOn = append([]string(nil), t.DependsOn...)
+	}
 	return &out
 }
 
@@ -219,6 +235,30 @@ func (t *Thought) EffectiveSelfPriority() int {
 		return SelfScheduledHighBound
 	}
 	return p
+}
+
+// UnmetDependencies returns the ids among t.DependsOn that are not
+// complete in the supplied snapshot — the "blocked" derivation. A
+// non-empty result means t is waiting on work that has not finished; it
+// is a *display* state, not a lifecycle status, so the scheduler and the
+// record keep one vocabulary. An id absent from the snapshot is unmet
+// (an unresolvable dependency never releases its dependent), which
+// surfaces the orphan through blocked_by rather than letting it run.
+func UnmetDependencies(t *Thought, all []*Thought) []string {
+	if t == nil || len(t.DependsOn) == 0 {
+		return nil
+	}
+	status := make(map[string]ThoughtStatus, len(all))
+	for _, o := range all {
+		status[o.ID] = o.Status
+	}
+	var unmet []string
+	for _, dep := range t.DependsOn {
+		if status[dep] != ThoughtComplete {
+			unmet = append(unmet, dep)
+		}
+	}
+	return unmet
 }
 
 // Due reports whether the thought is claimable by the pool at time now:

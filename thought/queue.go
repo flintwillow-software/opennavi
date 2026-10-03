@@ -186,6 +186,14 @@ func (q *Queue) recover() error {
 		}
 	}
 	q.sortPending()
+	// A dependency that is already terminal-but-unsatisfied (failed or
+	// cancelled) can never release its dependents, so the recovered graph
+	// is settled: those dependents are failed rather than left blocked
+	// forever. Unresolvable ids stay blocked and surface through
+	// blocked_by.
+	var evts []Event
+	q.settlePendingDependents(&evts)
+	q.emit(evts)
 	return nil
 }
 
@@ -203,6 +211,160 @@ func (q *Queue) sortPending() {
 	sort.SliceStable(q.pending, func(i, j int) bool {
 		return q.pending[i].EffectivePriority() < q.pending[j].EffectivePriority()
 	})
+}
+
+// ── dependencies ────────────────────────────────────────────────────────
+//
+// A thought may name the thoughts it waits for (Thought.DependsOn,
+// NAVI-378). The edges are validated at the door, persisted with the
+// row, and honored here: Dequeue will not claim a thought until every
+// dependency has reached "complete". Priority cannot express ordering
+// once more than one worker runs, and a paused dependency is not
+// complete — so preempting a chain's head parks the whole chain, as it
+// should. "Blocked" is derived from these edges for display; it is never
+// a lifecycle status.
+
+// depsSatisfied reports whether every dependency of t has completed.
+// Only "complete" satisfies: a failed, cancelled, paused, or running
+// dependency leaves the dependent blocked. An id the queue cannot
+// resolve is unsatisfied too — an unresolvable dependency never releases
+// its dependent. Caller holds q.mu.
+func (q *Queue) depsSatisfied(t *Thought) bool {
+	for _, dep := range t.DependsOn {
+		d, ok := q.findByID(dep)
+		if !ok || d.Status != ThoughtComplete {
+			return false
+		}
+	}
+	return true
+}
+
+// validateDeps is the dependency door check: every id must already be
+// known (a successor is enqueued after its predecessor), a thought may
+// not depend on itself, and the edge may not close a cycle. Caller holds
+// q.mu.
+func (q *Queue) validateDeps(t *Thought) error {
+	for _, dep := range t.DependsOn {
+		if dep == t.ID {
+			return fmt.Errorf("thought: enqueue %s: depends_on %q: a thought cannot depend on itself", t.ID, dep)
+		}
+		if _, ok := q.findByID(dep); !ok {
+			return fmt.Errorf("thought: enqueue %s: depends_on %q: %w (a successor is enqueued after its predecessor)", t.ID, dep, ErrThoughtNotFound)
+		}
+	}
+	if dep, ok := q.dependsOnCycle(t); ok {
+		return fmt.Errorf("thought: enqueue %s: depends_on %q would create a dependency cycle", t.ID, dep)
+	}
+	return nil
+}
+
+// dependsOnCycle walks the stored dependency graph from t's edges and
+// reports the id that closes a cycle back to t. The door rule above
+// (ids must already exist) makes a cycle unreachable for ordinary
+// in-process enqueues — nothing can already point at a brand-new thought
+// — but a row adopted from an external writer may point at an id that is
+// not enqueued yet, and enqueueing that id would close the loop. The
+// edge is refused rather than wedging the chain. Caller holds q.mu.
+func (q *Queue) dependsOnCycle(t *Thought) (string, bool) {
+	visited := map[string]bool{}
+	var walk func(id string) bool
+	walk = func(id string) bool {
+		if id == t.ID {
+			return true
+		}
+		if visited[id] {
+			return false
+		}
+		visited[id] = true
+		d, ok := q.findByID(id)
+		if !ok {
+			return false
+		}
+		for _, next := range d.DependsOn {
+			if walk(next) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, dep := range t.DependsOn {
+		if walk(dep) {
+			return dep, true
+		}
+	}
+	return "", false
+}
+
+// failDependents propagates a dead dependency: a pending thought whose
+// dependency failed, was cancelled, or was removed can never become
+// claimable, so it is failed too, transitively — a whole chain behind
+// one failure is surfaced instead of hanging silently. Each dependent's
+// EventFailed detail names the dependency that killed it, and Retry
+// re-applies the gate, so retrying the dependency first is the recovery.
+// Caller holds q.mu.
+func (q *Queue) failDependents(id, cause string, evts *[]Event) {
+	q.propagateFailure(map[string]string{id: cause}, evts)
+}
+
+// settlePendingDependents fails pending thoughts whose dependency is
+// already terminal-but-unsatisfied (failed or cancelled). It is the
+// load/adoption pass: recover and reconcile call it so a restart cannot
+// keep a dependent blocked on a dependency that can never complete.
+// Caller holds q.mu (or holds the queue exclusively, as recover does).
+func (q *Queue) settlePendingDependents(evts *[]Event) {
+	seeds := map[string]string{}
+	for _, list := range [][]*Thought{q.pending, q.running, q.paused, q.terminal} {
+		for _, t := range list {
+			switch t.Status {
+			case ThoughtFailed, ThoughtCancelled:
+				seeds[t.ID] = string(t.Status)
+			}
+		}
+	}
+	q.propagateFailure(seeds, evts)
+}
+
+// propagateFailure fails (transitively) the pending thoughts that depend
+// on any id in seeds, each with a detail naming the dependency and its
+// cause. Caller holds q.mu.
+func (q *Queue) propagateFailure(seeds map[string]string, evts *[]Event) {
+	if len(seeds) == 0 {
+		return
+	}
+	dead := make([]string, 0, len(seeds))
+	handled := make(map[string]bool, len(seeds))
+	for id := range seeds {
+		dead = append(dead, id)
+		handled[id] = true
+	}
+	for len(dead) > 0 {
+		d := dead[0]
+		dead = dead[1:]
+		cause := seeds[d]
+		for _, t := range q.pending {
+			if t.Status != ThoughtPending || handled[t.ID] || !dependsOn(t, d) {
+				continue
+			}
+			if err := t.Transition(ThoughtFailed); err != nil {
+				continue
+			}
+			handled[t.ID] = true
+			seeds[t.ID] = "failed"
+			collect(evts, EventFailed, t.ID, fmt.Sprintf("blocked by dependency %s (%s)", d, cause))
+			q.markDirty(t)
+			dead = append(dead, t.ID)
+		}
+	}
+}
+
+// dependsOn reports whether t waits on id.
+func dependsOn(t *Thought, id string) bool {
+	for _, dep := range t.DependsOn {
+		if dep == id {
+			return true
+		}
+	}
+	return false
 }
 
 // ── events ───────────────────────────────────────────────────────────────
@@ -274,6 +436,10 @@ func (q *Queue) Enqueue(t *Thought) error {
 		q.mu.Unlock()
 		return fmt.Errorf("thought: duplicate ID %s", t.ID)
 	}
+	if err := q.validateDeps(t); err != nil {
+		q.mu.Unlock()
+		return err
+	}
 
 	// Reject policy: reject when NO slot is immediately available and
 	// the thought can't preempt one.
@@ -317,6 +483,9 @@ func (q *Queue) Dequeue() (*Thought, bool) {
 	for i, t := range q.pending {
 		if !t.Due(now) {
 			continue // deferred: not claimable until defer_until passes
+		}
+		if !q.depsSatisfied(t) {
+			continue // blocked: a dependency has not completed yet
 		}
 		slotID := q.findSlotFor(t)
 		if slotID == "" {
@@ -431,36 +600,48 @@ func (q *Queue) Resume(id string) error {
 }
 
 // Cancel a pending or paused thought (running thoughts must
-// be paused/failed first).
+// be paused/failed first). A cancelled thought can never complete, so
+// its dependents are failed with a detail naming the dependency.
 func (q *Queue) Cancel(id string) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if t, idx := q.findRunning(id); t != nil {
 		_ = idx // running thoughts cancel via Pause first
+		q.mu.Unlock()
 		return fmt.Errorf("thought: %s is running — pause it before cancelling", id)
 	}
 	if t, idx := q.findIn(q.pending, id); t != nil {
 		if err := t.Transition(ThoughtCancelled); err != nil {
+			q.mu.Unlock()
 			return err
 		}
 		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
 		q.running = append(q.running, t) // terminal: kept for inspection
-		q.emit([]Event{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
+		collect(&evts, EventCancelled, id, "")
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
+		q.failDependents(id, "cancelled", &evts)
+		q.mu.Unlock()
+		q.emit(evts)
 		return nil
 	}
 	if t, idx := q.findIn(q.paused, id); t != nil {
 		if err := t.Transition(ThoughtCancelled); err != nil {
+			q.mu.Unlock()
 			return err
 		}
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.running = append(q.running, t)
-		q.emit([]Event{{Kind: EventCancelled, ThoughtID: id, At: time.Now().UTC()}})
+		collect(&evts, EventCancelled, id, "")
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
+		q.failDependents(id, "cancelled", &evts)
+		q.mu.Unlock()
+		q.emit(evts)
 		return nil
 	}
+	q.mu.Unlock()
 	return fmt.Errorf("thought: %s: %w", id, ErrThoughtNotFound)
 }
 
@@ -493,14 +674,19 @@ func (q *Queue) Complete(id string, result string) error {
 }
 
 // Fail marks a running thought failed (called by the worker on error).
+// Dependents are failed too (with a detail naming the dependency): a
+// failed dependency can never release them, so hanging is not an option.
 func (q *Queue) Fail(id string, detail string) error {
+	var evts []Event
+
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	t, idx := q.findRunning(id)
 	if t == nil {
+		q.mu.Unlock()
 		return fmt.Errorf("thought: %s: %w (not running)", id, ErrThoughtNotFound)
 	}
 	if err := t.Transition(ThoughtFailed); err != nil {
+		q.mu.Unlock()
 		return err
 	}
 	q.freeSlot(id)
@@ -509,9 +695,13 @@ func (q *Queue) Fail(id string, detail string) error {
 	t.PreemptRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.pending = append(q.pending, t) // failed awaits Retry
-	q.emit([]Event{{Kind: EventFailed, ThoughtID: id, Detail: detail, At: time.Now().UTC()}})
+	collect(&evts, EventFailed, id, detail)
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
+	q.failDependents(id, "failed", &evts)
+	q.mu.Unlock()
+
+	q.emit(evts)
 	return nil
 }
 
@@ -849,6 +1039,9 @@ func (q *Queue) Delete(id string) error {
 		Detail:    string(t.Status),
 		At:        time.Now().UTC(),
 	})
+	// A removed thought can never complete, so its dependents are failed
+	// rather than left blocked on a record that no longer exists.
+	q.failDependents(id, "deleted", &evts)
 	if q.store != nil {
 		if err := q.store.DeleteThought(id); err != nil {
 			q.mu.Unlock()

@@ -254,6 +254,12 @@ var migrations = []string{
 	// thought-declared loading path, persisted so recovery keeps what the
 	// thought asked to load alongside the context it assembled.
 	`ALTER TABLE thoughts ADD COLUMN skills TEXT`,
+	// 15: the thought's dependencies (NAVI-378) — the ids of the thoughts
+	// this one waits for, persisted as a JSON array like skills. The
+	// scheduler will not claim a thought until every id here has
+	// completed, and recovery keeps the graph so a restart cannot lose
+	// the plan's order (`blocked` is derived, never stored).
+	`ALTER TABLE thoughts ADD COLUMN depends_on TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
