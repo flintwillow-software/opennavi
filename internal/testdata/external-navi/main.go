@@ -12,6 +12,7 @@ import (
 	"os"
 
 	component "example.com/external-component"
+	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/navi"
 	"github.com/flintwillow-software/opennavi/skill"
@@ -56,13 +57,20 @@ func run() error {
 		return err
 	}
 
+	// A datastore candidate is declared at build time (ADR 0011); the
+	// active backend would be selected at runtime. This is the reference
+	// in-memory backend, which keeps the synthetic navi dependency-light.
+	if err := n.Datastores.Add(inmem.Candidate()); err != nil {
+		return err
+	}
+
 	// Validate is the cross-cutting check Run performs, exposed for
 	// authors who want to verify a composition without running it.
 	if err := n.Validate(); err != nil {
 		return err
 	}
 
-	fmt.Printf("external navi %q validated: %d skill(s), %d tool(s), %d model(s), %d connector(s), %d portal(s)\n",
-		n.Name(), n.Skills.Len(), n.Tools.Len(), n.Models.Len(), n.Connectors.Len(), n.Portals.Len())
+	fmt.Printf("external navi %q validated: %d skill(s), %d tool(s), %d model(s), %d connector(s), %d portal(s), %d datastore candidate(s)\n",
+		n.Name(), n.Skills.Len(), n.Tools.Len(), n.Models.Len(), n.Connectors.Len(), n.Portals.Len(), n.Datastores.Len())
 	return nil
 }

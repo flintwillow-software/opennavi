@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/internal/llm"
-	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -74,7 +75,17 @@ func waitStatusWithin(t *testing.T, n *Navi, id, want string, budget time.Durati
 func mockNavi(t *testing.T, mock *llm.MockProvider, opts ...Option) *Navi {
 	t.Helper()
 	all := append([]Option{WithProvider(mock), WithWorkers(1)}, opts...)
-	return New("mock-navi", all...)
+	return withDatastore(t, New("mock-navi", all...))
+}
+
+// withDatastore declares the reference in-memory datastore, so the navi
+// persists transcripts through the public contract.
+func withDatastore(t *testing.T, n *Navi) *Navi {
+	t.Helper()
+	if err := n.Datastores.Add(inmem.Candidate()); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // --- the gate: a thought actually executes through a provider ---------
@@ -112,12 +123,12 @@ func TestRunExecutesAThoughtThroughAMockProvider(t *testing.T) {
 		t.Fatalf("provider did not receive the prompt: %q", last)
 	}
 
-	// The exchange is recorded in the thought's session.
-	sess, err := n.SessionStore().LoadSession(SessionIDFor("t1"))
+	// The exchange is recorded in the thought's transcript.
+	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("t1")
 	if err != nil {
-		t.Fatalf("load session: %v", err)
+		t.Fatalf("load transcript: %v", err)
 	}
-	if got, want := sessionText(sess), []string{"say pong", "pong"}; !equalStrings(got, want) {
+	if got, want := transcriptText(entries), []string{"say pong", "pong"}; !equalStrings(got, want) {
 		t.Fatalf("transcript = %v, want %v", got, want)
 	}
 }
@@ -214,9 +225,9 @@ func TestInterruptedThoughtIsParkedNotFailed(t *testing.T) {
 
 // --- helpers ----------------------------------------------------------
 
-func sessionText(s *store.Session) []string {
-	out := make([]string, 0, len(s.Entries))
-	for _, e := range s.Entries {
+func transcriptText(entries []datastore.Entry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
 		out = append(out, e.Message)
 	}
 	return out

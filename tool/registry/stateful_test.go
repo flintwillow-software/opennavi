@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 )
 
 // statefulDef builds a complete, valid descriptor for a stateful tool.
@@ -31,24 +31,24 @@ func statefulDef(name string) ToolDefinition {
 	}
 }
 
-// memStatefulStore is a minimal in-memory StatefulToolStore for
+// memStatefulStore is a minimal in-memory datastore.ToolState for
 // registry-level tests; the real SQLite implementation and its
 // restart/scoping tests live in store/sqlite.
 type memStatefulStore struct {
-	todos map[string][]store.Todo
-	notes map[string][]store.Note
+	todos map[string][]datastore.Todo
+	notes map[string][]datastore.Note
 	seq   int
 }
 
 func newMemStatefulStore() *memStatefulStore {
 	return &memStatefulStore{
-		todos: map[string][]store.Todo{},
-		notes: map[string][]store.Note{},
+		todos: map[string][]datastore.Todo{},
+		notes: map[string][]datastore.Note{},
 	}
 }
 
-func (m *memStatefulStore) ListTodos(naviID string, status store.TodoStatus, limit int) ([]store.Todo, error) {
-	var out []store.Todo
+func (m *memStatefulStore) ListTodos(naviID string, status datastore.TodoStatus, limit int) ([]datastore.Todo, error) {
+	var out []datastore.Todo
 	for _, t := range m.todos[naviID] {
 		if status == "" || t.Status == status {
 			out = append(out, t)
@@ -60,8 +60,8 @@ func (m *memStatefulStore) ListTodos(naviID string, status store.TodoStatus, lim
 	return out, nil
 }
 
-func (m *memStatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]store.Todo, error) {
-	out := make([]store.Todo, 0, len(items))
+func (m *memStatefulStore) ReplaceTodos(naviID string, items []datastore.Todo) ([]datastore.Todo, error) {
+	out := make([]datastore.Todo, 0, len(items))
 	for _, item := range items {
 		m.seq++
 		item.ID = "t-" + strconv.Itoa(m.seq)
@@ -72,7 +72,7 @@ func (m *memStatefulStore) ReplaceTodos(naviID string, items []store.Todo) ([]st
 	return out, nil
 }
 
-func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate) ([]store.Todo, error) {
+func (m *memStatefulStore) UpdateTodos(naviID string, updates []datastore.TodoUpdate) ([]datastore.Todo, error) {
 	list := m.todos[naviID]
 	for _, u := range updates {
 		idx := -1
@@ -83,7 +83,7 @@ func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate
 			}
 		}
 		if idx < 0 {
-			return nil, fmt.Errorf("%w: %s", store.ErrTodoNotFound, u.ID)
+			return nil, fmt.Errorf("%w: %s", datastore.ErrTodoNotFound, u.ID)
 		}
 		if u.Remove {
 			list = append(list[:idx], list[idx+1:]...)
@@ -100,11 +100,11 @@ func (m *memStatefulStore) UpdateTodos(naviID string, updates []store.TodoUpdate
 		}
 	}
 	m.todos[naviID] = list
-	return append([]store.Todo(nil), list...), nil
+	return append([]datastore.Todo(nil), list...), nil
 }
 
-func (m *memStatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.Note, error) {
-	var out []store.Note
+func (m *memStatefulStore) ReadNotes(naviID string, q datastore.NoteQuery) ([]datastore.Note, error) {
+	var out []datastore.Note
 	for _, n := range m.notes[naviID] {
 		if q.ID != "" && n.ID != q.ID {
 			continue
@@ -114,7 +114,7 @@ func (m *memStatefulStore) ReadNotes(naviID string, q store.NoteQuery) ([]store.
 	return out, nil
 }
 
-func (m *memStatefulStore) UpsertNote(naviID string, n store.Note) (store.Note, error) {
+func (m *memStatefulStore) UpsertNote(naviID string, n datastore.Note) (datastore.Note, error) {
 	m.seq++
 	if n.ID == "" {
 		n.ID = "n-" + strconv.Itoa(m.seq)
@@ -132,7 +132,7 @@ func (m *memStatefulStore) RemoveNote(naviID, id string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %s", store.ErrNoteNotFound, id)
+	return fmt.Errorf("%w: %s", datastore.ErrNoteNotFound, id)
 }
 
 func TestRegisterStatefulBindsStoreHandle(t *testing.T) {
@@ -200,7 +200,7 @@ func TestStatefulHandlerPersistsThroughSeam(t *testing.T) {
 	r := New()
 	st := newMemStatefulStore()
 	if err := r.RegisterStateful(statefulDef("todo_write"), "navi-a", st, func(ctx context.Context, args map[string]any, state StateContext) (string, error) {
-		persisted, err := state.Store.ReplaceTodos(state.NaviID, []store.Todo{{Text: "from navi-a", Status: store.TodoPending}})
+		persisted, err := state.Store.ReplaceTodos(state.NaviID, []datastore.Todo{{Text: "from navi-a", Status: datastore.TodoPending}})
 		if err != nil {
 			return "", err
 		}

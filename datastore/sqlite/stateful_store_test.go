@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store"
+	"github.com/flintwillow-software/opennavi/datastore"
 )
 
 func newTestStatefulStore(t *testing.T) (*StatefulStore, string) {
@@ -43,9 +43,9 @@ func reopenStatefulStore(t *testing.T, path string) *StatefulStore {
 func TestStatefulStoreRestartPersistence(t *testing.T) {
 	ss, path := newTestStatefulStore(t)
 
-	written, err := ss.ReplaceTodos("navi-a", []store.Todo{
-		{Text: "write the report", Status: store.TodoInProgress, Priority: 1},
-		{Text: "file the PR", Status: store.TodoPending, Priority: 2},
+	written, err := ss.ReplaceTodos("navi-a", []datastore.Todo{
+		{Text: "write the report", Status: datastore.TodoInProgress, Priority: 1},
+		{Text: "file the PR", Status: datastore.TodoPending, Priority: 2},
 	})
 	if err != nil {
 		t.Fatalf("ReplaceTodos: %v", err)
@@ -58,7 +58,7 @@ func TestStatefulStoreRestartPersistence(t *testing.T) {
 			t.Fatal("ReplaceTodos returned item without id")
 		}
 	}
-	note, err := ss.UpsertNote("navi-a", store.Note{Title: "scratch", Body: "verbatim body", Tags: []string{"ideas"}})
+	note, err := ss.UpsertNote("navi-a", datastore.Note{Title: "scratch", Body: "verbatim body", Tags: []string{"ideas"}})
 	if err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestStatefulStoreRestartPersistence(t *testing.T) {
 	if len(todos) != 2 {
 		t.Fatalf("expected 2 todos after restart, got %d", len(todos))
 	}
-	if todos[0].Text != "write the report" || todos[0].Status != store.TodoInProgress || todos[0].Priority != 1 {
+	if todos[0].Text != "write the report" || todos[0].Status != datastore.TodoInProgress || todos[0].Priority != 1 {
 		t.Fatalf("todo round-trip mismatch: %+v", todos[0])
 	}
 	if todos[0].ID != written[0].ID {
@@ -83,7 +83,7 @@ func TestStatefulStoreRestartPersistence(t *testing.T) {
 		t.Fatal("todo timestamps lost across restart")
 	}
 	// Notes survive verbatim with tags.
-	notes, err := reopened.ReadNotes("navi-a", store.NoteQuery{ID: note.ID})
+	notes, err := reopened.ReadNotes("navi-a", datastore.NoteQuery{ID: note.ID})
 	if err != nil {
 		t.Fatalf("ReadNotes after restart: %v", err)
 	}
@@ -99,10 +99,10 @@ func TestStatefulStorePerNaviScoping(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
 
 	// navi-a writes todos and notes; navi-b must not see them.
-	if _, err := ss.ReplaceTodos("navi-a", []store.Todo{{Text: "a's plan", Status: store.TodoPending}}); err != nil {
+	if _, err := ss.ReplaceTodos("navi-a", []datastore.Todo{{Text: "a's plan", Status: datastore.TodoPending}}); err != nil {
 		t.Fatalf("ReplaceTodos(navi-a): %v", err)
 	}
-	if _, err := ss.UpsertNote("navi-a", store.Note{Title: "a's note", Body: "secret"}); err != nil {
+	if _, err := ss.UpsertNote("navi-a", datastore.Note{Title: "a's note", Body: "secret"}); err != nil {
 		t.Fatalf("UpsertNote(navi-a): %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestStatefulStorePerNaviScoping(t *testing.T) {
 	if len(todosB) != 0 {
 		t.Fatalf("navi-b sees navi-a todos: %+v", todosB)
 	}
-	notesB, err := ss.ReadNotes("navi-b", store.NoteQuery{Query: "secret"})
+	notesB, err := ss.ReadNotes("navi-b", datastore.NoteQuery{Query: "secret"})
 	if err != nil {
 		t.Fatalf("ReadNotes(navi-b): %v", err)
 	}
@@ -122,10 +122,10 @@ func TestStatefulStorePerNaviScoping(t *testing.T) {
 	}
 
 	// Same id under a different navi is a different row.
-	if _, err := ss.UpsertNote("navi-b", store.Note{ID: "shared-id", Title: "b's note", Body: "mine"}); err != nil {
+	if _, err := ss.UpsertNote("navi-b", datastore.Note{ID: "shared-id", Title: "b's note", Body: "mine"}); err != nil {
 		t.Fatalf("UpsertNote(navi-b): %v", err)
 	}
-	notesA, err := ss.ReadNotes("navi-a", store.NoteQuery{ID: "shared-id"})
+	notesA, err := ss.ReadNotes("navi-a", datastore.NoteQuery{ID: "shared-id"})
 	if err != nil {
 		t.Fatalf("ReadNotes(navi-a, shared-id): %v", err)
 	}
@@ -134,14 +134,14 @@ func TestStatefulStorePerNaviScoping(t *testing.T) {
 	}
 
 	// navi-b removing its own note does not touch navi-a's state.
-	if _, err := ss.UpsertNote("navi-b", store.Note{ID: "b-only", Title: "tmp", Body: "x"}); err != nil {
+	if _, err := ss.UpsertNote("navi-b", datastore.Note{ID: "b-only", Title: "tmp", Body: "x"}); err != nil {
 		t.Fatalf("UpsertNote(navi-b, b-only): %v", err)
 	}
 	if err := ss.RemoveNote("navi-b", "b-only"); err != nil {
 		t.Fatalf("RemoveNote(navi-b): %v", err)
 	}
 	// navi-a's full-replace does not clobber navi-b's list.
-	if _, err := ss.ReplaceTodos("navi-b", []store.Todo{{Text: "b's plan", Status: store.TodoPending}}); err != nil {
+	if _, err := ss.ReplaceTodos("navi-b", []datastore.Todo{{Text: "b's plan", Status: datastore.TodoPending}}); err != nil {
 		t.Fatalf("ReplaceTodos(navi-b): %v", err)
 	}
 	todosA, err := ss.ListTodos("navi-a", "", 0)
@@ -156,14 +156,14 @@ func TestStatefulStorePerNaviScoping(t *testing.T) {
 func TestStatefulStoreReplaceAndListOrder(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
 
-	written, err := ss.ReplaceTodos("navi-a", []store.Todo{
-		{Text: "second", Status: store.TodoPending, Priority: 5},
-		{Text: "first", Status: store.TodoInProgress, Priority: 0},
+	written, err := ss.ReplaceTodos("navi-a", []datastore.Todo{
+		{Text: "second", Status: datastore.TodoPending, Priority: 5},
+		{Text: "first", Status: datastore.TodoInProgress, Priority: 0},
 	})
 	if err != nil {
 		t.Fatalf("ReplaceTodos: %v", err)
 	}
-	if written[0].Status != store.TodoPending {
+	if written[0].Status != datastore.TodoPending {
 		t.Fatalf("status default lost: %+v", written[0])
 	}
 
@@ -176,7 +176,7 @@ func TestStatefulStoreReplaceAndListOrder(t *testing.T) {
 		t.Fatalf("ordering wrong: %+v", todos)
 	}
 	// Filtered by status.
-	inProgress, err := ss.ListTodos("navi-a", store.TodoInProgress, 0)
+	inProgress, err := ss.ListTodos("navi-a", datastore.TodoInProgress, 0)
 	if err != nil {
 		t.Fatalf("ListTodos(in_progress): %v", err)
 	}
@@ -184,7 +184,7 @@ func TestStatefulStoreReplaceAndListOrder(t *testing.T) {
 		t.Fatalf("status filter wrong: %+v", inProgress)
 	}
 	// Full replace clears the previous list.
-	if _, err := ss.ReplaceTodos("navi-a", []store.Todo{{Text: "new plan", Status: store.TodoDone}}); err != nil {
+	if _, err := ss.ReplaceTodos("navi-a", []datastore.Todo{{Text: "new plan", Status: datastore.TodoDone}}); err != nil {
 		t.Fatalf("ReplaceTodos #2: %v", err)
 	}
 	todos, err = ss.ListTodos("navi-a", "", 0)
@@ -198,17 +198,17 @@ func TestStatefulStoreReplaceAndListOrder(t *testing.T) {
 
 func TestStatefulStoreUpdateTodosAtomicity(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
-	written, err := ss.ReplaceTodos("navi-a", []store.Todo{
-		{Text: "one", Status: store.TodoPending},
-		{Text: "two", Status: store.TodoPending},
+	written, err := ss.ReplaceTodos("navi-a", []datastore.Todo{
+		{Text: "one", Status: datastore.TodoPending},
+		{Text: "two", Status: datastore.TodoPending},
 	})
 	if err != nil {
 		t.Fatalf("ReplaceTodos: %v", err)
 	}
-	done := store.TodoDone
+	done := datastore.TodoDone
 	newText := "renamed"
 	prio := 7
-	updated, err := ss.UpdateTodos("navi-a", []store.TodoUpdate{
+	updated, err := ss.UpdateTodos("navi-a", []datastore.TodoUpdate{
 		{ID: written[0].ID, Status: &done, Text: &newText, Priority: &prio},
 	})
 	if err != nil {
@@ -218,7 +218,7 @@ func TestStatefulStoreUpdateTodosAtomicity(t *testing.T) {
 	for _, td := range updated {
 		if td.ID == written[0].ID {
 			found = true
-			if td.Status != store.TodoDone || td.Text != "renamed" || td.Priority != 7 {
+			if td.Status != datastore.TodoDone || td.Text != "renamed" || td.Priority != 7 {
 				t.Fatalf("partial update mismatch: %+v", td)
 			}
 		}
@@ -228,11 +228,11 @@ func TestStatefulStoreUpdateTodosAtomicity(t *testing.T) {
 	}
 
 	// Unknown id rejects the whole batch; prior state intact.
-	_, err = ss.UpdateTodos("navi-a", []store.TodoUpdate{
+	_, err = ss.UpdateTodos("navi-a", []datastore.TodoUpdate{
 		{ID: written[1].ID, Text: strPtr("should not land")},
 		{ID: "no-such-id", Status: &done},
 	})
-	if err == nil || !errors.Is(err, store.ErrTodoNotFound) {
+	if err == nil || !errors.Is(err, datastore.ErrTodoNotFound) {
 		t.Fatalf("unknown id err = %v, want ErrTodoNotFound", err)
 	}
 	todos, err := ss.ListTodos("navi-a", "", 0)
@@ -247,7 +247,7 @@ func TestStatefulStoreUpdateTodosAtomicity(t *testing.T) {
 	}
 
 	// Remove path.
-	if _, err := ss.UpdateTodos("navi-a", []store.TodoUpdate{{ID: written[1].ID, Remove: true}}); err != nil {
+	if _, err := ss.UpdateTodos("navi-a", []datastore.TodoUpdate{{ID: written[1].ID, Remove: true}}); err != nil {
 		t.Fatalf("remove update: %v", err)
 	}
 	todos, _ = ss.ListTodos("navi-a", "", 0)
@@ -259,37 +259,37 @@ func TestStatefulStoreUpdateTodosAtomicity(t *testing.T) {
 func TestStatefulStoreNotesSearchAndRemove(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
 
-	n1, err := ss.UpsertNote("navi-a", store.Note{Title: "deploy checklist", Body: "run the tests", Tags: []string{"ops"}})
+	n1, err := ss.UpsertNote("navi-a", datastore.Note{Title: "deploy checklist", Body: "run the tests", Tags: []string{"ops"}})
 	if err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
-	if _, err := ss.UpsertNote("navi-a", store.Note{Title: "grocery list", Body: "milk, eggs", Tags: []string{"home"}}); err != nil {
+	if _, err := ss.UpsertNote("navi-a", datastore.Note{Title: "grocery list", Body: "milk, eggs", Tags: []string{"home"}}); err != nil {
 		t.Fatalf("UpsertNote #2: %v", err)
 	}
 
 	// By id.
-	got, err := ss.ReadNotes("navi-a", store.NoteQuery{ID: n1.ID})
+	got, err := ss.ReadNotes("navi-a", datastore.NoteQuery{ID: n1.ID})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("ReadNotes(id): %v notes=%d", err, len(got))
 	}
 	// By tag.
-	byTag, err := ss.ReadNotes("navi-a", store.NoteQuery{Tag: "ops"})
+	byTag, err := ss.ReadNotes("navi-a", datastore.NoteQuery{Tag: "ops"})
 	if err != nil || len(byTag) != 1 || byTag[0].ID != n1.ID {
 		t.Fatalf("ReadNotes(tag): %v notes=%+v", err, byTag)
 	}
 	// Literal substring on title/body — no semantic matching.
-	byQuery, err := ss.ReadNotes("navi-a", store.NoteQuery{Query: "milk"})
+	byQuery, err := ss.ReadNotes("navi-a", datastore.NoteQuery{Query: "milk"})
 	if err != nil || len(byQuery) != 1 {
 		t.Fatalf("ReadNotes(query): %v notes=%d", err, len(byQuery))
 	}
 	// Literal match does not include the query as substring of a
 	// different word.
-	noMatch, err := ss.ReadNotes("navi-a", store.NoteQuery{Query: "mic"})
+	noMatch, err := ss.ReadNotes("navi-a", datastore.NoteQuery{Query: "mic"})
 	if err != nil || len(noMatch) != 0 {
 		t.Fatalf("ReadNotes(nomatch): %v notes=%d", err, len(noMatch))
 	}
 	// Update preserves created_at, bumps updated_at.
-	updated, err := ss.UpsertNote("navi-a", store.Note{ID: n1.ID, Title: "deploy checklist v2", Body: "run the tests twice"})
+	updated, err := ss.UpsertNote("navi-a", datastore.Note{ID: n1.ID, Title: "deploy checklist v2", Body: "run the tests twice"})
 	if err != nil {
 		t.Fatalf("UpsertNote(update): %v", err)
 	}
@@ -300,7 +300,7 @@ func TestStatefulStoreNotesSearchAndRemove(t *testing.T) {
 	if err := ss.RemoveNote("navi-a", n1.ID); err != nil {
 		t.Fatalf("RemoveNote: %v", err)
 	}
-	if err := ss.RemoveNote("navi-a", n1.ID); err == nil || !errors.Is(err, store.ErrNoteNotFound) {
+	if err := ss.RemoveNote("navi-a", n1.ID); err == nil || !errors.Is(err, datastore.ErrNoteNotFound) {
 		t.Fatalf("RemoveNote(again) err = %v, want ErrNoteNotFound", err)
 	}
 }
@@ -309,14 +309,14 @@ func TestStatefulStoreUpsertUnknownIDBehavesAsCreate(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
 	// Upsert with an explicit id that does not exist yet creates the
 	// note (upsert semantics), preserving the caller-provided id.
-	n, err := ss.UpsertNote("navi-a", store.Note{ID: "explicit", Title: "t", Body: "b"})
+	n, err := ss.UpsertNote("navi-a", datastore.Note{ID: "explicit", Title: "t", Body: "b"})
 	if err != nil {
 		t.Fatalf("UpsertNote(explicit): %v", err)
 	}
 	if n.ID != "explicit" {
 		t.Fatalf("explicit id lost: %s", n.ID)
 	}
-	notes, _ := ss.ReadNotes("navi-a", store.NoteQuery{ID: "explicit"})
+	notes, _ := ss.ReadNotes("navi-a", datastore.NoteQuery{ID: "explicit"})
 	if len(notes) != 1 {
 		t.Fatalf("explicit-id note not found: %d", len(notes))
 	}
@@ -329,12 +329,12 @@ var _ = strPtr
 
 func TestStatefulStoreTimestampsProgress(t *testing.T) {
 	ss, _ := newTestStatefulStore(t)
-	n1, err := ss.UpsertNote("navi-a", store.Note{Title: "t", Body: "b"})
+	n1, err := ss.UpsertNote("navi-a", datastore.Note{Title: "t", Body: "b"})
 	if err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	n2, err := ss.UpsertNote("navi-a", store.Note{ID: n1.ID, Title: "t2", Body: "b2"})
+	n2, err := ss.UpsertNote("navi-a", datastore.Note{ID: n1.ID, Title: "t2", Body: "b2"})
 	if err != nil {
 		t.Fatalf("UpsertNote #2: %v", err)
 	}

@@ -63,7 +63,7 @@ func liveOpenRouterModel(t *testing.T) string {
 func TestLiveOllamaThinking(t *testing.T) {
 	modelName := liveOllamaModel(t)
 
-	n := New("live-ollama", WithDefaultModel("ollama"), WithWorkers(1))
+	n := withDatastore(t, New("live-ollama", WithDefaultModel("ollama"), WithWorkers(1)))
 	if err := n.Models.Add(model.Ollama(modelName)); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestLiveOllamaThinking(t *testing.T) {
 func TestLiveOpenRouterThinking(t *testing.T) {
 	modelName := liveOpenRouterModel(t)
 
-	n := New("live-openrouter", WithDefaultModel("openrouter"), WithWorkers(1))
+	n := withDatastore(t, New("live-openrouter", WithDefaultModel("openrouter"), WithWorkers(1)))
 	if err := n.Models.Add(model.OpenRouter(modelName)); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestOllamaPathAgainstAFakeDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := New("fake-ollama", WithDefaultModel("ollama"), WithWorkers(1))
+	n := withDatastore(t, New("fake-ollama", WithDefaultModel("ollama"), WithWorkers(1)))
 	if err := n.Models.Add(model.Ollama("test-model", model.WithEndpoint(srv.URL))); err != nil {
 		t.Fatal(err)
 	}
@@ -180,11 +180,11 @@ func runLiveThought(t *testing.T, n *Navi) string {
 	}
 	waitStatusWithin(t, n, "live-1", "complete", 2*time.Minute)
 
-	sess, err := n.SessionStore().LoadSession(SessionIDFor("live-1"))
+	entries, err := n.Datastores.Handle().Thoughts().LoadTranscript("live-1")
 	if err != nil {
-		t.Fatalf("load session: %v", err)
+		t.Fatalf("load transcript: %v", err)
 	}
-	text := sessionText(sess)
+	text := transcriptText(entries)
 	if len(text) < 2 {
 		t.Fatalf("expected a prompt turn and a reply turn, got %v", text)
 	}

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/model"
-	"github.com/flintwillow-software/opennavi/store/sqlite"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 

@@ -22,14 +22,15 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/skill"
-	"github.com/flintwillow-software/opennavi/store"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/registry"
@@ -55,6 +56,11 @@ type Navi struct {
 	Portals    *Collection[portal.Portal]
 	Modes      *Collection[Mode]
 
+	// Datastores is the compiled candidate set of persistence backends
+	// (ADR 0011). The active one is selected from runtime config at
+	// assembly; consumers take per-aggregate views from its handle.
+	Datastores *DatastoreCollection
+
 	// Permissions is the compiled permission ceiling (ADR 0006): what
 	// this binary is capable of at all. Modes may narrow it and can
 	// never widen it.
@@ -73,6 +79,10 @@ type Navi struct {
 	// durable navi supplies a sqlite store and enables both.
 	thoughtStore thought.Store
 	queueConfig  *thought.Config
+
+	// datastoreFlushInterval tunes the datastore's RAM-first flush cadence
+	// (WithDatastoreFlushInterval).
+	datastoreFlushInterval time.Duration
 
 	// inflight is the steering bridge's lookup: maps a running
 	// thought to its agent so RouteMessage can inject at the turn boundary.
@@ -96,12 +106,15 @@ type Navi struct {
 	// registry is the runtime tool registry built from the declared Tools
 	// collection (built once, at assemble).
 	registry *registry.Registry
+	// transcripts is the thought/transcript view the runner persists
+	// through. It is resolved from the active datastore at assembly and is
+	// nil when no datastore is declared (history is then not persisted).
+	transcripts datastore.Thoughts
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
 	// Execution.
 	runner   Runner
-	sessions store.Store
 	workers  int
 	dispatch *dispatch
 
@@ -131,6 +144,13 @@ func WithThoughtStore(s thought.Store) Option {
 // correct for the in-memory store; a durable navi enables both.
 func WithQueueConfig(cfg thought.Config) Option {
 	return func(n *Navi) { n.queueConfig = &cfg }
+}
+
+// WithDatastoreFlushInterval sets the datastore's RAM-first flush cadence
+// (0 selects the default, negative is synchronous write-through). The
+// pattern mirrors thought.Config's FlushInterval.
+func WithDatastoreFlushInterval(d time.Duration) Option {
+	return func(n *Navi) { n.datastoreFlushInterval = d }
 }
 
 // WithProviderFallback declares a fallback provider for thoughts that name
@@ -198,6 +218,7 @@ func New(name string, opts ...Option) *Navi {
 			"portal", nil, validatePortal),
 		Modes: newCollection("mode",
 			func(m Mode) string { return m.Name }, validateMode),
+		Datastores: newDatastoreCollection(),
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -231,9 +252,6 @@ func New(name string, opts ...Option) *Navi {
 
 	// Execution defaults. The runner is built after options so it logs
 	// through the logger the author chose.
-	if n.sessions == nil {
-		n.sessions = store.NewMemoryStore()
-	}
 	if n.workers == 0 {
 		n.workers = 2
 	}
@@ -323,7 +341,7 @@ func (n *Navi) validate() error {
 	// Shape re-validation: an Add error the author ignored must not slip
 	// a malformed component into a serving navi.
 	for _, c := range []interface{ revalidate() error }{
-		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes,
+		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes, n.Datastores,
 	} {
 		if err := c.revalidate(); err != nil {
 			return err
@@ -332,7 +350,7 @@ func (n *Navi) validate() error {
 	// Duplicate names, likewise: Add catches them eagerly, this catches
 	// them whether or not Add's error was read.
 	for _, d := range []interface{ duplicates() (string, bool) }{
-		n.Skills, n.Tools, n.Models, n.Modes,
+		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores,
 	} {
 		if name, dup := d.duplicates(); dup {
 			return fmt.Errorf("%w: %q", ErrDuplicate, name)
@@ -466,6 +484,7 @@ func (n *Navi) freeze() {
 	n.Connectors.freeze()
 	n.Portals.freeze()
 	n.Modes.freeze()
+	n.Datastores.freeze()
 }
 
 // Serving reports whether Run has started.
@@ -520,6 +539,9 @@ func (n *Navi) serve(ctx context.Context) error {
 	// durable navi sets intervals and needs them to persist at all.
 	stopReconcile := n.Thoughts.StartReconcile()
 	stopFlusher := n.Thoughts.StartFlusher()
+	// The datastore's RAM-first tool-state flusher (no-op when no
+	// datastore is bound or it is in synchronous mode).
+	stopToolState := n.Datastores.StartToolStateFlusher()
 
 	workers := n.startWorkers(ctx)
 
@@ -531,10 +553,11 @@ func (n *Navi) serve(ctx context.Context) error {
 	stopAll()
 	workers.Wait()
 
-	// Final drain after the pool stops: the flusher persists whatever the
+	// Final drain after the pool stops: the flushers persist whatever the
 	// run left dirty (the park checkpoints are already synchronous).
 	stopReconcile()
 	stopFlusher()
+	stopToolState()
 	return nil
 }
 

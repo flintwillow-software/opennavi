@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flintwillow-software/opennavi/store/sqlite"
+	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/tool/registry"
 )
 
