@@ -128,7 +128,7 @@ The thought queue **is** the context mechanism ([ADR 0013](../adr/0013-the-thoug
 - **Everything that shapes context is a build-time declaration** — sources, auto-loaded skills, component-derived guidance. Runtime config may only narrow it. The reason is the threat model, not tidiness: if a prompt can reach the assembler, the assembler is an injection surface (see [security.md](./security.md)).
 - **Skills are a menu, not a fetch.** All three loading paths can only select from the compiled-in set, so the worst case of a manipulated request is loading a skill the author already shipped.
 - **Core skills ship with the component types**: authored prose for semantics plus a mechanical inventory derived from component metadata, so the model is never unaware of a capability the binary has.
-- **Compaction is not a mechanism.** It is being removed rather than kept as a fallback; deferral replaces it.
+- **Compaction is gone.** It was removed rather than kept as a fallback (NAVI-370); deferral replaces it.
 
 ## Modes
 

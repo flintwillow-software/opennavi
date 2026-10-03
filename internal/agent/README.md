@@ -17,7 +17,6 @@ fits the navi composition root.
 | `executor.go` | `ToolExecutor` — tool-call dispatch with parallel/sequential modes and a parallelism limit |
 | `tools.go` | Built-in tool implementations (`file_read`, `shell_exec`) with byte caps, plus `RegisterBuiltinTools` binding them to a working directory |
 | `queue.go` | `SteeringQueue`, `FollowUpQueue` |
-| `compaction.go` | Context-window compaction: LLM summaries replace older messages near the token budget, with a tool-call-integrity-preserving cut point |
 | `provider.go` | Adapter seam between the agent's `Message`/`Event` types and the concrete provider layer |
 
 ## Notes
@@ -28,5 +27,5 @@ fits the navi composition root.
 - **Executor and tools are split** — "what runs tools" and "which tools exist"
   are different axes; the split keeps the executor testable with mock tools
   (`mock_test.go`) and lets the tool catalog slot in without touching dispatch.
-- **Compaction and provider are single-concern files** — context budgeting and
-  provider translation are independent of the loop, so they live on their own.
+- **The provider is a single-concern file** — provider translation is
+  independent of the loop, so it lives on its own.

@@ -239,6 +239,13 @@ var migrations = []string{
 	// resolves the tool surface, permission ceiling, and optional model
 	// from. Empty selects the navi's default surface.
 	`ALTER TABLE thoughts ADD COLUMN mode TEXT`,
+	// 11 and 12: retire context compaction (NAVI-370) — the is_compacted
+	// flag is no longer written or read, so the vestigial column and its
+	// index go. The index is dropped first: SQLite refuses to drop an
+	// indexed column (ADR 0013 makes the thought queue the context
+	// mechanism, so deferral replaces compaction entirely).
+	`DROP INDEX IF EXISTS idx_messages_compacted`,
+	`ALTER TABLE messages DROP COLUMN is_compacted`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

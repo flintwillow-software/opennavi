@@ -40,16 +40,15 @@ import (
 type runParams struct {
 	ctx context.Context
 
-	runtimeFile   string
-	dbPath        string
-	model         string
-	ollamaHost    string
-	workDir       string
-	naviID        string
-	compactBudget int
-	workers       int
-	portalAddr    string
-	daemonMode    bool
+	runtimeFile string
+	dbPath      string
+	model       string
+	ollamaHost  string
+	workDir     string
+	naviID      string
+	workers     int
+	portalAddr  string
+	daemonMode  bool
 
 	logger *logging.Logger
 	// slogLogger is the navi's structured logger, routed like the runtime
@@ -90,7 +89,6 @@ func serveReferenceNavi(p runParams) error {
 		}),
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
-		navi.WithCompactBudget(p.compactBudget),
 		navi.WithShortTermMemory(),
 	)
 

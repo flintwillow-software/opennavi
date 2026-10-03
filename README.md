@@ -44,9 +44,9 @@ The SDK provides:
   park-with-checkpoint, and crash recovery. Every door (CLI, connectors, tools)
   feeds the same queue, and each thought executes through a pluggable `Runner`.
 - **Agent loop** (`internal/agent`) — the shipped `Runner`: the think → act →
-  observation loop with streaming, tool execution, and context-window
-  compaction, run once per thought. `navi.AgentRunner` bridges it to the
-  thought system.
+  observation loop with streaming and tool execution, run once per thought.
+  `navi.AgentRunner` bridges it to the thought system; context is bounded by
+  the thought queue and deferral, not by compacting a conversation (ADR 0013).
 - **Provider layer** (`internal/llm`) — Ollama and OpenRouter with a fallback
   chain.
 - **Datastore** (`datastore/`, `datastore/sqlite/`) — the public persistence

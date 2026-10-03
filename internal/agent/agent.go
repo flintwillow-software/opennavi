@@ -32,8 +32,6 @@ type Agent struct {
 	Barrier       *AgentEndBarrier
 	Executor      *ToolExecutor
 
-	compaction *compactionSettings // nil when compaction is disabled
-
 	mu     sync.RWMutex // guards state swaps and run handles
 	state  *AgentState
 	cancel context.CancelFunc
@@ -55,7 +53,6 @@ func NewAgent(config AgentConfig) *Agent {
 		followUpQueue: NewFollowUpQueue(),
 		Barrier:       NewAgentEndBarrier(),
 		Executor:      NewToolExecutor("parallel", 4),
-		compaction:    resolveCompaction(config.Compaction),
 	}
 	// No tools are seeded here: the agent loop is generic, and tools reach
 	// it only through the registry + internal/bridge (NAVI-356). The

@@ -27,7 +27,6 @@ func runInteractive(args []string) error {
 	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (overrides $OLLAMA_HOST and YAML; default http://localhost:11434)")
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
-	compactBudget := fs.Int("compact-budget", 0, "context token budget for compaction (0 = disabled)")
 	workers := fs.Int("workers", 2, "thought worker count")
 	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address (not yet wired on the reference navi)")
 	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
@@ -79,20 +78,19 @@ func runInteractive(args []string) error {
 	}
 
 	return serveReferenceNavi(runParams{
-		ctx:           ctx,
-		runtimeFile:   *runtimeFile,
-		dbPath:        *dbPath,
-		model:         *model,
-		ollamaHost:    *ollamaHost,
-		workDir:       *workDir,
-		naviID:        *naviID,
-		compactBudget: *compactBudget,
-		workers:       *workers,
-		portalAddr:    *portalAddr,
-		daemonMode:    *daemonMode,
-		logger:        logger,
-		slogLogger:    slogFrom(lw, human, slogLevel(*logLevel)),
-		cancel:        stop,
+		ctx:         ctx,
+		runtimeFile: *runtimeFile,
+		dbPath:      *dbPath,
+		model:       *model,
+		ollamaHost:  *ollamaHost,
+		workDir:     *workDir,
+		naviID:      *naviID,
+		workers:     *workers,
+		portalAddr:  *portalAddr,
+		daemonMode:  *daemonMode,
+		logger:      logger,
+		slogLogger:  slogFrom(lw, human, slogLevel(*logLevel)),
+		cancel:      stop,
 	})
 }
 

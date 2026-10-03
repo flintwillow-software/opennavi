@@ -99,8 +99,6 @@ type Navi struct {
 	// provider (ADR 0009: fallback stays at the provider-config layer).
 	fallback     llm.Provider
 	fallbackName string
-	// compactBudget enables context compaction when > 0 (agent turns).
-	compactBudget int
 
 	log *slog.Logger
 
@@ -178,12 +176,6 @@ func WithProviderFallback(providerName string) Option {
 			n.fallbackName = providerName
 		}
 	}
-}
-
-// WithCompactBudget enables context compaction with the given token budget
-// (0 disables it), mirroring the daemon's --compact-budget.
-func WithCompactBudget(budget int) Option {
-	return func(n *Navi) { n.compactBudget = budget }
 }
 
 // WithVersion sets the navi's version string.
