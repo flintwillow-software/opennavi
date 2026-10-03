@@ -150,6 +150,11 @@ func (n *Navi) assemble() error {
 		return err
 	}
 
+	// The compiled skill set: authored skills plus the generated core skills
+	// and inventory (ADR 0013 decision 6). Built after the component
+	// collections are known so the inventory cannot drift from main.go.
+	n.assembleSkills()
+
 	// Build the runtime tool registry from the declared collection and set
 	// the compiled default active set under the permission ceiling.
 	reg, err := n.buildRegistry()

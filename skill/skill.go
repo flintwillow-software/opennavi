@@ -23,6 +23,10 @@ type Skill struct {
 	// Version is the skill content version for pinned, reproducible
 	// definition sets.
 	Version string
+	// AutoLoad marks a skill the author declares always-present (ADR 0013
+	// decision 5, the author-declared path). A skill without it reaches a
+	// thought only when the thought declares it or the agent loads it.
+	AutoLoad bool
 }
 
 // Embedded reports whether the skill carries content (a definition

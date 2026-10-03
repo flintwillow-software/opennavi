@@ -223,6 +223,33 @@ func TestThoughtsCreateFollowUpWithOriginTag(t *testing.T) {
 	}
 }
 
+// TestThoughtsCreateDeclaresSkills covers the thought-declared skill path:
+// a follow-up can name the skills it should load (ADR 0013 decision 5).
+func TestThoughtsCreateDeclaresSkills(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+
+	out, err := dispatch(t, reg, "thoughts_create", `{"prompt":"next","skills":["deploy_runbook","core_tools"]}`)
+	if err != nil {
+		t.Fatalf("thoughts_create: %v", err)
+	}
+	var created map[string]any
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, err := q.GetThought(created["id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Skills) != 2 || got.Skills[0] != "deploy_runbook" || got.Skills[1] != "core_tools" {
+		t.Fatalf("declared skills = %v", got.Skills)
+	}
+
+	if _, err := dispatch(t, reg, "thoughts_create", `{"prompt":"next","skills":"nope"}`); err == nil {
+		t.Fatal("skills must be an array of strings")
+	}
+}
+
 func TestThoughtsCreateUnclampedWhenInBand(t *testing.T) {
 	q := routeQueue(t)
 	reg := toolRegistry(t, q)

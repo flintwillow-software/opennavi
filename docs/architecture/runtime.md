@@ -48,7 +48,7 @@ if err := n.Run(ctx); err != nil { ... }
 | Collection | Core or added | Holds | Notes |
 |---|---|---|---|
 | `Thoughts` | core | the thought system | Always present; the runtime's main loop |
-| `Skills` | added | compiled-in skill content | Loaded **selectively** into a thought's context — author-declared auto-load, thought-declared request, or agent-chosen tool. Never baked wholesale ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)) |
+| `Skills` | added | compiled-in skill content | Loaded **selectively** — generated core skills (one per declared component type, plus a component inventory) auto-load and are bounded by what the navi actually has; authored skills load by author declaration (`AutoLoad`), a thought's declared request, or the `skill_load` tool. Every path resolves against the compiled-in set only. Never baked wholesale ([ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md)) |
 | `Tools` | added | agent-callable actions | Registered with full metadata; the active set is derived |
 | `Models` | added | provider + model + version | One marked default; config may override the default |
 | `Connectors` | added | inbound transport doors | Receive `Deps` at `Start` |
@@ -127,7 +127,7 @@ The thought queue **is** the context mechanism ([ADR 0013](../adr/0013-the-thoug
 - **The assembled context is recorded with the thought** as its first transcript entry (index 0), so it is readable through the same contract as the rest of the transcript ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)) and inspectable by any portal ([ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md)).
 - **Everything that shapes context is a build-time declaration** — sources, auto-loaded skills, component-derived guidance. Runtime config may only narrow it. The reason is the threat model, not tidiness: if a prompt can reach the assembler, the assembler is an injection surface (see [security.md](./security.md)).
 - **Skills are a menu, not a fetch.** All three loading paths can only select from the compiled-in set, so the worst case of a manipulated request is loading a skill the author already shipped.
-- **Core skills ship with the component types**: authored prose for semantics plus a mechanical inventory derived from component metadata, so the model is never unaware of a capability the binary has.
+- **Core skills ship with the component types**: authored prose for semantics plus a mechanical inventory derived from component metadata, so the model is never unaware of a capability the binary has. The generated set is bounded by the declared component types and kept compact — it is paid on every thought that loads it. Measured cost of the auto-loaded core set for a 7-tool navi: ~300 tokens (pinned by `TestInventoryTokenCost`).
 - **Compaction is gone.** It was removed rather than kept as a fallback (NAVI-370); deferral replaces it.
 
 ## Modes

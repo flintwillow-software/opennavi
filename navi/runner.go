@@ -80,11 +80,16 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		// An unknown provider/mode fails THIS thought, loudly (ADR 0009).
 		return err
 	}
+	sysPrompt, err := r.navi.systemPromptFor(t)
+	if err != nil {
+		// An unknown declared skill fails THIS thought, loudly (ADR 0013).
+		return err
+	}
 
 	a := agent.NewAgent(agent.AgentConfig{
 		Provider:     provider.Name(),
 		Model:        modelName,
-		SystemPrompt: r.navi.systemPromptFor(t),
+		SystemPrompt: sysPrompt,
 	})
 	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
 
@@ -179,30 +184,42 @@ func (n *Navi) resolveForMode(t *thought.Thought) (llm.Provider, string, error) 
 }
 
 // systemPromptFor assembles the system prompt: the navi's personality
-// seed, the thought mode's fragment when the mode declares one, and the
-// always-loaded short-term memory block when the navi keeps memory. Every
-// thought is a fresh agent run, so this is where per-thought injection
-// happens without a tool call.
-func (n *Navi) systemPromptFor(t *thought.Thought) string {
+// seed, the thought mode's fragment when the mode declares one, the skills
+// the thought loads (auto-loaded core skills plus its own declared
+// requests), and the always-loaded short-term memory block when the navi
+// keeps memory. Every thought is a fresh agent run, so this is where
+// per-thought context injection happens. An unknown declared skill is an
+// error.
+func (n *Navi) systemPromptFor(t *thought.Thought) (string, error) {
 	prompt := n.personality
 	if t.Mode != "" {
 		if m, ok := n.Modes.Get(t.Mode); ok && m.Prompt != "" {
-			if prompt == "" {
-				prompt = m.Prompt
-			} else {
-				prompt += "\n\n" + m.Prompt
-			}
+			prompt = joinBlocks(prompt, m.Prompt)
 		}
 	}
+
+	skills, err := n.skillsBlock(t)
+	if err != nil {
+		return "", err
+	}
+	prompt = joinBlocks(prompt, skills)
+
 	if n.shortMemory != nil {
-		if block := n.shortMemory.Inject(); block != "" {
-			if prompt == "" {
-				return block
-			}
-			return prompt + "\n\n" + block
-		}
+		prompt = joinBlocks(prompt, n.shortMemory.Inject())
 	}
-	return prompt
+	return prompt, nil
+}
+
+// joinBlocks joins two context blocks, tolerating either being empty.
+func joinBlocks(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n\n" + b
+	}
 }
 
 // userPrompt builds the user turn for a thought: its prompt plus the

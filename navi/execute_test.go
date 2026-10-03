@@ -159,8 +159,10 @@ func TestPersonalityBecomesTheSystemTurn(t *testing.T) {
 	if len(reqs) == 0 || len(reqs[0]) < 2 {
 		t.Fatalf("want a system turn plus a user turn, got %v", reqs)
 	}
-	if reqs[0][0].Role != llm.RoleSystem || reqs[0][0].Content != "You are terse." {
-		t.Fatalf("first turn should be the personality: %+v", reqs[0][0])
+	// The personality seeds the system turn; core skills (and memory, when
+	// configured) are injected after it.
+	if reqs[0][0].Role != llm.RoleSystem || !strings.HasPrefix(reqs[0][0].Content, "You are terse.") {
+		t.Fatalf("first turn should start with the personality: %+v", reqs[0][0])
 	}
 }
 

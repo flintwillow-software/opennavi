@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/thought"
@@ -132,13 +133,18 @@ func createDef() registry.ToolDefinition {
 				"additionalProperties": { "type": "string" }
 			},
 			"priority": { "type": "integer" },
+			"skills": {
+				"type": "array",
+				"items": { "type": "string" },
+				"description": "Compiled-in skills this thought should load (ADR 0013 thought-declared request). An unknown name fails the thought."
+			},
 			"defer_until": { "type": "string", "format": "date-time" }
 		},
 		"additionalProperties": false
 	}`))
 	return registry.ToolDefinition{
 		Name:          "thoughts_create",
-		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, and priority, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. Self-scheduled work is tagged origin:tool and its priority clamped to the conservative band (it never preempts external work). One-shot deferral only — recurring schedules belong to cron.",
+		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, priority, and skills to load, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. Self-scheduled work is tagged origin:tool and its priority clamped to the conservative band (it never preempts external work). One-shot deferral only — recurring schedules belong to cron.",
 		InputSchema:   schema,
 		OutputFormat:  "json",
 		Access:        registry.AccessWrite,
@@ -146,9 +152,10 @@ func createDef() registry.ToolDefinition {
 		Recovery:      "none",
 		Mode:          registry.ToolModeSequential,
 		Tags:          []string{"thoughts", "queue", "scheduling"},
-		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional defer_until, clamped priority)",
+		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional context, skills, defer_until, clamped priority)",
 		PromptGuidelines: []string{
 			"Priority is clamped to the conservative band for self-scheduled thoughts — urgent external work always wins.",
+			"Use skills to tell a follow-up which compiled-in skills to load; an unknown name fails the thought.",
 			"defer_until defers one-shot work; recurring schedules belong to the cron mechanism.",
 		},
 		SourceInfo: registry.SourceInfo{Origin: registry.OriginSDK},
@@ -292,6 +299,19 @@ func handleCreate(ctx context.Context, args map[string]any, handle registry.Queu
 				continue // the safety rail's origin tag is not overridable
 			}
 			t.Metadata[k] = s
+		}
+	}
+	if raw, ok := args["skills"]; ok {
+		items, ok := raw.([]any)
+		if !ok {
+			return "", errors.New("thoughts_create: skills must be an array of strings")
+		}
+		for _, item := range items {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return "", errors.New("thoughts_create: skills must be an array of non-empty strings")
+			}
+			t.Skills = append(t.Skills, s)
 		}
 	}
 	if raw, ok := args["priority"]; ok {
@@ -475,6 +495,7 @@ type thoughtView struct {
 	Priority   int               `json:"priority"`
 	Prompt     string            `json:"prompt"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+	Skills     []string          `json:"skills,omitempty"`
 	DeferUntil string            `json:"defer_until,omitempty"`
 	CreatedAt  string            `json:"created_at"`
 	UpdatedAt  string            `json:"updated_at"`
@@ -487,6 +508,7 @@ func view(t *thought.Thought) thoughtView {
 		Priority:   t.Priority,
 		Prompt:     summarize(t.Prompt, promptSummaryMax),
 		Metadata:   t.Metadata,
+		Skills:     t.Skills,
 		DeferUntil: deferStamp(t.DeferUntil),
 		CreatedAt:  t.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:  t.UpdatedAt.UTC().Format(time.RFC3339),
