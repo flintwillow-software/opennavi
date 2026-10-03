@@ -42,9 +42,6 @@ type Entry struct {
 	ToolCallID string
 	ToolName   string
 	ToolInput  json.RawMessage
-	// IsCompacted marks an entry superseded by a compaction summary. Soft
-	// -deleted entries are retained, never removed.
-	IsCompacted bool
 }
 
 // TranscriptInfo is the metadata-only projection of a transcript:

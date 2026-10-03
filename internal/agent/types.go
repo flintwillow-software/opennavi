@@ -123,24 +123,6 @@ type AgentConfig struct {
 	// observation iterations). Guards against a model issuing tool
 	// calls forever. 0 means the default (32).
 	MaxTurns int `json:"max_turns,omitempty"`
-	// Compaction enables context window compaction. Nil
-	// means disabled.
-	Compaction *CompactionConfig `json:"compaction,omitempty"`
-}
-
-// CompactionConfig configures context window compaction.
-type CompactionConfig struct {
-	// Enabled turns compaction on.
-	Enabled bool `json:"enabled"`
-	// MaxTokens is the context window hard limit (default 8192).
-	MaxTokens int `json:"max_tokens,omitempty"`
-	// WarningThreshold defaults to 0.8, CompactionTrigger to 0.9
-	//
-	WarningThreshold  float64 `json:"warning_threshold,omitempty"`
-	CompactionTrigger float64 `json:"compaction_trigger,omitempty"`
-	// KeepTurns is how many recent turns survive compaction
-	// (default 5; a turn is a user/assistant exchange, ~2 messages).
-	KeepTurns int `json:"keep_turns,omitempty"`
 }
 
 // DefaultMaxTurns is the effective MaxTurns when unset.

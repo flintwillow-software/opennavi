@@ -159,16 +159,6 @@ func TestProviderFallbackChain(t *testing.T) {
 	}
 }
 
-func TestCompactionConfig(t *testing.T) {
-	if compactionConfig(0) != nil {
-		t.Fatal("budget 0 must disable compaction")
-	}
-	c := compactionConfig(4096)
-	if c == nil || !c.Enabled || c.MaxTokens != 4096 {
-		t.Fatalf("compaction config = %+v", c)
-	}
-}
-
 // TestDurableFlusherPersists pins the background persistence loop: a navi
 // with a durable store and a positive flush interval actually persists
 // thoughts (the flusher/reconcile loops start in serve).

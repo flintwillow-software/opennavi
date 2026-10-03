@@ -49,7 +49,7 @@ type TokenCounter interface {
 // multibyte content ~3x for CJK), ~3 characters per token for
 // structured tool output (JSON-shaped text compresses better than
 // prose). Plus a small per-message overhead for role framing. Good
-// enough for compaction triggering and budget checks; never for
+// enough for rough budgeting and diagnostics; never for
 // billing.
 type HeuristicTokenCounter struct{}
 

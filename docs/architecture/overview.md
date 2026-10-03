@@ -154,8 +154,8 @@ running-agent events through the bounded `portal.Observation` interface
 (NAVI-352). Durable thoughts persist their mode.
 
 `cmd/navi` is the reference navi: `run` assembles through `navi.New` with
-durable stores, the catalog, configured providers (fallback chain and
-compaction included), cron, and portals; `daemon` mode serves the HTTP portal
+durable stores, the catalog, configured providers (with the fallback chain),
+cron, and portals; `daemon` mode serves the HTTP portal
 gateway so remote front-ends attach and control across processes. `navi-code`
 and `navi-daemon` are real navi modules on the same surface, the old `sdk/`
 authoring stub is retired, and the out-of-repo extension path is guarded by CI
