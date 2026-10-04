@@ -170,11 +170,17 @@ the model noticed an inaccuracy at the end of a stage and moved on.
 - **The runtime owns the guarantee.** When a plan drains with no check behind it,
   the navi queues one (`WithPlanCloseCheck`, on by default; false turns the
   backstop off and leaves the guidance). The rule is mechanical: the plan is the
-  dependency-connected component of the completed thought, every member must be
-  `complete`, a plan containing a verification is left alone (a check never spawns
-  another), and the synthesized check depends on the plan's **sinks** — released
-  only once the whole plan drained, parallel branches included. Its id derives from
-  those sinks, so a replayed event or a restart cannot queue a duplicate.
+  dependency-connected component of the completed thought, every **stage** must be
+  `complete` (a verification is a check, not a stage, so it does not count toward
+  the plan's shape), a check never spawns another, and the synthesized check
+  depends on the plan's **sinks** — released only once the whole plan drained,
+  parallel branches included. Its id derives from those sinks, so a replayed event
+  or a restart cannot queue a duplicate. A plan is already checked only when a
+  verification depends on **exactly the current sinks**, so a plan staged one
+  stage at a time — it drains between stages, another of the shapes the graph
+  allows — is closed against the sinks it ends at and re-closed when it grows: the
+  check for the earlier, smaller sink set is superseded and, if it has not
+  started, cancelled first. A check that already ran is kept.
 - **A check is identifiable.** `role: verification` on the thought record and a
   `V` flag in the portal row, so a plan's closing check reads as a check rather
   than as more work.

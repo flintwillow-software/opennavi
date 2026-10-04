@@ -27,14 +27,23 @@ import (
 //
 //   - the plan is the dependency-connected component of the completed
 //     thought, so no plan object is needed (NAVI-378's graph is the plan);
-//   - every member must be complete — a failed or cancelled member means
+//   - every stage must be complete — a failed or cancelled stage means
 //     the plan did not succeed, and its dependents were already failed;
-//   - a plan containing a verification is left alone, so a check never
-//     spawns another check;
+//   - a verification is a check, not a stage: it does not count toward
+//     the plan's shape, and a check is never closed with a check, so a
+//     verification never spawns another;
 //   - the synthesized check depends on the plan's sinks, so it releases
 //     only once the whole plan drained (parallel branches included);
 //   - its id derives from those sinks, so a second completion event, a
-//     replayed event, or a restart cannot queue a duplicate.
+//     replayed event, or a restart cannot queue a duplicate;
+//   - "already checked" means the plan holds a verification depending on
+//     exactly the current sinks — not merely that one exists somewhere.
+//     A plan staged incrementally drains between stages, so it is read as
+//     a plan and closed against whatever it ends at, then closed *again*
+//     when it grows: the check for the earlier, smaller sink set is
+//     superseded, and is cancelled if it has not started (NAVI-382). A
+//     check that already ran is kept — the successor is added, not a
+//     rewrite of what happened.
 
 // verifyIDPrefix marks thoughts the navi synthesized to close a plan.
 const verifyIDPrefix = "verify-"
@@ -118,34 +127,64 @@ func (p *planClose) closeOne(id string, snapshot []*thought.Thought) {
 		return
 	}
 
-	plan := thought.Plan(subject, snapshot)
-	if len(plan) < 2 {
-		return // a standalone thought is not a plan
+	if subject.IsVerification() {
+		return // a check is not a plan: never close a verification (ADR 0016)
 	}
+
+	// The plan's shape is read from its stages. A verification is the
+	// closing check, not a stage: leaving checks out of the success and
+	// sink readings is what lets a plan be re-closed when it grows, even
+	// while the superseded check is still pending.
+	plan := thought.Plan(subject, snapshot)
+	stages := make([]*thought.Thought, 0, len(plan))
 	for _, m := range plan {
-		if m.IsVerification() {
-			return // the plan already closes with a check
+		if !m.IsVerification() {
+			stages = append(stages, m)
 		}
 	}
-	if !thought.PlanSucceeded(plan) {
+	if len(stages) < 2 {
+		return // a standalone thought is not a plan
+	}
+	if !thought.PlanSucceeded(stages) {
 		return // still running, or the plan did not succeed
 	}
-	sinks := thought.PlanSinks(plan)
+	sinks := thought.PlanSinks(stages)
 	if len(sinks) == 0 {
-		return // every member is depended on: not a shape we can close
+		return // every stage is depended on: not a shape we can close
 	}
 
 	planID := planID(sinks)
+	for _, m := range plan {
+		if m.IsVerification() && sameIDSet(m.DependsOn, sinks) {
+			return // the plan already closes against these sinks
+		}
+	}
 	for _, t := range snapshot {
 		if t.ID == verifyIDPrefix+planID {
 			return // already queued, or already ran
 		}
 	}
 
+	// The plan grew past a check queued for an earlier, smaller sink set.
+	// That check verifies a stage the plan no longer ends at — the very
+	// "check that does not check the real result" ADR 0016 exists to
+	// prevent — so if it has not started it is cancelled before its
+	// successor is queued. A check the model queued itself is left alone:
+	// only the runtime's own checks are the runtime's to replace.
+	for _, m := range plan {
+		if !isSynthesizedCheck(m) || m.Status != thought.ThoughtPending || sameIDSet(m.DependsOn, sinks) {
+			continue
+		}
+		if err := p.navi.Thoughts.Cancel(m.ID); err != nil {
+			p.navi.log.Debug("plan close: superseded verification not cancelled",
+				"plan", planID, "superseded", m.ID, "err", err)
+		}
+	}
+
 	now := time.Now().UTC()
 	check := &thought.Thought{
 		ID:        verifyIDPrefix + planID,
-		Prompt:    planClosePrompt(plan),
+		Prompt:    planClosePrompt(stages),
 		Priority:  thought.SelfScheduledHighBound, // the conservative band (Enqueue clamps too)
 		Status:    thought.ThoughtPending,
 		DependsOn: sinks,
@@ -163,6 +202,32 @@ func (p *planClose) closeOne(id string, snapshot []*thought.Thought) {
 		// closes without a synthesized check.
 		p.navi.log.Debug("plan close: verification not queued", "plan", planID, "err", err)
 	}
+}
+
+// isSynthesizedCheck reports whether t is a closing check this runtime
+// queued, as opposed to one the model queued itself: only the runtime's
+// own checks are the runtime's to supersede.
+func isSynthesizedCheck(t *thought.Thought) bool {
+	return t != nil && t.IsVerification() && strings.HasPrefix(t.ID, verifyIDPrefix)
+}
+
+// sameIDSet reports whether two id lists name the same thoughts, order
+// aside. Sinks are sorted, a model-queued verification's dependencies are
+// not, and the two must still compare equal.
+func sameIDSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x := append([]string(nil), a...)
+	y := append([]string(nil), b...)
+	sort.Strings(x)
+	sort.Strings(y)
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // planID derives a stable id for a plan from its (sorted) sinks, so the
