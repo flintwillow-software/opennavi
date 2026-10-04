@@ -84,7 +84,7 @@ jobs:
           (cd templates/navi-daemon && go build ./... && go vet ./...)
 
   external-consumer:
-    name: external modules — out-of-repo navi + component
+    name: external modules — out-of-repo navi + component + backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -154,3 +154,50 @@ jobs:
           go build ./...
           go vet ./...
           go run .
+
+      # internal/testdata/external-backend is a synthetic OUT-OF-REPO datastore
+      # backend (NAVI-376). It imports the public contract plus the contract's
+      # SHARED CONFORMANCE SUITE and runs it against its own implementation —
+      # which is what proves the suite belongs to the contract rather than being
+      # a helper only the in-repo backends can use. The boundary is checked
+      # exactly as for a third-party backend author.
+      - name: Check the external backend's import boundary
+        working-directory: internal/testdata/external-backend
+        run: |
+          # Direct imports INCLUDE test imports ({{join .TestImports}}): that is
+          # where this module imports the conformance suite, and a guard that
+          # only read {{join .Imports}} would not see it.
+          bad="$(go list -f '{{join .Imports "\n"}}{{join .TestImports "\n"}}' ./... \
+            | grep '^github.com/flintwillow-software/opennavi/' \
+            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance)$' || true)"
+          if [ -n "$bad" ]; then
+            echo "external backend imports non-contract packages:"
+            echo "$bad"
+            exit 1
+          fi
+
+          # -test: the closure must include test-only dependencies for the
+          # check to mean anything here.
+          leaked="$(go list -test -deps -f '{{.ImportPath}}' ./... \
+            | grep -E '^github.com/flintwillow-software/opennavi/(navi|internal|datastore/(inmem|fs|sqlite))(/|$)' || true)"
+          if [ -n "$leaked" ]; then
+            echo "external backend leaks runtime or implementation dependencies:"
+            echo "$leaked"
+            exit 1
+          fi
+
+          impure="$(go list -test -deps -f '{{.ImportPath}}' ./... \
+            | grep '^github.com/flintwillow-software/opennavi/' \
+            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance)$' || true)"
+          if [ -n "$impure" ]; then
+            echo "external backend's contract closure is not contract-pure:"
+            echo "$impure"
+            exit 1
+          fi
+
+      - name: Run the conformance suite against the external backend
+        working-directory: internal/testdata/external-backend
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./... -count=1

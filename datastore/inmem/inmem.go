@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
@@ -33,6 +34,11 @@ type Backend struct {
 	todos       map[string][]datastore.Todo
 	notes       map[string][]datastore.Note
 	memories    map[string]datastore.MemoryRecord
+	// bodyReads counts transcript body loads, for the conformance suite's
+	// metadata-without-bodies proof (it implements
+	// conformance.ReadReporter). Metadata lookups deliberately do not
+	// touch it.
+	bodyReads int64
 }
 
 // New returns an empty in-memory backend. It implements
@@ -48,6 +54,15 @@ func New() *Backend {
 }
 
 var _ datastore.Backend = (*Backend)(nil)
+
+// ResetReads clears the transcript read counter (conformance.ReadReporter).
+func (b *Backend) ResetReads() { atomic.StoreInt64(&b.bodyReads, 0) }
+
+// BodyReads reports transcript body loads since the last ResetReads.
+// TranscriptInfo and the thought-row methods must not count here: the
+// point of the counter is that cold-start enumeration never reads a
+// conversation (ADR 0011 decision 5).
+func (b *Backend) BodyReads() int { return int(atomic.LoadInt64(&b.bodyReads)) }
 
 // Thoughts returns the thought/transcript view.
 func (b *Backend) Thoughts() datastore.Thoughts { return thoughts{b} }
@@ -86,6 +101,7 @@ func (t thoughts) LoadTranscript(thoughtID string) ([]datastore.Entry, error) {
 	if !ok {
 		return nil, datastore.ErrTranscriptNotFound
 	}
+	atomic.AddInt64(&t.b.bodyReads, 1)
 	return cloneEntries(entries), nil
 }
 
