@@ -94,16 +94,21 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithShortTermMemory(),
 	)
 
-	// The reference navi declares both backends: `fs` is the compiled default
-	// (ADR 0011 — markdown + frontmatter, human-inspectable, durable), so
-	// transcripts, memory, and tool state survive a restart; `inmem` stays
-	// selectable with `datastore.backend: inmem` for a volatile run. The
-	// thought queue and cron tick state stay on SQLite.
+	// The reference navi declares all three backends: `fs` is the compiled
+	// default (ADR 0011 — markdown + frontmatter, human-inspectable, durable),
+	// so transcripts, memory, and tool state survive a restart; `sqlite` is the
+	// single-file transactional option selected with `datastore.backend:
+	// sqlite`, rooted at the same database the cross-process mailbox and cron
+	// tick state already use; `inmem` stays selectable with `datastore.backend:
+	// inmem` for a volatile run.
 	//
 	// The fs root sits beside the session database — `var/` is this repo's only
 	// artifact directory — and a runtime config `datastore.params.path`
-	// overrides it.
+	// overrides either durable backend's location.
 	if err := n.Datastores.Add(fs.CandidateAt(fsStateRoot(rc.SessionDB))); err != nil {
+		return err
+	}
+	if err := n.Datastores.Add(sqlite.CandidateAt(rc.SessionDB)); err != nil {
 		return err
 	}
 	if err := n.Datastores.Add(inmem.Candidate()); err != nil {

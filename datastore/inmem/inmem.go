@@ -1,8 +1,9 @@
 // Package inmem is the reference in-memory datastore backend: a minimal,
-// non-durable implementation of every aggregate in the datastore
-// contract. It exists so the contract is testable now, without waiting on
-// the shipped durable backends (datastore/fs, NAVI-365; datastore/sqlite,
-// NAVI-364). Nothing survives the process.
+// non-durable implementation of every aggregate in the datastore contract. It
+// is the contract's reference implementation and the backend for tests and
+// volatile runs; the shipped durable backends are datastore/fs (`fs`,
+// markdown + frontmatter) and datastore/sqlite (one transactional file).
+// Nothing survives the process.
 package inmem
 
 import (

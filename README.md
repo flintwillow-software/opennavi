@@ -49,14 +49,17 @@ The SDK provides:
   the thought queue and deferral, not by compacting a conversation (ADR 0013).
 - **Provider layer** (`internal/llm`) — Ollama and OpenRouter with a fallback
   chain.
-- **Datastore** (`datastore/`, `datastore/sqlite/`) — the public persistence
-  contract (per-aggregate views, candidate backends) with the SQLite
-  implementation; RAM is the source of truth at runtime (ADR 0011).
+- **Datastore** (`datastore/`) — the public persistence contract
+  (per-aggregate views, candidate backends) with three shipped backends: `fs`
+  (markdown + frontmatter, the compiled default), `sqlite` (one transactional
+  file, WAL), and `inmem` (the non-durable reference). RAM is the source of
+  truth at runtime (ADR 0011).
 - **Tool system** (`tool/`) — the `Tool` type, the registry and bridge, and
   the shipped catalog: builtins (`file_read`, `shell_exec`) plus the todo,
   note, time, http, and thoughts tools.
-- **Starter modules** (`templates/`) — `navi-code` (a CLI coding agent) and
-  `navi-daemon` (an always-on daemon).
+- **Starter modules** (`templates/`) — `navi-code` (a CLI coding agent),
+  `navi-daemon` (an always-on daemon), and `navi-sqlite` (state in one SQLite
+  file).
 
 ## Architecture
 
