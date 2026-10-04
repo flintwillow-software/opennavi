@@ -16,12 +16,15 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// Candidate returns the reference backend descriptor. It is compiled in
-// with a navi via n.Datastores.Add(inmem.Candidate()).
+// Candidate returns the reference backend descriptor. It is compiled in with a
+// navi via n.Datastores.Add(inmem.Candidate()). It is deliberately NOT marked
+// default: `datastore/fs` is the first shipped backend and the compiled default
+// (ADR 0011), and this backend is the non-durable reference for tests and for a
+// deliberately volatile run (`datastore.backend: inmem`).
 func Candidate() datastore.Candidate {
 	return datastore.Candidate{
 		Name:    "inmem",
-		Default: true,
+		Default: false,
 		Open:    func(datastore.Params) (datastore.Backend, error) { return New(), nil },
 	}
 }

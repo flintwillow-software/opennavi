@@ -67,8 +67,11 @@ n := navi.New("oncall-bot",
 )
 
 // One datastore backs thought state, transcripts, tool state, and memory.
-// Candidates are declared here; runtime config selects the active backend.
-ds := n.Datastores.Add(datastore.FS("~/.opennavi/oncall-bot"))
+// Candidates are declared here; runtime config selects the active one — `fs`
+// (markdown + frontmatter, below a per-navi root) is the compiled default,
+// `inmem` the non-durable reference.
+n.Datastores.Add(fs.CandidateAt("~/.opennavi/oncall-bot"))
+ds := n.Datastores.Handle()
 
 n.Skills.Add(skill.Skill{Name: "incident_response", Content: incidentResponse})
 builtins, _ := builtin.Tools(workDir)

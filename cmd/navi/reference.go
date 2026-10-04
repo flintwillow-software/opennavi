@@ -12,11 +12,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector/cron"
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/datastore/fs"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/config"
@@ -92,12 +94,18 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithShortTermMemory(),
 	)
 
-	// The reference navi declares the non-durable reference datastore: it
-	// integrates through the contract (the catalog takes
-	// n.Datastores.Handle().Stateful()), but transcripts, memory, and tool
-	// state stay in memory until the durable backends land
-	// (datastore/fs, NAVI-365; datastore/sqlite, NAVI-364). The thought
-	// queue and cron tick state stay on SQLite.
+	// The reference navi declares both backends: `fs` is the compiled default
+	// (ADR 0011 — markdown + frontmatter, human-inspectable, durable), so
+	// transcripts, memory, and tool state survive a restart; `inmem` stays
+	// selectable with `datastore.backend: inmem` for a volatile run. The
+	// thought queue and cron tick state stay on SQLite.
+	//
+	// The fs root sits beside the session database — `var/` is this repo's only
+	// artifact directory — and a runtime config `datastore.params.path`
+	// overrides it.
+	if err := n.Datastores.Add(fs.CandidateAt(fsStateRoot(rc.SessionDB))); err != nil {
+		return err
+	}
 	if err := n.Datastores.Add(inmem.Candidate()); err != nil {
 		return err
 	}
@@ -123,6 +131,13 @@ func serveReferenceNavi(p runParams) error {
 	}
 
 	return n.Run(p.ctx)
+}
+
+// fsStateRoot is where the fs backend keeps a navi's state: beside the session
+// database, so the reference navi's artifacts stay under `var/`. A runtime
+// config `datastore.params.path` overrides it.
+func fsStateRoot(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "state")
 }
 
 // mergeRuntime applies the merge chain (file → env → flags) and validates.

@@ -15,7 +15,9 @@ import (
 
 func TestCandidateAndViews(t *testing.T) {
 	c := Candidate()
-	if c.Name != "inmem" || !c.Default || c.Open == nil {
+	// Not the default: `fs` is (ADR 0011). This backend is the non-durable
+	// reference, selected explicitly or when it is the only candidate.
+	if c.Name != "inmem" || c.Default || c.Open == nil {
 		t.Fatalf("candidate = %+v", c)
 	}
 	backend, err := c.Open(nil)
