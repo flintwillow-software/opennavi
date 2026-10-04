@@ -110,6 +110,7 @@ portal/tui            public  terminal portal
 model/                public  Model + provider descriptor
 skill/                public  Skill value (embedded content)
 datastore/            public  datastore contract + data types (metadata/detail aggregates)
+datastore/conformance public  the shared backend conformance suite an implementation runs
 datastore/fs          public  markdown + frontmatter backend
 datastore/sqlite      public  SQLite backend (thoughts, transcripts, stateful state)
 navi/                 public  composition root; imports the above
@@ -130,7 +131,11 @@ external component's whole closure (NAVI-355), and *public packages import no
 runtime internals* asserts the rule across every public package (NAVI-356).
 `datastore` is itself a public package (data types, their interfaces, in-memory
 helpers; the durable implementations are `datastore/fs` and `datastore/sqlite`),
-so `tool/{note,todo,registry} → datastore` is public→public.
+so `tool/{note,todo,registry} → datastore` is public→public. The contract also
+ships the **shared backend conformance suite** (`datastore/conformance`): one
+suite every backend runs, importable by an implementation in its own module —
+`internal/testdata/external-backend` is the fixture that proves it, and the CI
+job checks that fixture's boundary exactly as a third-party backend author's.
 
 ## Boundaries
 

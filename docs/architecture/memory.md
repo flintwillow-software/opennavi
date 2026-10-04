@@ -104,7 +104,10 @@ volume, and most thoughts will write nothing at all.
 Both tiers **require a configured datastore** ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md)):
 memory is persisted through it rather than held only in RAM, and a navi that
 declares memory without a datastore fails at assembly instead of silently losing
-what it learned.
+what it learned. Memory is one of the aggregates every backend must serve, so the
+shared backend conformance suite (`datastore/conformance`) covers it: scope,
+subject, tag and substring filtering, recall ordering, and the fact that expiry is
+**carried** rather than interpreted (pruning is NAVI-363, not the store).
 
 The natural write point is therefore **the end of a thought** — a post-thought
 analysis pass, at the same lifecycle point where the runner already flushes the

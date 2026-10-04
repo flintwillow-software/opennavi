@@ -13,15 +13,32 @@ import (
 
 // ── the closing check (ADR 0016) ────────────────────────────────────────
 
-// recordingRunner records the order thoughts ran in and can fail named
-// stages, so a plan's completion can be driven deterministically.
+// recordingRunner records the order thoughts ran in, can fail named
+// stages, and (when gated) holds every run until the test releases it.
+//
+// The gate matters: a live navi with free workers will claim and finish a
+// stage the instant it is enqueued, so staging a plan one stage at a time
+// lets the navi observe a *partial* plan and close it (see NAVI-382). Real
+// plans are staged by a running planner thought, which is not the case in
+// these tests, so the test stages the whole plan behind the gate.
 type recordingRunner struct {
 	mu    sync.Mutex
 	order []string
 	fail  map[string]bool
+	gate  chan struct{}
 }
 
+func newRecordingRunner() *recordingRunner {
+	return &recordingRunner{gate: make(chan struct{})}
+}
+
+// release lets every gated run proceed.
+func (r *recordingRunner) release() { close(r.gate) }
+
 func (r *recordingRunner) Run(_ context.Context, t *thought.Thought) error {
+	if r.gate != nil {
+		<-r.gate
+	}
 	r.mu.Lock()
 	r.order = append(r.order, t.ID)
 	shouldFail := r.fail[t.ID]
@@ -81,7 +98,7 @@ func verifications(n *Navi) []*thought.Thought {
 // task leaves a verification thought behind, it depends on the plan's last
 // stage, it is identifiable as a check, and it runs after the plan.
 func TestDrainedPlanGetsAVerificationCheck(t *testing.T) {
-	r := &recordingRunner{}
+	r := newRecordingRunner()
 	n := New("planclose", WithRunner(r), WithWorkers(2))
 
 	cancel, done := startServing(t, n)
@@ -90,6 +107,7 @@ func TestDrainedPlanGetsAVerificationCheck(t *testing.T) {
 	stage(t, n, "t1")
 	stage(t, n, "t2", "t1")
 	stage(t, n, "t3", "t2")
+	r.release()
 	waitStatus(t, n, "t3", "complete")
 
 	check := waitForThought(t, n, func(x *thought.Thought) bool {
@@ -128,7 +146,8 @@ func TestDrainedPlanGetsAVerificationCheck(t *testing.T) {
 // TestFailedPlanLeavesNoVerificationCheck: a plan that did not succeed is
 // not closed with a check — there is nothing verified to report.
 func TestFailedPlanLeavesNoVerificationCheck(t *testing.T) {
-	r := &recordingRunner{fail: map[string]bool{"t2": true}}
+	r := newRecordingRunner()
+	r.fail = map[string]bool{"t2": true}
 	n := New("planclose-fail", WithRunner(r), WithWorkers(2))
 
 	cancel, done := startServing(t, n)
@@ -137,6 +156,7 @@ func TestFailedPlanLeavesNoVerificationCheck(t *testing.T) {
 	stage(t, n, "t1")
 	stage(t, n, "t2", "t1")
 	stage(t, n, "t3", "t2")
+	r.release()
 	waitStatus(t, n, "t2", "failed")
 	waitStatus(t, n, "t3", "failed") // failed transitively, by design (NAVI-378)
 
@@ -181,7 +201,8 @@ func TestModelQueuedVerificationSuppressesSynthesis(t *testing.T) {
 // TestPlanCloseCanBeDisabled: authors who do not want the extra thought
 // can turn it off (the guidance still asks the model to close its plan).
 func TestPlanCloseCanBeDisabled(t *testing.T) {
-	r := &recordingRunner{}
+	r := newRecordingRunner()
+	r.release()
 	n := New("planclose-off", WithRunner(r), WithWorkers(2), WithPlanCloseCheck(false))
 
 	cancel, done := startServing(t, n)
@@ -201,7 +222,7 @@ func TestPlanCloseCanBeDisabled(t *testing.T) {
 // depends on both, and a second member completing does not queue another
 // (the plan id is derived from the sinks).
 func TestForkedPlanClosesOnce(t *testing.T) {
-	r := &recordingRunner{}
+	r := newRecordingRunner()
 	n := New("planclose-fork", WithRunner(r), WithWorkers(3))
 
 	cancel, done := startServing(t, n)
@@ -210,6 +231,7 @@ func TestForkedPlanClosesOnce(t *testing.T) {
 	stage(t, n, "t1")
 	stage(t, n, "left", "t1")
 	stage(t, n, "right", "t1")
+	r.release()
 	waitStatus(t, n, "left", "complete")
 	waitStatus(t, n, "right", "complete")
 
@@ -230,7 +252,8 @@ func TestForkedPlanClosesOnce(t *testing.T) {
 // TestSingleThoughtIsNotAPlan: a standalone thought gets no closing check
 // (there is no plan to close).
 func TestSingleThoughtIsNotAPlan(t *testing.T) {
-	r := &recordingRunner{}
+	r := newRecordingRunner()
+	r.release()
 	n := New("planclose-single", WithRunner(r), WithWorkers(2))
 
 	cancel, done := startServing(t, n)
