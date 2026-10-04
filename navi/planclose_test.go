@@ -55,12 +55,85 @@ func (r *recordingRunner) ran() []string {
 	return append([]string(nil), r.order...)
 }
 
+// stagingRunner runs a thought the moment the queue claims it, except the
+// thoughts named as holds: those block until released (or the run is
+// cancelled).
+//
+// Unlike recordingRunner's gate, a plan staged under this runner is staged
+// the way production stages it — one stage enqueued, claimed, and finished
+// before the next exists (NAVI-382) — so it pins the real behaviour rather
+// than a gated approximation. The holds exist only to keep workers busy so
+// a synthesized check stays *pending* while the test grows the plan around
+// it.
+type stagingRunner struct {
+	mu    sync.Mutex
+	holds map[string]chan struct{}
+}
+
+func newStagingRunner(holdIDs ...string) *stagingRunner {
+	r := &stagingRunner{holds: make(map[string]chan struct{}, len(holdIDs))}
+	for _, id := range holdIDs {
+		r.holds[id] = make(chan struct{})
+	}
+	return r
+}
+
+// release lets the named hold run. Releasing an unknown or already
+// released hold is a no-op.
+func (r *stagingRunner) release(id string) {
+	r.mu.Lock()
+	ch := r.holds[id]
+	delete(r.holds, id)
+	r.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// releaseAll lets every remaining hold run, so shutdown never waits on a
+// test's hold.
+func (r *stagingRunner) releaseAll() {
+	r.mu.Lock()
+	chs := make([]chan struct{}, 0, len(r.holds))
+	for _, ch := range r.holds {
+		chs = append(chs, ch)
+	}
+	r.holds = make(map[string]chan struct{})
+	r.mu.Unlock()
+	for _, ch := range chs {
+		close(ch)
+	}
+}
+
+func (r *stagingRunner) Run(ctx context.Context, t *thought.Thought) error {
+	r.mu.Lock()
+	ch := r.holds[t.ID]
+	r.mu.Unlock()
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 // stage enqueues a pending thought, optionally depending on earlier stages.
 func stage(t *testing.T, n *Navi, id string, deps ...string) {
 	t.Helper()
+	stagePrio(t, n, id, 4, deps...)
+}
+
+// stagePrio is stage with an explicit priority. Tests that need to decide
+// which thought a freed worker claims next set it here: Enqueue clamps
+// self-scheduled work into one band, so priority plus stable queue order is
+// the scheduling a test can rely on.
+func stagePrio(t *testing.T, n *Navi, id string, priority int, deps ...string) {
+	t.Helper()
 	now := time.Now().UTC()
 	if err := n.Thoughts.Enqueue(&thought.Thought{
-		ID: id, Prompt: "stage " + id, Priority: 4, Status: thought.ThoughtPending,
+		ID: id, Prompt: "stage " + id, Priority: priority, Status: thought.ThoughtPending,
 		DependsOn: deps, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -265,6 +338,113 @@ func TestSingleThoughtIsNotAPlan(t *testing.T) {
 	time.Sleep(250 * time.Millisecond)
 	if got := verifications(n); len(got) != 0 {
 		t.Fatalf("a standalone thought was closed with %d check(s)", len(got))
+	}
+}
+
+// TestIncrementallyStagedPlanClosesAgainstFinalSinks pins NAVI-382's real
+// case: a plan staged one stage at a time — how a still-running planner
+// thought creates it, since `thoughts_create` returns the id the next stage
+// names.
+//
+// Stage 1 (t1 → left) drains on its own, so the closing check fires on the
+// partial plan; stage 2 (right, a second fork on t1) arrives afterwards.
+// The plan must end up closed against its final sinks [left right], and the
+// superseded check for [left] — still pending, because the holds keep both
+// workers off it — must be cancelled.
+//
+// No gate holds the plan's stages back: t1 runs and completes before left is
+// enqueued, and left before right. The holds exist only to keep workers busy.
+// They share the synthesized check's priority band, so a worker freed at the
+// wrong moment claims a hold (enqueued earlier, stable queue order) instead
+// of the check.
+func TestIncrementallyStagedPlanClosesAgainstFinalSinks(t *testing.T) {
+	r := newStagingRunner("t1", "hold-1", "hold-2", "hold-3")
+	n := New("planclose-incremental", WithRunner(r), WithWorkers(2))
+
+	cancel, done := startServing(t, n)
+	defer stopServing(t, cancel, done) // registered first, so it runs last
+	defer r.releaseAll()               // drain the holds before shutdown
+
+	// Stage 1, one thought at a time: t1 runs (and holds), left queues behind.
+	stagePrio(t, n, "t1", 1)
+	waitStatus(t, n, "t1", "running")
+	stagePrio(t, n, "left", 2, "t1")
+
+	// Occupiers for both workers around the drain.
+	stagePrio(t, n, "hold-1", 3)
+	stagePrio(t, n, "hold-2", thought.SelfScheduledHighBound)
+	stagePrio(t, n, "hold-3", thought.SelfScheduledHighBound)
+
+	r.release("t1")
+	waitStatus(t, n, "left", "complete")
+
+	premature := waitForThought(t, n, func(x *thought.Thought) bool {
+		return isSynthesizedCheck(x) && sameIDSet(x.DependsOn, []string{"left"})
+	}, "the check for the partial plan")
+	if premature.Status != thought.ThoughtPending {
+		t.Fatalf("premature check status = %s, want pending (no worker should have claimed it)", premature.Status)
+	}
+
+	// Stage 2: the plan forks on t1, past the drained {t1, left} plan.
+	stagePrio(t, n, "right", 4, "t1")
+	r.release("hold-1")
+	waitStatus(t, n, "right", "complete")
+
+	final := waitForThought(t, n, func(x *thought.Thought) bool {
+		return isSynthesizedCheck(x) && sameIDSet(x.DependsOn, []string{"left", "right"})
+	}, "the check for the final sink set")
+	if final.ID == premature.ID {
+		t.Fatalf("the final check is the premature one (%s)", final.ID)
+	}
+	if got := verifications(n); len(got) != 2 {
+		t.Fatalf("the plan produced %d checks, want the premature one and its successor: %v", len(got), ids(got))
+	}
+
+	got, err := n.Thoughts.GetThought(premature.ID)
+	if err != nil {
+		t.Fatalf("premature check: %v", err)
+	}
+	if got.Status != thought.ThoughtCancelled {
+		t.Fatalf("superseded check status = %s, want cancelled", got.Status)
+	}
+}
+
+// TestExtendingADrainedPlanIssuesAFreshCheck: a plan that already drained
+// and was checked still gets checked again when it grows a new sink — the
+// extension is not silently left unclosed. The superseded check had already
+// run, so it is kept; the new check is added alongside it.
+func TestExtendingADrainedPlanIssuesAFreshCheck(t *testing.T) {
+	r := newRecordingRunner()
+	n := New("planclose-extend", WithRunner(r), WithWorkers(2))
+
+	cancel, done := startServing(t, n)
+	defer stopServing(t, cancel, done)
+
+	stage(t, n, "t1")
+	stage(t, n, "t2", "t1")
+	r.release()
+	waitStatus(t, n, "t2", "complete")
+
+	first := waitForThought(t, n, isSynthesizedCheck, "the check for the drained plan")
+	waitStatus(t, n, first.ID, "complete")
+
+	// The plan grows a new sink after it already drained and was checked.
+	stage(t, n, "t3", "t2")
+	waitStatus(t, n, "t3", "complete")
+
+	second := waitForThought(t, n, func(x *thought.Thought) bool {
+		return isSynthesizedCheck(x) && x.ID != first.ID
+	}, "the check for the extended plan")
+	if !sameIDSet(second.DependsOn, []string{"t3"}) {
+		t.Fatalf("extended check depends_on = %v, want the new sink [t3]", second.DependsOn)
+	}
+	waitStatus(t, n, second.ID, "complete")
+
+	if got, err := n.Thoughts.GetThought(first.ID); err != nil || got.Status != thought.ThoughtComplete {
+		t.Fatalf("superseded check = %v (err %v), want it kept complete", got, err)
+	}
+	if len(verifications(n)) != 2 {
+		t.Fatalf("extended plan produced %d checks, want 2: %v", len(verifications(n)), ids(verifications(n)))
 	}
 }
 
