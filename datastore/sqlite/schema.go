@@ -260,6 +260,33 @@ var migrations = []string{
 	// completed, and recovery keeps the graph so a restart cannot lose
 	// the plan's order (`blocked` is derived, never stored).
 	`ALTER TABLE thoughts ADD COLUMN depends_on TEXT`,
+	// 16: the datastore contract's thought/transcript aggregate (NAVI-364).
+	// A thought's transcript is keyed by thought id (ADR 0011 decision 8),
+	// not by the retired session handle the messages table used. The meta
+	// table carries the projection TranscriptInfo answers from — message
+	// count and latest entry time — so enumerating thoughts or reading
+	// transcript metadata never selects a message body, the property that
+	// makes unbounded retention affordable (ADR 0011 decision 5). The
+	// retired sessions/messages tables stay in place: migrations are
+	// append-only, and nothing reads them.
+	`CREATE TABLE IF NOT EXISTS thought_transcripts (
+		thought_id TEXT NOT NULL,
+		entry_index INTEGER NOT NULL,
+		id TEXT NOT NULL,
+		role TEXT NOT NULL,
+		message TEXT NOT NULL,
+		tool_call_id TEXT,
+		tool_name TEXT,
+		tool_input TEXT,
+		created_at DATETIME NOT NULL,
+		PRIMARY KEY (thought_id, entry_index)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_thought_transcripts_thought ON thought_transcripts(thought_id)`,
+	`CREATE TABLE IF NOT EXISTS thought_transcript_meta (
+		thought_id TEXT PRIMARY KEY,
+		message_count INTEGER NOT NULL,
+		updated_at DATETIME
+	)`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

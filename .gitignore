@@ -3,6 +3,7 @@
 /go.work.sum
 /templates/navi-code/navi-code
 /templates/navi-daemon/navi-daemon
+/templates/navi-sqlite/navi-sqlite
 /cmd/navi/navi.db
 /cmd/navi/navi.log
 /cmd/navi/state/
