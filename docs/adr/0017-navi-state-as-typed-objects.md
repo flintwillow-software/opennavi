@@ -92,6 +92,30 @@ to understand.
    code — the in-process TUI is its first consumer and a WebUI the second. A
    portal may ignore hints and render the raw surface when it wants bespoke UX.
 
+8. **An object type's source is the view its component was bound to.** The navi
+   author chooses each component's state view at declaration — the same way
+   `todo.Tools(naviID, view)` and `note.Tools(naviID, view)` already receive one —
+   and the object type reads through that view. The navi's own aggregates bind to
+   the navi's views (thoughts to the thought/transcript view, todo and note to the
+   stateful view their tools were given, memory to the memory view). The
+   datastore's per-aggregate routing is the default when a navi binds a single
+   backend; **per-type binding is how a navi mixes backends** (todos on `fs`,
+   notes on `postgresql`). One rule everywhere: read the type's view.
+
+9. **The surface is RAM-first and works without a datastore.** Live field values
+   come from the navi's in-memory state (ADR 0011: RAM is the source of truth);
+   the bound view is the fall-through for persisted detail — a completed
+   thought's transcript, hydrated long-term memory. A navi that declares no
+   datastore still exposes its types and serves their live values from memory;
+   only history that is not in RAM is unavailable.
+
+10. **The type is the top-level namespace.** A binding addresses objects by
+    type first: `GET /{type}`, `GET /{type}/{id}`, `GET /{type}/{id}/{detail}`,
+    `POST /{type}/{id}/{action}`. The surface's own routes are namespaced away
+    from that root (`GET /_types`, `GET /_deltas`) so a type may be named
+    anything. Wire framing is still open (open question 2); this fixes the shape
+    a binding exposes, not the bytes.
+
 **Why now.** The surface is cheapest to introduce while the component count is
 small: the exposed types are the navi's own aggregates (thought, todo, note,
 memory) and every portal is still small. Declaring types, actions, and
@@ -152,6 +176,8 @@ examples every later portal copies.
    `detail`, `chat`, `graph`, `board`), the exact hint shape, and the default
    presentation a type gets with no hints.
 2. **Framing and transport** for the remote binding (ADR 0012 open question 1).
+   Decision 10 fixes the route shape; the bytes on the wire do not follow from
+   it.
 3. **Where IAM policy is expressed** — navi-level config, per-portal
    declaration, or an external source (ADR 0012 open question 2).
 4. **Query shape.** Start with declared per-type filters (no expression
