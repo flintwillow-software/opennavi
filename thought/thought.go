@@ -88,9 +88,6 @@ type Thought struct {
 	// this time passes. Zero = claimable now. Durability is real state
 	// not an in-memory timer: crash recovery preserves it.
 	DeferUntil time.Time
-	// SessionID links the thought to its persisted transcript, when one
-	// exists.
-	SessionID string
 	// Foreground marks this thought as the binary run's interactive work
 	// it may claim the queue's reserved foreground slots and
 	// competes by the same priority/preemption rules as everything else.

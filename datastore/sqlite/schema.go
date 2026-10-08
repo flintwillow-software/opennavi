@@ -287,6 +287,12 @@ var migrations = []string{
 		message_count INTEGER NOT NULL,
 		updated_at DATETIME
 	)`,
+	// 17: retire Thought.SessionID (NAVI-388). The session model is gone
+	// (ADR 0011 decision 8: a thought's transcript is keyed by thought id),
+	// and the field was never written on the live path — the queue discards
+	// runner mutations to it. Drop the dead column; nothing indexes or
+	// references it.
+	`ALTER TABLE thoughts DROP COLUMN session_id`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

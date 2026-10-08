@@ -78,7 +78,6 @@ type Thought struct {
     Skills       []string    // compiled-in skills to load (ADR 0013)
     DependsOn    []string    // thoughts this one waits for (ADR 0015)
     DeferUntil   time.Time   // durable not-before schedule
-    SessionID    string      // persisted transcript, when one exists
     Foreground   bool
     CreatedAt, UpdatedAt time.Time
     // ...

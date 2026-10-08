@@ -362,7 +362,6 @@ type row struct {
 	at           time.Time // last activity time — the render computes the age (ticking clock)
 	model        string    // per-thought provider overrides/selected model (abbreviated)
 	checkpoint   bool      // thought carries a checkpoint (parked/resumable)
-	session      string    // session-log pointer
 	activity     string    // live preview: latest tool call / delta snippet (NAVI-335)
 }
 
@@ -531,7 +530,7 @@ func (m *tuiModel) rebuild(thoughts []*thought.Thought) {
 	m.rows = []row{}
 	m.byID = make(map[string]int)
 	for _, t := range thoughts {
-		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.SessionID, t.DependsOn, t.UpdatedAt)
+		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.DependsOn, t.UpdatedAt)
 		if i, ok := m.byID[t.ID]; ok {
 			m.rows[i].verification = t.IsVerification()
 		}
@@ -564,7 +563,7 @@ func (m *tuiModel) refreshBlocked() {
 	}
 }
 
-func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, session string, deps []string, at time.Time) {
+func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, deps []string, at time.Time) {
 	if i, ok := m.byID[id]; ok && i < len(m.rows) {
 		m.rows[i].status = status
 		m.rows[i].priority = prio
@@ -573,7 +572,6 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		}
 		m.rows[i].model = model
 		m.rows[i].checkpoint = checkpoint
-		m.rows[i].session = session
 		m.rows[i].deps = deps
 		m.rows[i].at = at
 		return
@@ -585,7 +583,6 @@ func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, che
 		prompt:     prompt,
 		model:      model,
 		checkpoint: checkpoint,
-		session:    session,
 		deps:       deps,
 		at:         at,
 	})
@@ -630,7 +627,7 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 		if thoughts, _ := m.transport.Snapshot(); len(thoughts) > 0 {
 			m.rebuild(thoughts)
 		} else {
-			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, "", nil, time.Now().UTC())
+			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, nil, time.Now().UTC())
 		}
 		_ = ok
 	}
@@ -1138,9 +1135,6 @@ func (m *tuiModel) renderList() string {
 		flags := "  "
 		if r.checkpoint {
 			flags = " C "
-		}
-		if r.session != "" {
-			flags += "S"
 		}
 		if r.verification {
 			flags += "V"

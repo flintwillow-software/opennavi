@@ -506,7 +506,7 @@ func (q *Queue) Dequeue() (*Thought, bool) {
 		// (Checkpoint, and anything else) never race with external
 		// GetThought readers — they work on the clone; the worker merges
 		// the checkpoint back via Pause on cancellation/preemption.
-		// Mutations to other fields (SessionID, LogPath, ...) are
+		// Mutations to other fields (LogPath, Result, ...) are
 		// isolated to the clone and discarded.
 		claimed := t.Clone()
 		q.mu.Unlock()
