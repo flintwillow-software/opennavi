@@ -193,3 +193,41 @@ func TestTypeRegistrationValidation(t *testing.T) {
 		t.Fatal("Add accepted a duplicate built-in type name")
 	}
 }
+
+func TestToolStateTypesReadThroughTheBoundView(t *testing.T) {
+	n := New("objects-toolstate", WithPlanCloseCheck(false))
+	n.Datastores.Handle().Bind(inmem.New())
+	state := n.Datastores.Handle().Stateful()
+
+	for _, reg := range ToolStateTypes("navi-a", state) {
+		if err := n.Types.Add(reg); err != nil {
+			t.Fatalf("Add(%s): %v", reg.Type.Name, err)
+		}
+	}
+	if _, err := state.ReplaceTodos("navi-a", []datastore.Todo{{Text: "ship it", Priority: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReplaceTodos("navi-b", []datastore.Todo{{Text: "someone else's"}}); err != nil {
+		t.Fatal(err)
+	}
+	note, err := state.UpsertNote("navi-a", datastore.Note{Title: "runbook", Body: "steps"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newObjectSurface(n.Types)
+	todos, _, err := s.List(TypeTodo, object.Query{})
+	if err != nil {
+		t.Fatalf("List(todo): %v", err)
+	}
+	if len(todos) != 1 || todos[0].Fields["text"] != "ship it" {
+		t.Fatalf("todo list = %+v, want only navi-a's todo", todos)
+	}
+	got, err := s.Get(TypeNote, note.ID)
+	if err != nil || got.Fields["title"] != "runbook" {
+		t.Fatalf("Get(note) = %+v (%v)", got, err)
+	}
+	if _, err := s.Get(TypeNote, "ghost"); !errors.Is(err, object.ErrNotFound) {
+		t.Fatalf("Get(ghost note) = %v, want ErrNotFound", err)
+	}
+}
