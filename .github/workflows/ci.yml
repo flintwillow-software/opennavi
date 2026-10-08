@@ -111,7 +111,7 @@ jobs:
         run: |
           bad="$(go list -f '{{join .Imports "\n"}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object)$' || true)"
           if [ -n "$bad" ]; then
             echo "external component imports non-contract packages:"
             echo "$bad"
@@ -133,7 +133,7 @@ jobs:
           # relies on. NAVI-375 adds `datastore` to that contract layer.
           impure="$(go list -deps -f '{{.ImportPath}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object)$' || true)"
           if [ -n "$impure" ]; then
             echo "external component's contract closure is not contract-pure:"
             echo "$impure"
