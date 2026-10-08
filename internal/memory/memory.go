@@ -30,6 +30,18 @@ import (
 // memory (NAVI-350), not here.
 var alwaysLoaded = []datastore.Scope{datastore.ScopeUser, datastore.ScopeSession}
 
+// Change classifies a memory mutation reported to Config.OnChange.
+type Change string
+
+const (
+	// ChangeCreated is a record that did not exist before.
+	ChangeCreated Change = "create"
+	// ChangeUpdated is a record that replaced an existing one.
+	ChangeUpdated Change = "update"
+	// ChangeRemoved is a record that was deleted.
+	ChangeRemoved Change = "delete"
+)
+
 // Config builds a Service.
 type Config struct {
 	// Memory is the datastore memory view, used to hydrate at construction
@@ -40,13 +52,20 @@ type Config struct {
 	// Subject keys the records (the navi's identity for the MVP's
 	// single-user deployment).
 	Subject string
+	// OnChange, when set, observes a memory mutation AFTER it has been
+	// persisted, so a live view (the typed-object surface, ADR 0017) never
+	// reports a record its own reads cannot yet see. It runs on the ordered
+	// writer's goroutine and must be cheap and must not re-enter the
+	// service.
+	OnChange func(rec datastore.MemoryRecord, change Change)
 }
 
 // Service is the always-loaded short-term memory tier.
 type Service struct {
-	memory  datastore.Memory
-	submit  func(datastore.Write)
-	subject string
+	memory   datastore.Memory
+	submit   func(datastore.Write)
+	subject  string
+	onChange func(datastore.MemoryRecord, Change)
 
 	mu      sync.RWMutex
 	records map[string]datastore.MemoryRecord
@@ -65,10 +84,11 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("memory: a subject is required")
 	}
 	s := &Service{
-		memory:  cfg.Memory,
-		submit:  cfg.Submit,
-		subject: cfg.Subject,
-		records: map[string]datastore.MemoryRecord{},
+		memory:   cfg.Memory,
+		submit:   cfg.Submit,
+		subject:  cfg.Subject,
+		onChange: cfg.OnChange,
+		records:  map[string]datastore.MemoryRecord{},
 	}
 	if err := s.hydrate(); err != nil {
 		return nil, err
@@ -135,13 +155,16 @@ func (s *Service) Write(rec datastore.MemoryRecord) (datastore.MemoryRecord, err
 	now := time.Now().UTC()
 
 	s.mu.Lock()
+	change := ChangeUpdated
 	if rec.ID == "" {
 		rec.ID = datastore.NewID()
 		rec.CreatedAt = now
+		change = ChangeCreated
 	} else if prev, ok := s.records[rec.ID]; ok {
 		rec.CreatedAt = prev.CreatedAt
 	} else {
 		rec.CreatedAt = now
+		change = ChangeCreated
 	}
 	rec.Subject = s.subject
 	rec.UpdatedAt = now
@@ -149,14 +172,15 @@ func (s *Service) Write(rec datastore.MemoryRecord) (datastore.MemoryRecord, err
 	s.records[rec.ID] = rec
 	s.mu.Unlock()
 
-	s.stageWrite(rec)
+	s.stageWrite(rec, change)
 	return rec, nil
 }
 
 // Remove deletes a record by id.
 func (s *Service) Remove(id string) error {
 	s.mu.Lock()
-	if _, ok := s.records[id]; !ok {
+	rec, ok := s.records[id]
+	if !ok {
 		s.mu.Unlock()
 		return fmt.Errorf("memory: %w (id %s)", datastore.ErrMemoryNotFound, id)
 	}
@@ -166,7 +190,13 @@ func (s *Service) Remove(id string) error {
 	s.submit(datastore.Write{
 		Aggregate: datastore.AggregateMemory,
 		Key:       "memory/" + id,
-		Apply:     func(b datastore.Backend) error { return b.Memory().Forget(id) },
+		Apply: func(b datastore.Backend) error {
+			if err := b.Memory().Forget(id); err != nil {
+				return err
+			}
+			s.notify(rec, ChangeRemoved)
+			return nil
+		},
 	})
 	return nil
 }
@@ -184,16 +214,26 @@ func (s *Service) Records() []datastore.MemoryRecord {
 	return out
 }
 
-func (s *Service) stageWrite(rec datastore.MemoryRecord) {
+func (s *Service) stageWrite(rec datastore.MemoryRecord, change Change) {
 	clone := rec
 	s.submit(datastore.Write{
 		Aggregate: datastore.AggregateMemory,
 		Key:       "memory/" + clone.ID,
 		Apply: func(b datastore.Backend) error {
-			_, err := b.Memory().Remember(clone)
-			return err
+			if _, err := b.Memory().Remember(clone); err != nil {
+				return err
+			}
+			s.notify(clone, change)
+			return nil
 		},
 	})
+}
+
+// notify reports a persisted mutation to the configured observer.
+func (s *Service) notify(rec datastore.MemoryRecord, change Change) {
+	if s.onChange != nil {
+		s.onChange(rec, change)
+	}
 }
 
 func (s *Service) byScope(scope datastore.Scope) []datastore.MemoryRecord {

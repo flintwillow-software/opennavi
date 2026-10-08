@@ -29,9 +29,11 @@ const (
 // per component at declaration, not by the navi: the author holds the view,
 // so the author registers the type with it.
 func ToolStateTypes(naviID string, view datastore.ToolState) []TypeRegistration {
+	todos := &todoProvider{naviID: naviID, view: view}
+	notes := &noteProvider{naviID: naviID, view: view}
 	return []TypeRegistration{
-		{Type: todoType(), Provider: &todoProvider{naviID: naviID, view: view}},
-		{Type: noteType(), Provider: &noteProvider{naviID: naviID, view: view}},
+		{Type: todoType(), Provider: todos, Act: todos.act},
+		{Type: noteType(), Provider: notes, Act: notes.act},
 	}
 }
 

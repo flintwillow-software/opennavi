@@ -181,6 +181,9 @@ func (n *Navi) assembleMemory() error {
 		Memory:  n.Datastores.handle.Memory(),
 		Submit:  n.Datastores.handle.Submit,
 		Subject: n.name,
+		// Live view (ADR 0017 decision 6): a persisted memory mutation is a
+		// create/update/delete delta on the object surface.
+		OnChange: n.memoryChanged,
 	})
 	if err != nil {
 		return fmt.Errorf("navi: short-term memory: %w", err)

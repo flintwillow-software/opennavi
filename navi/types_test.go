@@ -8,15 +8,17 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/object"
+	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
 // objectNavi builds a navi with the built-in types exposed and no datastore
-// bound: the surface must serve live values from memory alone.
+// bound: the surface must serve live values from memory alone. The surface
+// acts as a permissive test operator so action tests exercise dispatch.
 func objectNavi(t *testing.T) (*Navi, *objectSurface) {
 	t.Helper()
 	n := New("objects", WithPlanCloseCheck(false))
-	return n, newObjectSurface(n.Types)
+	return n, newObjectSurface(n.Types, portal.AllowAll(), "test")
 }
 
 func enqueueThought(t *testing.T, n *Navi, id string, created time.Time) {
@@ -167,16 +169,44 @@ func TestObjectSurfaceDetailWithoutADatastoreIsEmpty(t *testing.T) {
 	}
 }
 
-func TestObjectSurfaceActionsAreDeclaredButUnsupported(t *testing.T) {
+func TestObjectSurfaceUnknownActionIsRefused(t *testing.T) {
 	n, s := objectNavi(t)
 	enqueueThought(t, n, "t1", time.Now().UTC())
 
 	if err := s.Act(TypeThought, "t1", "ghost", nil); !errors.Is(err, object.ErrUnknownAction) {
 		t.Fatalf("Act(ghost) = %v, want ErrUnknownAction", err)
 	}
-	if err := s.Act(TypeThought, "t1", "pause", nil); !errors.Is(err, object.ErrUnsupported) {
-		t.Fatalf("Act(pause) = %v, want ErrUnsupported until NAVI-387", err)
+}
+
+// TestObjectSurfaceDeclaredActionWithoutHandlerIsUnsupported pins the
+// contract for a type that declares an action before its handler exists: the
+// action is recognised (not unknown) but refused.
+func TestObjectSurfaceDeclaredActionWithoutHandlerIsUnsupported(t *testing.T) {
+	n, s := objectNavi(t)
+	if err := n.Types.Add(TypeRegistration{
+		Type: object.Type{
+			Name: "widget", ID: "id",
+			Fields:  []object.Field{{Name: "id", Kind: object.KindString}},
+			Actions: []object.Action{{Name: "poke"}},
+		},
+		Provider: emptyObjectProvider{},
+	}); err != nil {
+		t.Fatal(err)
 	}
+	if err := s.Act("widget", "w1", "poke", nil); !errors.Is(err, object.ErrUnsupported) {
+		t.Fatalf("Act(poke) = %v, want ErrUnsupported", err)
+	}
+}
+
+// emptyObjectProvider serves nothing; it exists to register a type shape.
+type emptyObjectProvider struct{}
+
+func (emptyObjectProvider) List(object.Query) ([]object.Object, string, error) { return nil, "", nil }
+func (emptyObjectProvider) Get(string) (object.Object, error) {
+	return object.Object{}, object.ErrNotFound
+}
+func (emptyObjectProvider) Detail(string, string, object.Query) ([]object.Object, string, error) {
+	return nil, "", object.ErrUnknownDetail
 }
 
 func TestTypeRegistrationValidation(t *testing.T) {
@@ -215,7 +245,7 @@ func TestToolStateTypesReadThroughTheBoundView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newObjectSurface(n.Types)
+	s := newObjectSurface(n.Types, portal.AllowAll(), "test")
 	todos, _, err := s.List(TypeTodo, object.Query{})
 	if err != nil {
 		t.Fatalf("List(todo): %v", err)

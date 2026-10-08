@@ -253,6 +253,11 @@ type Deps struct {
     // running-agent events (NAVI-352). portal.Deps carries it; a portal
     // renders a running thought's output from this alone.
     Observation   portal.Observer
+    // Objects is the typed-object surface (ADR 0017): the navi's own
+    // aggregates and any component types it exposes, read through the
+    // descriptor, mutated through declared actions, and kept current by
+    // object deltas.
+    Objects       object.Surface
     Log           *slog.Logger
 }
 ```
@@ -293,6 +298,53 @@ slowing the queue.
 The composition root package is named `navi`; connectors and portals never
 import it — they depend only on the component packages.
 
+## Typed objects
+
+A portal renders objects, not aggregates (ADR 0017). The navi exposes its own
+aggregates as **types** by default — `thought` (with a bounded `transcript`
+detail), `entry`, `memory` — and a component's type is registered by the navi
+that wires it, reading through the same view the component was bound to (the
+reference navi exposes `todo` and `note` over the stateful view its tools
+share). `portal.Deps.Objects` is the `object.Surface` a portal consumes:
+
+```
+Types() / List / Get / Detail   — the read path: descriptor-enforced,
+                                  RAM-first, bounded pages with a cursor
+Act(type, id, action, args)     — the write path: a declared action
+Watch(after)                    — the live path: deltas since a cursor
+```
+
+The surface enforces the descriptor rather than trusting the portal: fields
+marked sensitive are omitted, undeclared fields are dropped, and a page is
+bounded. An in-process portal and the gateway's remote binding are two
+bindings of the same contract, so a portal is written once.
+
+**Actions.** A type declares its actions — a thought steers, pauses, resumes,
+cancels, bumps, and retries; a todo completes, starts, and removes; a note
+removes — with optional JSON-Schema arguments. `Act` resolves the type and the
+action, then **authorizes before validating** (a caller who may not act learns
+nothing about the arguments), validates through the tool registry's schema
+checker (an action is checked by the same machinery a tool call is), and only
+then delegates to the type's registered handler, which mutates through the view
+the type was bound to. Authorization is **fail-closed**: no authorizer wired
+refuses every action, and the authorizer is the same `portal.Authorizer` a
+control portal uses (`navi.WithObjectAuthorizer`), so a navi has one
+authorization story rather than two. Until IAM lands (ADR 0012), the surface
+acts as one navi-declared identity; per-client scope is that ADR's open
+question.
+
+**Deltas.** `Watch` is the live path: the surface translates the existing
+observation fanout — it does not add a second one — into `object.Delta`. A
+queue lifecycle transition is a thought `update` carrying the same projection a
+`Get` would (a removal is a `delete`; a persist failure is not an object
+change); streaming agent content and tool input/output are `append`s to the
+thought's `transcript` detail; a persisted short-term-memory mutation is a
+memory create/update/delete; and a mutation the surface performed publishes the
+resulting state. Deltas land in a bounded, cursor-ed mailbox that mirrors
+`portal.Mailbox`: a slow consumer drops the oldest and is told it has a gap,
+never slowing a producer. A portal therefore keeps its objects current without
+knowing queue or agent event kinds.
+
 ## Agent and tools
 
 Each thought run resolves an agent run: mode-selected tool surface → registry
@@ -313,4 +365,5 @@ requires a configured store — there is no volatile-memory mode.
 - [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping
 - [ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md) — context assembly, skills, and why the queue is the context limit
 - [ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md) — connectors and connector-owned egress
+- [ADR 0017](../adr/0017-navi-state-as-typed-objects.md) — typed objects, actions, and live deltas
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones

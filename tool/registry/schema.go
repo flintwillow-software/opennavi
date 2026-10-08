@@ -38,6 +38,44 @@ func (s Schema) Raw() json.RawMessage {
 	return append(json.RawMessage(nil), s.raw...)
 }
 
+// ValidateArgs validates decoded arguments against a JSON Schema (the
+// pragmatic subset documented on Schema). It is the entry point for a
+// surface outside the tool registry — the typed-object surface enforces its
+// declared action schemas through it (ADR 0017 decision 4) — so an action's
+// arguments are checked by the same machinery a tool call is.
+//
+// Arguments are normalized through JSON first, so an in-process caller's Go
+// values (int, struct) check exactly like the decoded request a remote
+// caller sends.
+func ValidateArgs(raw json.RawMessage, args map[string]any) error {
+	s, err := ParseSchema(raw)
+	if err != nil {
+		return err
+	}
+	normalized, err := normalizeArgs(args)
+	if err != nil {
+		return err
+	}
+	return newSchemaChecker().Validate(s, normalized)
+}
+
+// normalizeArgs round-trips arguments through JSON so validation sees the
+// same shapes a wire caller produces.
+func normalizeArgs(args map[string]any) (map[string]any, error) {
+	if args == nil {
+		return map[string]any{}, nil
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("arguments are not JSON-encodable: %w", err)
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("arguments are not a JSON object: %w", err)
+	}
+	return out, nil
+}
+
 // schemaChecker validates decoded arguments against parsed schemas.
 // Parsing happens lazily and is memoized per Schema value.
 type schemaChecker struct {
@@ -297,16 +335,28 @@ func checkEnum(enum []any, value any, path string) error {
 	return fmt.Errorf("%s: value %v is not one of the allowed values", label(path), value)
 }
 
+// jsonTypeName reports the JSON Schema type of a value. It accepts the
+// decoded shapes encoding/json produces (float64, []any, map[string]any) and
+// the Go shapes an in-process caller passes (int, int64, float32, ...), so a
+// schema checks the same either way.
 func jsonTypeName(value any) string {
-	switch value.(type) {
+	switch v := value.(type) {
 	case nil:
 		return "null"
 	case bool:
 		return "boolean"
 	case string:
 		return "string"
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return "integer"
 	case float64:
-		if value.(float64) == float64(int64(value.(float64))) {
+		if v == float64(int64(v)) {
+			return "integer"
+		}
+		return "number"
+	case float32:
+		if v == float32(int64(v)) {
 			return "integer"
 		}
 		return "number"

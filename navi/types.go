@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/flintwillow-software/opennavi/object"
+	"github.com/flintwillow-software/opennavi/portal"
 )
 
 // TypeRegistration pairs an exposed object type's descriptor with the
@@ -20,7 +21,17 @@ type TypeRegistration struct {
 	Type object.Type
 	// Provider serves the type's objects.
 	Provider object.Provider
+	// Act performs the type's declared actions. It is optional: a type whose
+	// actions are declared but not yet served reports ErrUnsupported, and a
+	// type with no actions needs no handler.
+	Act ActionHandler
 }
+
+// ActionHandler applies one declared action to an object. It is the write
+// counterpart of Provider: the surface resolves the type, authorizes the
+// caller, and validates the arguments against the action's schema, then
+// delegates the mutation here. The surface publishes the resulting delta.
+type ActionHandler func(id, action string, args map[string]any) error
 
 // TypeCollection is the navi's exposed-type registry: a collection of
 // descriptors, validated on Add like every other collection.
@@ -53,12 +64,29 @@ func validateTypeRegistration(r TypeRegistration) error {
 // decision 5).
 type objectSurface struct {
 	types *TypeCollection
+
+	// auth and identity are the authorization path for actions (ADR 0017
+	// decision 4): the same portal.Authorizer a control portal uses, consulted
+	// with the identity the navi declares the surface acts as. A nil
+	// authorizer refuses every action — fail closed.
+	auth     portal.Authorizer
+	identity string
+
+	// deltas is the bounded, cursor-ed live-change mailbox Watch reads
+	// (ADR 0017 decision 6). Producers push translated queue, agent, action,
+	// and memory changes onto it.
+	deltas *deltaMailbox
 }
 
 var _ object.Surface = (*objectSurface)(nil)
 
-func newObjectSurface(types *TypeCollection) *objectSurface {
-	return &objectSurface{types: types}
+func newObjectSurface(types *TypeCollection, auth portal.Authorizer, identity string) *objectSurface {
+	return &objectSurface{
+		types:    types,
+		auth:     auth,
+		identity: identity,
+		deltas:   newDeltaMailbox(0),
+	}
 }
 
 // Types returns every exposed type descriptor, in declaration order.
@@ -118,24 +146,55 @@ func (s *objectSurface) Detail(typeName, id, detail string, q object.Query) ([]o
 	return objs, next, nil
 }
 
-// Act performs a declared action. Actions and live deltas arrive with
-// NAVI-387; until then a declared action is recognised and refused with
-// ErrUnsupported rather than reported as unknown.
+// Act performs a declared action on one object (ADR 0017 decision 4): the
+// type and action must be declared, the caller must be authorized (fail
+// closed), and the arguments must satisfy the action's schema before the
+// registered handler applies the mutation. The resulting change is published
+// as an object delta.
 func (s *objectSurface) Act(typeName, id, action string, args map[string]any) error {
 	reg, err := s.registration(typeName)
 	if err != nil {
 		return err
 	}
-	if _, ok := reg.Type.Action(action); !ok {
+	a, ok := reg.Type.Action(action)
+	if !ok {
 		return fmt.Errorf("%w: %s.%s", object.ErrUnknownAction, typeName, action)
 	}
-	return object.ErrUnsupported
+	// Authorization precedes validation: an unauthorized caller learns
+	// nothing about the arguments an action expects.
+	if err := s.authorize(action); err != nil {
+		return err
+	}
+	if err := validateActionArgs(a, args); err != nil {
+		return err
+	}
+	if reg.Act == nil {
+		return fmt.Errorf("%w: %s.%s", object.ErrUnsupported, typeName, action)
+	}
+	if err := reg.Act(id, action, args); err != nil {
+		return err
+	}
+	s.emitObject(typeName, id, timeNow())
+	return nil
 }
 
-// Watch returns the object deltas after a cursor. Deltas arrive with
-// NAVI-387; until then the surface reports no changes.
+// authorize consults the navi's authorizer for one action. No authorizer is
+// wired means no action is permitted (fail closed) — the same discipline
+// portal.Control follows.
+func (s *objectSurface) authorize(action string) error {
+	if s.auth == nil {
+		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, action)
+	}
+	return s.auth.Authorize(portal.Action(action), s.identity)
+}
+
+// Watch returns the object deltas after a cursor, the next cursor to use,
+// and whether deltas before the cursor were dropped (a slow consumer fell
+// behind the bounded window). The cursor is the mailbox sequence, so a
+// portal resumes without gaps and learns when it has a gap (ADR 0017
+// decision 6).
 func (s *objectSurface) Watch(after int) ([]object.Delta, int, bool) {
-	return nil, after, false
+	return s.deltas.readAfter(after)
 }
 
 func (s *objectSurface) registration(typeName string) (TypeRegistration, error) {
