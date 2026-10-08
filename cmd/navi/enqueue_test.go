@@ -56,7 +56,7 @@ func servePortal(t *testing.T, allow bool) (string, *thought.Queue) {
 	if slerr != nil {
 		t.Fatal(slerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: gateway.Handler(control, broker), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(control, broker, nil), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(sln) }()
 	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(func() { cancel(); _ = srv.Shutdown(shutdown) })

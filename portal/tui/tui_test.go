@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
+	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/thought"
@@ -58,7 +59,55 @@ type portalHarness struct {
 	Queue       *thought.Queue
 	Control     *portal.Control
 	Observation *portal.Broker
+	Surface     object.Surface
 }
+
+// queueSurface is the minimal object.Surface over a queue: enough for the
+// remote transport's snapshot and object reads in tests (the real surface is
+// the navi's; a portal test must not import the composition root).
+type queueSurface struct{ q *thought.Queue }
+
+func (s queueSurface) Types() []object.Type {
+	return []object.Type{{Name: "thought", Label: "Thought", ID: "id"}}
+}
+
+func (s queueSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
+	if typeName != "thought" {
+		return nil, "", object.ErrUnknownType
+	}
+	out := make([]object.Object, 0, len(s.q.GetThoughts()))
+	for _, t := range s.q.GetThoughts() {
+		out = append(out, object.Object{Type: "thought", ID: t.ID, Fields: map[string]any{
+			"prompt": t.Prompt, "context": t.Context, "status": string(t.Status),
+			"priority": t.Priority, "model": t.Model, "foreground": t.Foreground,
+			"depends_on": t.DependsOn, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt,
+		}})
+	}
+	return out, "", nil
+}
+
+func (s queueSurface) Get(typeName, id string) (object.Object, error) {
+	objs, _, err := s.List(typeName, object.Query{})
+	if err != nil {
+		return object.Object{}, err
+	}
+	for _, o := range objs {
+		if o.ID == id {
+			return o, nil
+		}
+	}
+	return object.Object{}, object.ErrNotFound
+}
+
+func (s queueSurface) Detail(string, string, string, object.Query) ([]object.Object, string, error) {
+	return nil, "", object.ErrUnknownDetail
+}
+
+func (s queueSurface) Act(string, string, string, map[string]any) error {
+	return object.ErrUnsupported
+}
+
+func (s queueSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
 
 func newPortalHarness(t *testing.T, auth portal.Authorizer) *portalHarness {
 	t.Helper()
@@ -69,7 +118,7 @@ func newPortalHarness(t *testing.T, auth portal.Authorizer) *portalHarness {
 	if err := control.Start(context.Background(), portal.Deps{ThoughtSystem: q, Observation: broker}); err != nil {
 		t.Fatalf("control.Start: %v", err)
 	}
-	return &portalHarness{Queue: q, Control: control, Observation: broker}
+	return &portalHarness{Queue: q, Control: control, Observation: broker, Surface: queueSurface{q: q}}
 }
 
 // observe publishes an agent event through the broker the way the real
@@ -535,7 +584,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if lerr != nil {
 		t.Fatal(lerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	shutdown, cancelSrv := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv()
@@ -599,6 +648,32 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 		t.Error("remote-enqueued thought not in the queue")
 	}
 
+	// The remote snapshot reads pre-existing thoughts through the object
+	// surface (ADR 0017): the queue is visible to a remote front-end
+	// instead of only converging from events.
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		thoughts, serr := rport.Snapshot()
+		if serr != nil {
+			t.Fatalf("remote snapshot: %v", serr)
+		}
+		if len(thoughts) >= 2 {
+			var sawSteered bool
+			for _, th := range thoughts {
+				if th.ID == "r1" && strings.Contains(th.Context, "from remote") {
+					sawSteered = true
+				}
+			}
+			if sawSteered {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("remote snapshot never listed the queue: %+v", thoughts)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
 	// Control against a NO-authorizer shim fails closed (403 →
 	// error): same seamlnd, no Runtime.Run involved.
 	addr2 := portalFreePort(t)
@@ -607,7 +682,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if lerr2 != nil {
 		t.Fatal(lerr2)
 	}
-	srv2 := &http.Server{Addr: addr2, Handler: gateway.Handler(rt2.Control, rt2.Observation), ReadHeaderTimeout: 5 * time.Second}
+	srv2 := &http.Server{Addr: addr2, Handler: gateway.Handler(rt2.Control, rt2.Observation, rt2.Surface), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv2.Serve(ln2) }()
 	shutdown2, cancelSrv2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv2()

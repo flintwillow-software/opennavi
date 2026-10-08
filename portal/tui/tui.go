@@ -26,7 +26,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -132,18 +134,23 @@ func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Ti
 // remoteTransport attaches to a gateway portal endpoint. Events arrive
 // via cursor polling (a pump goroutine keeps the feed mailbox topped
 // up; ReadAfter semantics are used at both ends, so a gap surfaces as
-// lost); control actions POST /portal/control. In dev the reference navi
-// wires no authorizer, so remote observation/control fail closed (403)
+// lost); control actions POST /portal/control. The embedded
+// gateway.Client binds the same object surface an in-process portal is
+// handed (ADR 0017), so a remote front-end lists and reads the navi's
+// objects rather than converging from events alone. In dev the reference
+// navi wires no authorizer, so remote observation/control fail closed (403)
 // until IAM — tests exercise the seam against the shim's authorized paths
 // with an injected authorizer.
 type remoteTransport struct {
+	*gateway.Client
+
 	base     string
 	identity string
 	feed     *portal.Mailbox
 	mu       sync.Mutex
 	cursor   int
 	closed   bool
-	client   *http.Client
+	httpc    *http.Client
 }
 
 // NewRemote builds the remote transport at base (http://host:port of a
@@ -153,10 +160,11 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 		return nil, fmt.Errorf("tui: remote transport requires base and identity")
 	}
 	t := &remoteTransport{
+		Client:   gateway.NewClient(base, identity),
 		base:     base,
 		identity: identity,
 		feed:     portal.NewMailbox(DefaultFeedCap),
-		client:   &http.Client{Timeout: 5 * time.Second},
+		httpc:    &http.Client{Timeout: 5 * time.Second},
 	}
 	go t.pump()
 	return t, nil
@@ -164,9 +172,104 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 
 func (t *remoteTransport) Feed() portal.Subscription { return t.feed }
 
-// Snapshot: remote clients converge from the event stream (the shim
-// has no snapshot endpoint); returns empty for the seed.
-func (t *remoteTransport) Snapshot() ([]*thought.Thought, error) { return []*thought.Thought{}, nil }
+// objectThought is the wire name of the thought type the navi exposes
+// (navi.TypeThought; the TUI cannot import the composition root).
+const objectThought = "thought"
+
+// snapshotPage/snapshotPages bound the remote seed: enough to render a queue
+// without paging forever.
+const (
+	snapshotPage  = 100
+	snapshotPages = 5
+)
+
+// Snapshot lists pre-existing thoughts through the object surface: the remote
+// binding reads the same thought objects an in-process portal reads, so a
+// remote front-end sees the queue it attached to instead of converging from
+// events alone (the empty-snapshot bug this fixes).
+func (t *remoteTransport) Snapshot() ([]*thought.Thought, error) {
+	var out []*thought.Thought
+	cursor := ""
+	for page := 0; page < snapshotPages; page++ {
+		objs, next, err := t.List(objectThought, object.Query{Cursor: cursor, Limit: snapshotPage})
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range objs {
+			out = append(out, thoughtFromObject(obj))
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+	return out, nil
+}
+
+// thoughtFromObject maps one surface object back onto the TUI's thought view.
+// It is a bootstrap for the view kind the generic toolkit does not have yet
+// (ADR 0017 decision 7): sensitive working state (checkpoint, metadata) is not
+// exposed by the surface, so it is absent remotely.
+func thoughtFromObject(obj object.Object) *thought.Thought {
+	t := &thought.Thought{ID: obj.ID}
+	t.Prompt = stringField(obj, "prompt")
+	t.Context = stringField(obj, "context")
+	t.Result = stringField(obj, "result")
+	t.Provider = stringField(obj, "provider")
+	t.Model = stringField(obj, "model")
+	t.Mode = stringField(obj, "mode")
+	t.Status = thought.ThoughtStatus(stringField(obj, "status"))
+	if v, ok := obj.Fields["priority"].(float64); ok {
+		t.Priority = int(v)
+	}
+	if v, ok := obj.Fields["foreground"].(bool); ok {
+		t.Foreground = v
+	}
+	if v, ok := obj.Fields["verification"].(bool); ok && v {
+		// IsVerification reads the metadata role; the surface exposes the
+		// derived flag, not the free-form metadata map.
+		t.Metadata = map[string]string{thought.MetadataRole: thought.RoleVerification}
+	}
+	t.Skills = stringListField(obj, "skills")
+	t.DependsOn = stringListField(obj, "depends_on")
+	t.DeferUntil = timeField(obj, "defer_until")
+	t.CreatedAt = timeField(obj, "created_at")
+	t.UpdatedAt = timeField(obj, "updated_at")
+	return t
+}
+
+func stringField(obj object.Object, name string) string {
+	v, _ := obj.Fields[name].(string)
+	return v
+}
+
+func stringListField(obj object.Object, name string) []string {
+	raw, ok := obj.Fields[name].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// timeField reads a timestamp that crossed the wire as RFC 3339 (the surface
+// serves time.Time; JSON carries it as a string).
+func timeField(obj object.Object, name string) time.Time {
+	s, _ := obj.Fields[name].(string)
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
 
 // eventsURL builds the cursor-poll endpoint.
 func (t *remoteTransport) eventsURL() string {
@@ -175,8 +278,9 @@ func (t *remoteTransport) eventsURL() string {
 	return fmt.Sprintf("%s/portal/events?identity=%s&from=%d", t.base, t.identity, t.cursor)
 }
 
-// pump polls the gateway endpoint and tops up the feed mailbox; it
-// stops once the transport is marked closed.
+// pump polls the gateway endpoint and tops up the feed mailbox, and fills
+// the descriptor cache once the server is reachable; it stops once the
+// transport is marked closed.
 func (t *remoteTransport) pump() {
 	time.Sleep(100 * time.Millisecond) // let the server come up
 	for {
@@ -186,9 +290,17 @@ func (t *remoteTransport) pump() {
 		if closed {
 			return
 		}
-		if resp, err := t.client.Get(t.eventsURL()); err == nil {
-			defer resp.Body.Close()
-			if blob, rerr := io.ReadAll(resp.Body); rerr == nil {
+		// Descriptors are frozen, so one successful fetch is enough; retry
+		// until the server answers (the generic toolkit renders from these).
+		if len(t.Types()) == 0 {
+			_ = t.RefreshTypes()
+		}
+		if resp, err := t.httpc.Get(t.eventsURL()); err == nil {
+			// Read and close eagerly: a defer inside this loop would not run
+			// until the pump exits, leaking one connection per poll.
+			blob, rerr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if rerr == nil {
 				t.ingest(string(blob))
 			}
 		}
@@ -262,7 +374,7 @@ func (t *remoteTransport) control(action, thoughtID, text string, prio int) erro
 		return fmt.Errorf("tui: build control: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.client.Do(req)
+	resp, err := t.httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("tui: control %s: %w", action, err)
 	}
@@ -322,7 +434,7 @@ func (t *remoteTransport) Enqueue(prompt string, prio int, deferUntil time.Time)
 		return fmt.Errorf("tui: build control: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.client.Do(req)
+	resp, err := t.httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("tui: control enqueue: %w", err)
 	}

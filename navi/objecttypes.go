@@ -67,6 +67,11 @@ func thoughtType() object.Type {
 			{Name: "skills", Label: "Skills", Kind: object.KindList, ItemKind: object.KindString, Section: "run"},
 			{Name: "depends_on", Label: "Depends on", Kind: object.KindList, ItemKind: object.KindRef,
 				RefType: TypeThought, Section: "relations"},
+			// Derived from the thought's metadata role (the map itself is
+			// sensitive): a plan's verification is a different kind of work,
+			// and a portal distinguishes it without reading working state.
+			{Name: "verification", Label: "Verification", Kind: object.KindBool,
+				Section: "run", ReadOnly: true},
 			{Name: "defer_until", Label: "Defer until", Kind: object.KindTime, Section: "schedule"},
 			{Name: "created_at", Label: "Created", Kind: object.KindTime, Section: "timestamps"},
 			{Name: "updated_at", Label: "Updated", Kind: object.KindTime, Section: "timestamps"},
@@ -175,7 +180,11 @@ func thoughtObject(t *thought.Thought) object.Object {
 			"status": string(t.Status), "priority": t.Priority,
 			"provider": t.Provider, "model": t.Model, "mode": t.Mode,
 			"foreground": t.Foreground, "skills": t.Skills, "depends_on": t.DependsOn,
-			"defer_until": t.DeferUntil, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt,
+			// Derived, non-sensitive state a portal must not lose: a plan's
+			// verification is semantically distinct from a normal thought, and
+			// the free-form metadata it is recorded in stays omitted.
+			"verification": t.IsVerification(),
+			"defer_until":  t.DeferUntil, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt,
 			// Sensitive: present here, stripped by the surface's projection.
 			"assembled": t.Assembled, "checkpoint": string(t.Checkpoint),
 			"metadata": t.Metadata, "log_path": t.LogPath,

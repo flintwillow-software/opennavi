@@ -66,28 +66,28 @@ const (
 // Field describes one renderable field of a type.
 type Field struct {
 	// Name is the stable wire name, independent of the Go field name.
-	Name string
+	Name string `json:"name"`
 	// Label is the human label a renderer shows.
-	Label string
+	Label string `json:"label,omitempty"`
 	// Kind is the value kind.
-	Kind Kind
+	Kind Kind `json:"kind"`
 	// Section groups fields in a detail view (empty = the default section).
-	Section string
+	Section string `json:"section,omitempty"`
 	// Order sorts fields within their section; ties keep declaration order.
-	Order int
+	Order int `json:"order,omitempty"`
 	// ReadOnly marks a field a portal must not write.
-	ReadOnly bool
+	ReadOnly bool `json:"readOnly,omitempty"`
 	// Sensitive marks a field the surface omits unless the caller is granted
 	// it. Nothing sensitive is exposed by default (ADR 0006/0008).
-	Sensitive bool
+	Sensitive bool `json:"sensitive,omitempty"`
 	// Optional marks a field that may be absent.
-	Optional bool
+	Optional bool `json:"optional,omitempty"`
 	// Enum lists the allowed values when Kind is KindEnum.
-	Enum []string
+	Enum []string `json:"enum,omitempty"`
 	// RefType names the referenced type when Kind is KindRef.
-	RefType string
+	RefType string `json:"refType,omitempty"`
 	// ItemKind is the element kind when Kind is KindList.
-	ItemKind Kind
+	ItemKind Kind `json:"itemKind,omitempty"`
 }
 
 // RelationKind describes a relation's cardinality from the owning type.
@@ -104,27 +104,27 @@ const (
 // plan's stages). A renderer may show it as a list or a graph.
 type Relation struct {
 	// Name is the stable wire name.
-	Name string
+	Name string `json:"name"`
 	// Label is the human label.
-	Label string
+	Label string `json:"label,omitempty"`
 	// Target names the related type.
-	Target string
+	Target string `json:"target"`
 	// Kind is the cardinality from the owning type.
-	Kind RelationKind
+	Kind RelationKind `json:"kind"`
 }
 
 // Detail is a named sub-collection of another type, read through
 // Surface.Detail. A thought's transcript entries are a detail collection.
 type Detail struct {
 	// Name is the stable wire name, used in the Detail route.
-	Name string
+	Name string `json:"name"`
 	// Label is the human label.
-	Label string
+	Label string `json:"label,omitempty"`
 	// Type names the type of the detail's objects.
-	Type string
+	Type string `json:"type"`
 	// Key is the field on the detail objects that references the parent
 	// object's id.
-	Key string
+	Key string `json:"key,omitempty"`
 }
 
 // Action is an operation a portal may perform on an object of this type.
@@ -132,16 +132,16 @@ type Detail struct {
 // actions it is granted instead of hardcoding verbs.
 type Action struct {
 	// Name is the stable wire name (steer, pause, retry, ...).
-	Name string
+	Name string `json:"name"`
 	// Label is the human label.
-	Label string
+	Label string `json:"label,omitempty"`
 	// Args is a JSON Schema for the action's arguments (tool.ParseSchema
 	// shape); nil means no arguments.
-	Args json.RawMessage
+	Args json.RawMessage `json:"args,omitempty"`
 	// Confirm asks a renderer to confirm before invoking.
-	Confirm bool
+	Confirm bool `json:"confirm,omitempty"`
 	// ReadOnly marks an action that does not mutate state (a query).
-	ReadOnly bool
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // ViewKind is a presentation hint: which generic view renders a type.
@@ -162,8 +162,8 @@ const (
 
 // Section is a named group of fields in a detail view.
 type Section struct {
-	Name  string
-	Label string
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
 }
 
 // View is one presentation hint. Hints are data — they serialize over the
@@ -172,19 +172,19 @@ type Section struct {
 // grouped by section.
 type View struct {
 	// Kind selects the generic view.
-	Kind ViewKind
+	Kind ViewKind `json:"kind"`
 	// Name is the stable wire name.
-	Name string
+	Name string `json:"name,omitempty"`
 	// Label is the human label.
-	Label string
+	Label string `json:"label,omitempty"`
 	// Columns lists the field names a list/board view shows, in order.
-	Columns []string
+	Columns []string `json:"columns,omitempty"`
 	// GroupBy names the field a board/list view groups by.
-	GroupBy string
+	GroupBy string `json:"groupBy,omitempty"`
 	// Detail names the detail collection a chat/graph view renders.
-	Detail string
+	Detail string `json:"detail,omitempty"`
 	// Sections orders the sections of a detail view.
-	Sections []Section
+	Sections []Section `json:"sections,omitempty"`
 }
 
 // Type is the descriptor for one object kind. It is declared at the navi
@@ -192,21 +192,21 @@ type View struct {
 // main.go.
 type Type struct {
 	// Name is the stable wire name (thought, todo, note, memory).
-	Name string
+	Name string `json:"name"`
 	// Label is the human label.
-	Label string
+	Label string `json:"label,omitempty"`
 	// ID names the field that carries the object's identity.
-	ID string
+	ID string `json:"id"`
 	// Fields are the renderable fields.
-	Fields []Field
+	Fields []Field `json:"fields,omitempty"`
 	// Relations are the declared edges to other types.
-	Relations []Relation
+	Relations []Relation `json:"relations,omitempty"`
 	// Details are the named sub-collections read through Surface.Detail.
-	Details []Detail
+	Details []Detail `json:"details,omitempty"`
 	// Actions are the operations a portal may perform.
-	Actions []Action
+	Actions []Action `json:"actions,omitempty"`
 	// Views are optional presentation hints.
-	Views []View
+	Views []View `json:"views,omitempty"`
 }
 
 // Field returns the named field descriptor.
@@ -312,10 +312,10 @@ func (t Type) Validate() error {
 // delta ordering, and the granted field values. Fields the caller may not
 // read are absent, not null.
 type Object struct {
-	Type    string
-	ID      string
-	Version int64
-	Fields  map[string]any
+	Type    string         `json:"type"`
+	ID      string         `json:"id"`
+	Version int64          `json:"version,omitempty"`
+	Fields  map[string]any `json:"fields,omitempty"`
 }
 
 // Query selects objects. Filter is a declared per-type filter (not an
@@ -343,12 +343,12 @@ const (
 
 // Delta is one live object change on the surface.
 type Delta struct {
-	Type   string
-	ID     string
-	Op     Op
-	Fields map[string]any
-	Detail string
-	At     time.Time
+	Type   string         `json:"type"`
+	ID     string         `json:"id"`
+	Op     Op             `json:"op"`
+	Fields map[string]any `json:"fields,omitempty"`
+	Detail string         `json:"detail,omitempty"`
+	At     time.Time      `json:"at"`
 }
 
 // Provider serves one type's objects. A navi registers a provider with its

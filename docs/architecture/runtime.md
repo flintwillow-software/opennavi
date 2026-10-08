@@ -283,12 +283,18 @@ slowing the queue.
   translates for its transport, with access scoped by IAM rather than by
   separate read and write surfaces (ADR 0012, proposed).
 - The SDK ships an HTTP **`portal/gateway`** component: a `portal.Portal`
-  that frames the bounded observation stream and control channel over HTTP
-  and delegates authorization to the control portal (the `Hub`), so there is
-  one authorization path and a remote front-end attaches through the same
-  interface as every other portal. The TUI is likewise a public
-  `portal.Portal` component built from `Deps`, registered by the reference
-  navi through `n.Portals`.
+  that frames the bounded observation stream, the control channel, and the
+  typed-object surface over HTTP and delegates authorization to the control
+  portal (the `Hub`), so there is one authorization path and a remote
+  front-end attaches through the same interface as every other portal. The
+  object routes are the type root (`GET /{type}`, `GET /{type}/{id}`,
+  `GET /{type}/{id}/{detail}`, `POST /{type}/{id}/{action}`) with the
+  surface's own routes namespaced under `_` (`GET /_types`, `GET /_deltas`);
+  `gateway.Client` is the matching remote binding of `object.Surface`, so a
+  remote portal reads the same objects an in-process one does. The TUI is
+  likewise a public `portal.Portal` component built from `Deps`, registered by
+  the reference navi through `n.Portals`, and its remote transport holds a
+  `gateway.Client`. The wire framing is ADR 0018.
 - **Control** is an interface capability too: `portal.Control` authorizes
   attach/control through a `portal.Authorizer` and applies the actions
   through the thought system it receives at `Start`. The gateway delegates
@@ -345,6 +351,19 @@ resulting state. Deltas land in a bounded, cursor-ed mailbox that mirrors
 never slowing a producer. A portal therefore keeps its objects current without
 knowing queue or agent event kinds.
 
+**The remote binding.** `portal/gateway` frames the same surface over HTTP —
+the type root is the namespace, with `/_types` and `/_deltas` namespaced away
+from it — and `gateway.Client` implements `object.Surface` over those routes,
+so a portal written against the surface runs in-process or remotely without a
+second code path. Every object route is authorized on the observation stream's
+fail-closed `Attach` path, and the action route is additionally authorized by
+the surface itself, so the gateway never decides who may act. Reads are bounded
+(the surface's page cap, not the caller's limit, is what bounds them), and the
+framing — routes, bodies, and error mapping — is ADR 0018. One difference is
+deliberate: the surface's `Types()` and `Watch()` cannot report an error, so
+the remote binding caches the frozen descriptors and reports a transport
+failure as a delta **gap** rather than as "nothing changed".
+
 ## Agent and tools
 
 Each thought run resolves an agent run: mode-selected tool surface → registry
@@ -366,4 +385,5 @@ requires a configured store — there is no volatile-memory mode.
 - [ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md) — context assembly, skills, and why the queue is the context limit
 - [ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md) — connectors and connector-owned egress
 - [ADR 0017](../adr/0017-navi-state-as-typed-objects.md) — typed objects, actions, and live deltas
+- [ADR 0018](../adr/0018-object-surface-http-framing.md) — the object surface's HTTP framing
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones

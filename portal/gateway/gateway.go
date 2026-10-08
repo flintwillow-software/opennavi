@@ -1,13 +1,17 @@
-// Package gateway implements the HTTP portal gateway: a
-// portal.Portal that serves the bounded observation stream and control
-// channel over HTTP, so a remote front-end can observe and steer a navi.
+// Package gateway implements the HTTP portal gateway: a portal.Portal that
+// serves the navi's portal surface over HTTP — the bounded observation
+// stream, the control channel, and (ADR 0017 decision 10) the typed-object
+// surface: the type descriptors, bounded object and detail reads, declared
+// actions, and the object delta stream. A remote front-end therefore binds
+// the same contract an in-process portal is handed.
 //
 // It is a *transport* portal: framing and HTTP live here, while
 // authorization and the actual control actions delegate to another
 // portal (the shared Hub). That keeps one authorization path — the
-// gateway never decides who may control a thought. The real wire protocol
-// is deferred (05-messaging); until then this is the loopback-grade JSON
-// mapping, now a component on the public interface.
+// gateway never decides who may control a thought. The object routes are
+// authorized on that same attachment path and the surface authorizes the
+// actions themselves, so a remote portal cannot perform what an in-process
+// one could not.
 package gateway
 
 import (
@@ -23,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -39,11 +44,12 @@ type Gateway struct {
 	addr    string
 	control portal.Portal
 
-	obs portal.Observer
-	sub portal.Subscription
-	ln  net.Listener
-	srv *http.Server
-	log *slog.Logger
+	obs     portal.Observer
+	sub     portal.Subscription
+	objects object.Surface
+	ln      net.Listener
+	srv     *http.Server
+	log     *slog.Logger
 }
 
 // New builds a gateway that serves on addr and delegates attach/control to
@@ -56,9 +62,10 @@ func New(addr string, control portal.Portal) *Gateway {
 // Handler returns the gateway HTTP surface without owning a listener, so a
 // host that already runs an HTTP server (the reference navi's serve path)
 // can mount it. It subscribes one observation mailbox from obs; obs may be
-// nil (observation endpoints then answer 503).
-func Handler(control portal.Portal, obs portal.Observer) http.Handler {
-	g := &Gateway{control: control}
+// nil (observation endpoints then answer 503), as may objects (the object
+// routes then answer 503).
+func Handler(control portal.Portal, obs portal.Observer, objects object.Surface) http.Handler {
+	g := &Gateway{control: control, objects: objects}
 	if obs != nil {
 		g.obs = obs
 		g.sub = obs.Subscribe(DefaultSubscriptionCap)
@@ -91,6 +98,9 @@ func (g *Gateway) Start(ctx context.Context, deps portal.Deps) error {
 	}
 	g.obs = deps.Observation
 	g.sub = deps.Observation.Subscribe(DefaultSubscriptionCap)
+	// The object surface is handed in the same Deps (ADR 0017): the gateway
+	// serves whatever the navi exposes, exactly as the in-process portal does.
+	g.objects = deps.Objects
 
 	ln, err := net.Listen("tcp", g.addr)
 	if err != nil {
@@ -181,24 +191,35 @@ func (g *Gateway) Enqueue(identity string, t *thought.Thought) error {
 
 // ── HTTP surface ────────────────────────────────────────────────────────
 
-// ServeHTTP routes the gateway endpoints: GET /portal/events (observation
-// after a cursor) and POST /portal/control (authorizer-gated control).
+// ServeHTTP routes the gateway endpoints. The observation stream and
+// control channel keep their `/portal` namespace; the typed-object surface
+// owns the type root (`/{type}`, `/{type}/{id}`, `/{type}/{id}/{detail}`,
+// `POST /{type}/{id}/{action}`) with its own routes namespaced under `_`
+// (`/_types`, `/_deltas`), so `portal` and `_`-prefixed roots are reserved
+// type names.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/portal/events":
+	path := strings.Trim(r.URL.Path, "/")
+	switch path {
+	case "portal/events":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		g.serveEvents(w, r)
-	case "/portal/control":
+	case "portal/control":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		g.serveControl(w, r)
-	default:
+	case "_types":
+		g.serveTypes(w, r)
+	case "_deltas":
+		g.serveDeltas(w, r)
+	case "":
 		http.NotFound(w, r)
+	default:
+		g.serveObject(w, r, strings.Split(path, "/"))
 	}
 }
 
