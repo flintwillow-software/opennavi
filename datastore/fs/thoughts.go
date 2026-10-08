@@ -32,7 +32,6 @@ type thoughtDoc struct {
 	DependsOn  []string          `yaml:"depends_on,omitempty"`
 	Assembled  string            `yaml:"assembled,omitempty"`
 	DeferUntil string            `yaml:"defer_until,omitempty"`
-	SessionID  string            `yaml:"session_id,omitempty"`
 	LogPath    string            `yaml:"log_path,omitempty"`
 	Checkpoint string            `yaml:"checkpoint,omitempty"` // base64
 	CreatedAt  string            `yaml:"created_at,omitempty"`
@@ -180,7 +179,7 @@ func (t thoughts) DeleteThought(id string) error {
 	doc.ID, doc.Prompt, doc.Context, doc.Result = "", "", "", ""
 	doc.Metadata, doc.Skills, doc.DependsOn = nil, nil, nil
 	doc.Priority, doc.Status, doc.Provider, doc.Model, doc.Mode = 0, "", "", "", ""
-	doc.Assembled, doc.DeferUntil, doc.SessionID, doc.LogPath, doc.Checkpoint = "", "", "", "", ""
+	doc.Assembled, doc.DeferUntil, doc.LogPath, doc.Checkpoint = "", "", "", ""
 	doc.CreatedAt, doc.UpdatedAt = "", ""
 
 	if !doc.HasTranscript {
@@ -335,7 +334,6 @@ func rowDoc(th *thought.Thought) (thoughtDoc, error) {
 		DependsOn:  th.DependsOn,
 		Assembled:  th.Assembled,
 		DeferUntil: formatTime(th.DeferUntil),
-		SessionID:  th.SessionID,
 		LogPath:    th.LogPath,
 		CreatedAt:  formatTime(th.CreatedAt),
 		UpdatedAt:  formatTime(th.UpdatedAt),
@@ -362,7 +360,6 @@ func docThought(path string, doc *thoughtDoc) (*thought.Thought, error) {
 		Skills:    doc.Skills,
 		DependsOn: doc.DependsOn,
 		Assembled: doc.Assembled,
-		SessionID: doc.SessionID,
 		LogPath:   doc.LogPath,
 	}
 	var err error

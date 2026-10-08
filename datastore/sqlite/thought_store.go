@@ -66,15 +66,15 @@ func (ts *ThoughtStore) SaveThought(t *thought.Thought) error {
 		deferUntil = formatTime(t.DeferUntil)
 	}
 	_, err := ts.store.db.Exec(`INSERT INTO thoughts
-		(id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, prompt, context, metadata, priority, status, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			prompt=excluded.prompt, context=excluded.context, metadata=excluded.metadata,
-			priority=excluded.priority, status=excluded.status, session_id=excluded.session_id,
+			priority=excluded.priority, status=excluded.status,
 			slot_id=excluded.slot_id, worker_id=excluded.worker_id, log_path=excluded.log_path,
 			checkpoint=excluded.checkpoint, defer_until=excluded.defer_until, provider=excluded.provider, model=excluded.model, mode=excluded.mode, result=excluded.result, assembled=excluded.assembled, skills=excluded.skills, depends_on=excluded.depends_on, updated_at=excluded.updated_at`,
 		t.ID, t.Prompt, t.Context, metadata, t.EffectivePriority(), string(t.Status),
-		t.SessionID, t.SlotID, t.WorkerID, t.LogPath, checkpoint, deferUntil,
+		t.SlotID, t.WorkerID, t.LogPath, checkpoint, deferUntil,
 		t.Provider, t.Model, t.Mode, t.Result, t.Assembled, skills, dependsOn, formatTime(t.CreatedAt), formatTime(t.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("sqlite: upsert thought %s: %w", t.ID, err)
@@ -84,7 +84,7 @@ func (ts *ThoughtStore) SaveThought(t *thought.Thought) error {
 
 // LoadThoughts returns all persisted thoughts.
 func (ts *ThoughtStore) LoadThoughts() ([]*thought.Thought, error) {
-	rows, err := ts.store.db.Query(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at
+	rows, err := ts.store.db.Query(`SELECT id, prompt, context, metadata, priority, status, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at
 		FROM thoughts ORDER BY priority, updated_at`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: load thoughts: %w", err)
@@ -104,7 +104,7 @@ func (ts *ThoughtStore) LoadThoughts() ([]*thought.Thought, error) {
 
 // LoadThought returns one thought by ID.
 func (ts *ThoughtStore) LoadThought(id string) (*thought.Thought, error) {
-	row := ts.store.db.QueryRow(`SELECT id, prompt, context, metadata, priority, status, session_id, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at
+	row := ts.store.db.QueryRow(`SELECT id, prompt, context, metadata, priority, status, slot_id, worker_id, log_path, checkpoint, defer_until, provider, model, mode, result, assembled, skills, depends_on, created_at, updated_at
 		FROM thoughts WHERE id = ?`, id)
 	t, err := scanThought(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -300,11 +300,11 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanThought(row rowScanner) (*thought.Thought, error) {
 	t := &thought.Thought{}
 	var status, createdAt, updatedAt string
-	var contextStr, metadata, sessionID, slotID, workerID, logPath, deferUntil sql.NullString
+	var contextStr, metadata, slotID, workerID, logPath, deferUntil sql.NullString
 	var providerStr, modelStr, modeStr, resultStr, assembledStr, skillsJSON, dependsOnJSON sql.NullString
 	var checkpoint []byte
 	if err := row.Scan(&t.ID, &t.Prompt, &contextStr, &metadata, &t.Priority, &status,
-		&sessionID, &slotID, &workerID, &logPath, &checkpoint, &deferUntil,
+		&slotID, &workerID, &logPath, &checkpoint, &deferUntil,
 		&providerStr, &modelStr, &modeStr, &resultStr, &assembledStr, &skillsJSON, &dependsOnJSON, &createdAt, &updatedAt); err != nil {
 		return nil, fmt.Errorf("sqlite: scan thought: %w", err)
 	}
@@ -315,7 +315,6 @@ func scanThought(row rowScanner) (*thought.Thought, error) {
 		}
 	}
 	t.Status = thought.ThoughtStatus(status)
-	t.SessionID = sessionID.String
 	t.SlotID = slotID.String
 	t.WorkerID = workerID.String
 	t.LogPath = logPath.String

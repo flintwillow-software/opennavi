@@ -107,7 +107,6 @@ func Thoughts(t *testing.T, open OpenFunc) {
 			DependsOn:  []string{"t-predecessor"},
 			Assembled:  "## Skill: core_thoughts\n…",
 			DeferUntil: due,
-			SessionID:  "session-1",
 			LogPath:    "/var/log/t.log",
 			Checkpoint: []byte("navicp1:[]"),
 			CreatedAt:  created,
@@ -345,7 +344,6 @@ func diffThought(want, got *thought.Thought) []string {
 	add("DependsOn", reflect.DeepEqual(want.DependsOn, got.DependsOn))
 	add("Assembled", want.Assembled == got.Assembled)
 	add("DeferUntil", sameTime(want.DeferUntil, got.DeferUntil))
-	add("SessionID", want.SessionID == got.SessionID)
 	add("LogPath", want.LogPath == got.LogPath)
 	add("Checkpoint", reflect.DeepEqual(want.Checkpoint, got.Checkpoint))
 	add("CreatedAt", sameTime(want.CreatedAt, got.CreatedAt))

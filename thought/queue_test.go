@@ -792,7 +792,7 @@ func TestPoolCopyInCopyOutIsolatesRunner(t *testing.T) {
 	// back through Pause.
 	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
 	runner := RunnerFunc(func(ctx context.Context, t *Thought) error {
-		t.SessionID = "runner-set-this"    // isolated: must NOT leak
+		t.LogPath = "runner-set-this"      // isolated: must NOT leak
 		t.Checkpoint = []byte("runner-cp") // merges back via Pause
 		<-ctx.Done()                       // cancelled by Pool.Cancel
 		return ctx.Err()
@@ -819,8 +819,8 @@ func TestPoolCopyInCopyOutIsolatesRunner(t *testing.T) {
 	if string(paused.Checkpoint) != "runner-cp" {
 		t.Fatalf("checkpoint = %q, want runner snapshot merged back", paused.Checkpoint)
 	}
-	if paused.SessionID == "runner-set-this" {
-		t.Fatal("runner SessionID mutation leaked into queue state")
+	if paused.LogPath == "runner-set-this" {
+		t.Fatal("runner LogPath mutation leaked into queue state")
 	}
 	p.StopAndWait()
 }
