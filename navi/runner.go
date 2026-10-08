@@ -108,9 +108,12 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 
 	// Observation (NAVI-352): forward the agent's events into the navi's
 	// bounded observation fanout, tagged with the thought id. Subscribers
-	// are bounded and asynchronous, so this never slows the run.
+	// are bounded and asynchronous, so this never slows the run. The same
+	// events feed the object surface's live path (ADR 0017 decision 6):
+	// streaming content becomes an append on the thought's transcript.
 	unsubscribe := a.Subscribe(func(ev agent.AgentEvent) {
 		r.navi.observation.Publish(agentObservation(t.ID, ev))
+		r.navi.objects.observeAgent(t.ID, ev)
 	}, false)
 	defer unsubscribe()
 

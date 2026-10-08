@@ -100,7 +100,7 @@ func TestLookups(t *testing.T) {
 func TestSentinelErrorsAreDistinct(t *testing.T) {
 	for _, err := range []error{
 		object.ErrUnknownType, object.ErrNotFound, object.ErrUnknownDetail,
-		object.ErrUnknownAction, object.ErrUnsupported,
+		object.ErrUnknownAction, object.ErrInvalidArgs, object.ErrUnsupported,
 	} {
 		if err == nil {
 			t.Fatal("nil sentinel")

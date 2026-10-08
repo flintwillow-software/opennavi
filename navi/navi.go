@@ -128,6 +128,15 @@ type Navi struct {
 	// aggregates, exposed by default, plus any component types the author
 	// registers. A portal renders whatever is exposed here.
 	Types *TypeCollection
+	// objects is the object.Surface over Types handed to portals: the read
+	// path plus the action dispatch and live-delta paths (ADR 0017 decisions
+	// 4 and 6).
+	objects *objectSurface
+	// objectAuth and objectIdentity are the declared authorization for
+	// actions through the object surface (WithObjectAuthorizer). A nil
+	// authorizer refuses every action — fail closed.
+	objectAuth     portal.Authorizer
+	objectIdentity string
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
@@ -209,6 +218,19 @@ func WithProviderFallback(providerName string) Option {
 		if providerName != "" {
 			n.fallbackName = providerName
 		}
+	}
+}
+
+// WithObjectAuthorizer declares who may perform actions through the typed
+// object surface (ADR 0017 decision 4): auth is the same portal.Authorizer a
+// control portal uses, and identity is the identity the surface acts as.
+// Absent, every action is refused — fail closed. Per-client identity is part
+// of the IAM work ADR 0012 anticipates (its open question 3); until then the
+// surface acts as one navi-declared identity.
+func WithObjectAuthorizer(auth portal.Authorizer, identity string) Option {
+	return func(n *Navi) {
+		n.objectAuth = auth
+		n.objectIdentity = identity
 	}
 }
 
@@ -355,6 +377,13 @@ func New(name string, opts ...Option) *Navi {
 			n.initErr = fmt.Errorf("navi: object types: %w", err)
 			break
 		}
+	}
+	// The object surface serves the registered types: reads are projected
+	// against the descriptor, actions are authorized and dispatched, and the
+	// live path translates the observation fanout into deltas (ADR 0017).
+	n.objects = newObjectSurface(n.Types, n.objectAuth, n.objectIdentity)
+	if n.Thoughts != nil {
+		n.Thoughts.OnEvent(func(ev thought.Event) { n.objects.observeQueue(ev) })
 	}
 	return n
 }
@@ -582,8 +611,8 @@ func (n *Navi) Serving() bool {
 func (n *Navi) serve(ctx context.Context) error {
 	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
 	pdeps := portal.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log, Observation: n.observation}
-	if n.Types != nil {
-		pdeps.Objects = newObjectSurface(n.Types)
+	if n.objects != nil {
+		pdeps.Objects = n.objects
 	}
 
 	var started []func()

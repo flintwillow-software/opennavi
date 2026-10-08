@@ -37,8 +37,9 @@ const (
 // without the author declaring anything — and read through the navi's own
 // views, RAM-first (ADR 0017 decisions 3 and 9).
 func (n *Navi) builtinTypes() []TypeRegistration {
+	thoughts := &thoughtProvider{n: n}
 	return []TypeRegistration{
-		{Type: thoughtType(), Provider: &thoughtProvider{n: n}},
+		{Type: thoughtType(), Provider: thoughts, Act: thoughts.act},
 		{Type: entryType(), Provider: entryProvider{}},
 		{Type: memoryType(), Provider: &memoryProvider{n: n}},
 	}

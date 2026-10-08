@@ -209,3 +209,70 @@ func TestToolDefIsValid(t *testing.T) {
 		t.Fatal("tool def missing an input schema")
 	}
 }
+
+// TestOnChangeReportsPersistedMutations pins the observer the typed-object
+// surface's live path rides (ADR 0017 decision 6): every mutation is reported
+// once, classified, and only AFTER it reached the backend — so a delta never
+// names a record a read cannot yet see.
+func TestOnChangeReportsPersistedMutations(t *testing.T) {
+	backend := inmem.New()
+	type observation struct {
+		change  Change
+		id      string
+		content string
+	}
+	var seen []observation
+	svc, err := New(Config{
+		Memory:  backend.Memory(),
+		Submit:  func(w datastore.Write) { _ = w.Apply(backend) },
+		Subject: "navi",
+		OnChange: func(rec datastore.MemoryRecord, change Change) {
+			// The write must already be visible to a backend read.
+			persisted, err := backend.Memory().Recall(datastore.RecallQuery{})
+			if err != nil {
+				t.Errorf("recall in observer: %v", err)
+			}
+			var found bool
+			for _, r := range persisted {
+				if r.ID == rec.ID {
+					found = true
+				}
+			}
+			switch change {
+			case ChangeCreated, ChangeUpdated:
+				if !found {
+					t.Errorf("%s observer fired before the record was persisted", change)
+				}
+			case ChangeRemoved:
+				if found {
+					t.Errorf("delete observer fired before the record was forgotten")
+				}
+			}
+			seen = append(seen, observation{change: change, id: rec.ID, content: rec.Content})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := svc.Write(datastore.MemoryRecord{Scope: datastore.ScopeSession, Content: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Write(datastore.MemoryRecord{ID: rec.ID, Scope: datastore.ScopeSession, Content: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Remove(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("observer saw %d mutations, want 3: %+v", len(seen), seen)
+	}
+	if seen[0].change != ChangeCreated || seen[1].change != ChangeUpdated || seen[2].change != ChangeRemoved {
+		t.Fatalf("changes = %s/%s/%s, want create/update/delete", seen[0].change, seen[1].change, seen[2].change)
+	}
+	if seen[1].content != "second" || seen[0].id != seen[2].id {
+		t.Fatalf("observer saw %+v, want the same id across the mutation", seen)
+	}
+}

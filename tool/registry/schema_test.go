@@ -166,3 +166,27 @@ func TestParseSchemaRejectsNonObject(t *testing.T) {
 		t.Error("empty schema accepted")
 	}
 }
+
+// TestValidateArgsIsTheExportedEntryPoint pins the surface the typed-object
+// surface validates action arguments through (ADR 0017 decision 4): a nil
+// argument map is an empty object, so a missing required property reads as
+// missing rather than as a type error.
+func TestValidateArgsIsTheExportedEntryPoint(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "object",
+		"properties": {"priority": {"type": "integer", "minimum": 1}},
+		"required": ["priority"]
+	}`)
+	if err := ValidateArgs(raw, nil); err == nil || !strings.Contains(err.Error(), "missing required") {
+		t.Fatalf("ValidateArgs(nil) = %v, want a missing-required error", err)
+	}
+	if err := ValidateArgs(raw, map[string]any{"priority": 3}); err != nil {
+		t.Fatalf("ValidateArgs(valid) = %v, want nil", err)
+	}
+	if err := ValidateArgs(raw, map[string]any{"priority": 0}); err == nil {
+		t.Fatal("ValidateArgs must enforce the minimum")
+	}
+	if err := ValidateArgs(json.RawMessage(`not json`), map[string]any{}); err == nil {
+		t.Fatal("ValidateArgs must report a malformed schema")
+	}
+}

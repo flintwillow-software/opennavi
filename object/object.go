@@ -37,6 +37,9 @@ var (
 	ErrUnknownDetail = errors.New("object: unknown detail")
 	// ErrUnknownAction is returned when an action is not declared.
 	ErrUnknownAction = errors.New("object: unknown action")
+	// ErrInvalidArgs is returned when an action's arguments do not satisfy
+	// the action's declared JSON Schema.
+	ErrInvalidArgs = errors.New("object: invalid action arguments")
 	// ErrUnsupported is returned by a Surface method the implementation does
 	// not serve yet.
 	ErrUnsupported = errors.New("object: unsupported")
@@ -366,9 +369,11 @@ type Provider interface {
 // the in-process portal and the gateway's remote binding are two bindings of
 // the same contract (ADR 0012 decision 4).
 //
-// Act and Watch arrive with the actions and deltas slice (NAVI-387); they are
-// declared here so the contract a portal is written against does not change
-// shape, and a Surface that does not serve them returns ErrUnsupported.
+// Act and Watch are the write and live paths (ADR 0017 decisions 4 and 6): a
+// Surface authorizes and validates a declared action before performing it,
+// and reports live changes as deltas so a portal keeps objects current
+// without knowing queue or agent event kinds. A Surface that does not serve
+// them returns ErrUnsupported.
 type Surface interface {
 	// Types returns every exposed type descriptor.
 	Types() []Type

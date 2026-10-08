@@ -82,6 +82,12 @@ func serveReferenceNavi(p runParams) error {
 		naviID = "default"
 	}
 
+	// Pre-IAM: the reference navi's portals are a trusted operator surface,
+	// and the object surface acts as the same operator through the same
+	// authorizer a control portal uses (ADR 0017 decision 4). A real
+	// authorizer replaces AllowAll when IAM lands.
+	auth := portal.AllowAll()
+
 	n := navi.New("navi",
 		navi.WithVersion("0.1.0"),
 		navi.WithLogger(p.slogLogger),
@@ -92,6 +98,7 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithShortTermMemory(),
+		navi.WithObjectAuthorizer(auth, "operator"),
 	)
 
 	// The reference navi declares all three backends: `fs` is the compiled
@@ -123,7 +130,7 @@ func serveReferenceNavi(p runParams) error {
 	if err := addCron(n, rc, store.DB()); err != nil {
 		return err
 	}
-	if err := addPortals(n, p); err != nil {
+	if err := addPortals(n, p, auth); err != nil {
 		return err
 	}
 
@@ -297,11 +304,9 @@ func addCron(n *navi.Navi, rc config.RuntimeConfig, db *sql.DB) error {
 // addPortals wires the TUI (in-process) and, when configured, the HTTP
 // gateway with a control portal so remote front-ends can observe and
 // control (queue thoughts, steer) across processes.
-func addPortals(n *navi.Navi, p runParams) error {
+func addPortals(n *navi.Navi, p runParams, auth portal.Authorizer) error {
 	if p.portalAddr != "" {
-		// Pre-IAM: the gateway is a trusted operator surface. A real
-		// authorizer replaces AllowAll when IAM lands.
-		control := portal.NewControl(portal.AllowAll())
+		control := portal.NewControl(auth)
 		if err := n.Portals.Add(control); err != nil {
 			return err
 		}
