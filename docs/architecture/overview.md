@@ -116,6 +116,7 @@ datastore/            public  datastore contract + data types (metadata/detail a
 datastore/conformance public  the shared backend conformance suite an implementation runs
 datastore/fs          public  markdown + frontmatter backend
 datastore/sqlite      public  SQLite backend (thoughts, transcripts, stateful state)
+object/               public  typed-object contract (types, objects, Surface) — ADR 0017
 navi/                 public  composition root; imports the above
 internal/             private runtime: agent loop, providers, bridge, config, ops
 cmd/navi/             reference navi (was the only runnable binary)
@@ -125,8 +126,8 @@ internal/testdata/    synthetic out-of-repo modules (CI fixtures)
 
 **Dependency rule:** packages below `navi` never import `navi`. Connectors and
 portals receive handles through their `Deps` interface. This keeps the graph
-acyclic and components independently testable. The seven component packages
-(`tool`, `thought`, `connector`, `portal`, `model`, `skill`, `datastore`) are additionally
+acyclic and components independently testable. The eight component packages
+(`tool`, `thought`, `connector`, `portal`, `model`, `skill`, `datastore`, `object`) are additionally
 **stdlib-only** — their import closure reaches no `internal/*` package and no
 tool-system implementation package — so importing one never drags the runtime
 in. Two CI guards pin this: `external-consumer` asserts contract-purity of the

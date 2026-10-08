@@ -239,6 +239,14 @@ func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state
 	if err := add(note.Tools(naviID, state, noteCaps(rc.ToolCaps)...)); err != nil {
 		return err
 	}
+	// Expose the stateful aggregates as object types, bound to the same view
+	// the tools were given (ADR 0017 decision 8): a portal renders todos and
+	// notes through the object surface.
+	for _, reg := range navi.ToolStateTypes(naviID, state) {
+		if err := n.Types.Add(reg); err != nil {
+			return err
+		}
+	}
 	tm, err := timepkg.Tool()
 	if err != nil {
 		return err

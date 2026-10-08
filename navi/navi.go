@@ -124,6 +124,10 @@ type Navi struct {
 	// through. It is resolved from the active datastore at assembly and is
 	// nil when no datastore is declared (history is then not persisted).
 	transcripts datastore.Thoughts
+	// Types is the exposed-object registry (ADR 0017): the navi's own
+	// aggregates, exposed by default, plus any component types the author
+	// registers. A portal renders whatever is exposed here.
+	Types *TypeCollection
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
@@ -340,6 +344,17 @@ func New(name string, opts ...Option) *Navi {
 				n.planClose.signal(ev.ThoughtID)
 			}
 		})
+	}
+	// The typed-object surface (ADR 0017): the navi's own aggregates are
+	// exposed by default, so a portal renders them without the author
+	// declaring anything. A component's type is registered by the navi that
+	// wires it, with the provider reading the view the component was bound to.
+	n.Types = newTypeCollection()
+	for _, reg := range n.builtinTypes() {
+		if err := n.Types.Add(reg); err != nil {
+			n.initErr = fmt.Errorf("navi: object types: %w", err)
+			break
+		}
 	}
 	return n
 }
@@ -567,6 +582,9 @@ func (n *Navi) Serving() bool {
 func (n *Navi) serve(ctx context.Context) error {
 	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
 	pdeps := portal.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log, Observation: n.observation}
+	if n.Types != nil {
+		pdeps.Objects = newObjectSurface(n.Types)
+	}
 
 	var started []func()
 	stopAll := func() {
