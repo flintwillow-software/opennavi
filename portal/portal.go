@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -37,6 +38,11 @@ type Deps struct {
 	// events (NAVI-352). A portal renders a running thought's output from
 	// this alone, with no runtime hook.
 	Observation Observer
+	// Objects is the navi's typed-object surface (ADR 0017): the exposed
+	// type descriptors and bounded object/detail reads. A portal renders
+	// whatever the navi exposes without knowing a concrete type. Nil when no
+	// types are exposed.
+	Objects object.Surface
 	// Log is the shared structured logger (stdlib log/slog).
 	Log *slog.Logger
 }
