@@ -119,6 +119,12 @@ func Rows(t object.Type, objs []object.Object, cols []Column) []Row {
 		for _, c := range cols {
 			raw, ok := obj.Fields[c.Field]
 			if !ok {
+				// The identity is always known even when a provider does not
+				// duplicate it into the field map.
+				if c.Field == t.ID {
+					row.Cells = append(row.Cells, Cell{Field: c.Field, Value: obj.ID, Raw: obj.ID})
+					continue
+				}
 				row.Cells = append(row.Cells, Cell{Field: c.Field})
 				continue
 			}

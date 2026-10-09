@@ -18,11 +18,12 @@ import (
 // no longer needs the concrete queue at construction, and its public API
 // depends only on component packages.
 
-// NewDepsTransport builds the Deps-backed transport a TUI portal uses.
-// It is live-only; transcript restore applies to every portal and is
-// tracked separately (NAVI-353).
+// NewDepsTransport builds the Deps-backed transport a TUI portal uses: the
+// thought system, the live observation feed, and the typed-object surface
+// (ADR 0017), so the TUI renders descriptors rather than a typed handle per
+// concern.
 func NewDepsTransport(deps portal.Deps) (*inProcessTransport, error) {
-	return NewInProcess(deps.ThoughtSystem, deps.Observation)
+	return NewInProcess(deps)
 }
 
 // Portal makes the TUI a navi component: Start builds the Deps-backed
