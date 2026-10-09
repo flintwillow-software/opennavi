@@ -124,6 +124,7 @@ func (s *Set) build(p model.Provider) (llm.Provider, error) {
 		}
 		op := llm.NewOllamaProviderAt(endpoint)
 		op.Model = p.Model
+		op.Think = p.Thinking
 		return op, nil
 
 	case "openrouter":

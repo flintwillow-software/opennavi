@@ -51,6 +51,10 @@ type runParams struct {
 	workers     int
 	portalAddr  string
 	daemonMode  bool
+	// noThinking turns a reasoning model's hidden reasoning off (Ollama's
+	// `think: false`), so the model answers instead of spending its budget
+	// thinking. Absent from the config it says nothing at all.
+	noThinking bool
 
 	logger *logging.Logger
 	// slogLogger is the navi's structured logger, routed like the runtime
@@ -172,6 +176,10 @@ func mergeRuntime(p runParams) (config.RuntimeConfig, error) {
 	if p.ollamaHost != "" {
 		flags.Provider.Endpoint = p.ollamaHost
 	}
+	if p.noThinking {
+		f := false
+		flags.Provider.Thinking = &f
+	}
 	rc := config.MergeRuntime(fileRC, flags)
 	if err := rc.Validate(); err != nil {
 		return config.RuntimeConfig{}, err
@@ -186,18 +194,20 @@ func addProviders(n *navi.Navi, rc config.RuntimeConfig) error {
 	if primary == "" {
 		primary = "ollama"
 	}
-	if err := addProvider(n, primary, rc.Provider.Model, rc.Provider.Endpoint, true); err != nil {
+	if err := addProvider(n, primary, rc.Provider.Model, rc.Provider.Endpoint, rc.Provider.Thinking, true); err != nil {
 		return err
 	}
 	if fb := strings.ToLower(strings.TrimSpace(rc.Provider.Fallback)); fb != "" && fb != primary {
-		if err := addProvider(n, fb, "", "", false); err != nil {
+		// The fallback is a different provider, so the primary's reasoning
+		// setting does not apply to it.
+		if err := addProvider(n, fb, "", "", nil, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addProvider(n *navi.Navi, name, modelName, endpoint string, isDefault bool) error {
+func addProvider(n *navi.Navi, name, modelName, endpoint string, thinking *bool, isDefault bool) error {
 	lower := strings.ToLower(name)
 	if modelName == "" {
 		switch lower {
@@ -213,6 +223,9 @@ func addProvider(n *navi.Navi, name, modelName, endpoint string, isDefault bool)
 	}
 	if endpoint != "" {
 		opts = append(opts, model.WithEndpoint(endpoint))
+	}
+	if thinking != nil {
+		opts = append(opts, model.WithThinking(*thinking))
 	}
 	switch lower {
 	case "openrouter", "openai":

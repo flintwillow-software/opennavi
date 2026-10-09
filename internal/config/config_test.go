@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +245,37 @@ func TestFlagKeyWinsOverFile(t *testing.T) {
 	got := MergeRuntime(file, flags)
 	if got.Provider.APIKey != "flag-key" {
 		t.Fatalf("api key = %q, want flag-key", got.Provider.APIKey)
+	}
+}
+
+// TestThinkingResolution pins the tri-state: absent says nothing (a reasoning
+// model reasons), false turns reasoning off, and a flag beats the file.
+func TestThinkingResolution(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.yaml")
+	if err := os.WriteFile(path, []byte("provider:\n  thinking: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadRuntimeFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Provider.Thinking == nil || *file.Provider.Thinking {
+		t.Fatalf("file thinking = %v, want an explicit false", file.Provider.Thinking)
+	}
+
+	// Unset by default: no reasoning parameter is sent at all.
+	if got := DefaultRuntimeConfig(); got.Provider.Thinking != nil {
+		t.Fatalf("default thinking = %v, want unset", got.Provider.Thinking)
+	}
+
+	// The file applies when no flag is set, and a flag wins in both directions.
+	merged := MergeRuntime(file, RuntimeConfig{})
+	if merged.Provider.Thinking == nil || *merged.Provider.Thinking {
+		t.Fatalf("merged thinking = %v, want the file's false", merged.Provider.Thinking)
+	}
+	on := true
+	merged = MergeRuntime(file, RuntimeConfig{Provider: ProviderConfig{Thinking: &on}})
+	if merged.Provider.Thinking == nil || !*merged.Provider.Thinking {
+		t.Fatalf("merged thinking = %v, want the flag's true", merged.Provider.Thinking)
 	}
 }

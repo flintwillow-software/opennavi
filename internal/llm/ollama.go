@@ -20,7 +20,13 @@ import (
 type OllamaProvider struct {
 	BaseURL string // e.g. "http://localhost:11434"
 	Model   string // default model; overridden by config.Model
-	client  *http.Client
+	// Think requests the model's extended reasoning, or its absence. Nil
+	// sends no `think` parameter at all, leaving the model's own default
+	// (a reasoning model reasons, a plain one does not); false asks a
+	// reasoning model not to, which is the difference between a fast answer
+	// and a budget spent on hidden reasoning before any visible token.
+	Think  *bool
+	client *http.Client
 }
 
 // NewOllamaProvider creates an OllamaProvider. The base URL is taken
@@ -62,8 +68,11 @@ type ollamaChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
-	Tools    []ollamaTool    `json:"tools,omitempty"`
-	Options  ollamaOptions   `json:"options,omitempty"`
+	// Think is omitted when unset, so a navi that says nothing about
+	// reasoning keeps the model's own default.
+	Think   *bool         `json:"think,omitempty"`
+	Tools   []ollamaTool  `json:"tools,omitempty"`
+	Options ollamaOptions `json:"options,omitempty"`
 }
 
 type ollamaOptions struct {
@@ -120,6 +129,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, messages []Message, tools [
 		Model:    model,
 		Messages: toOllamaMessages(messages),
 		Stream:   true,
+		Think:    p.Think,
 		Tools:    toOllamaTools(tools),
 		Options: ollamaOptions{
 			Temperature: config.Temperature,
@@ -253,6 +263,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, messages []Message, tools
 		Model:    model,
 		Messages: toOllamaMessages(messages),
 		Stream:   false,
+		Think:    p.Think,
 		Tools:    toOllamaTools(tools),
 		Options: ollamaOptions{
 			Temperature: config.Temperature,

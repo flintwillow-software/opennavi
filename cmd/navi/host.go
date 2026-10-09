@@ -24,6 +24,7 @@ func runHost(args []string) error {
 	runtimeFile := fs.String("config", "", "path to runtime config YAML (optional)")
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
 	model := fs.String("model", "", "LLM model name (default: config/env, then the provider's compiled default)")
+	noThinking := fs.Bool("no-thinking", false, "turn a reasoning model's hidden reasoning off (Ollama think=false); unset sends no reasoning parameter at all")
 	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (overrides $OLLAMA_HOST and YAML; default http://localhost:11434)")
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
@@ -85,6 +86,7 @@ func runHost(args []string) error {
 		workers:     *workers,
 		portalAddr:  *portalAddr,
 		daemonMode:  *daemonMode,
+		noThinking:  *noThinking,
 		logger:      logger,
 		slogLogger:  slogFrom(lw, human, slogLevel(*logLevel)),
 		cancel:      stop,

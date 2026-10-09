@@ -36,6 +36,11 @@ type ProviderConfig struct {
 	APIKey string `yaml:"api_key,omitempty"`
 	// Mode is "local" or "cloud" (informational; selects defaults).
 	Mode string `yaml:"mode,omitempty"`
+	// Thinking asks a reasoning-capable provider for its extended reasoning,
+	// or its absence (Ollama's `think` parameter). Absent says nothing, so a
+	// reasoning model reasons; `false` turns it off, so the model answers
+	// instead of spending its budget thinking.
+	Thinking *bool `yaml:"thinking,omitempty"`
 	// Retry is the retry configuration; nil = llm.DefaultRetryConfig.
 	MaxRetries    int           `yaml:"max_retries,omitempty"`
 	InitialDelay  time.Duration `yaml:"initial_delay,omitempty"`
@@ -209,6 +214,9 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	}
 	if src.Provider.Mode != "" {
 		dst.Provider.Mode = src.Provider.Mode
+	}
+	if src.Provider.Thinking != nil {
+		dst.Provider.Thinking = src.Provider.Thinking
 	}
 	if src.Provider.MaxRetries != 0 {
 		dst.Provider.MaxRetries = src.Provider.MaxRetries

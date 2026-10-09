@@ -175,3 +175,30 @@ func mustFind(t *testing.T, s *Set, name string) model.Provider {
 	}
 	return p
 }
+
+// TestResolveOllamaCarriesThinking pins the descriptor-to-adapter hop: the
+// reasoning setting a navi declares must reach the request, and an unset one
+// must stay unset (so nothing is sent).
+func TestResolveOllamaCarriesThinking(t *testing.T) {
+	s := New([]model.Provider{
+		model.Ollama("m", model.WithThinking(false)),
+		model.Ollama("other", model.WithEndpoint("http://other.invalid:1")),
+	}, envMap(map[string]string{}))
+
+	got, err := s.Resolve(mustFind(t, s, "ollama"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := got.(*llm.OllamaProvider)
+	if op.Think == nil || *op.Think {
+		t.Fatalf("adapter Think = %v, want an explicit false", op.Think)
+	}
+
+	got, err = s.Resolve(mustFind(t, s, "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op := got.(*llm.OllamaProvider); op.Think != nil {
+		t.Fatalf("adapter Think = %v, want unset", op.Think)
+	}
+}
