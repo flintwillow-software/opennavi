@@ -17,6 +17,7 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/portal/view"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -1418,5 +1419,108 @@ func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "task t1") {
 		t.Fatalf("list did not populate once descriptors arrived:\n%s", m.View())
+	}
+}
+
+// TestModelDoesNotIdleBeforeDescriptorsArrive: a remote surface answers
+// asynchronously, so an idle tick that lands first must NOT stop the drain —
+// otherwise the list stays empty until a key press.
+func TestModelDoesNotIdleBeforeDescriptorsArrive(t *testing.T) {
+	q := newQueue(t)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	calls := 0
+	tr, err := NewInProcess(portal.Deps{
+		ThoughtSystem: q, Observation: broker,
+		Objects: lateTypesSurface{queueSurface: queueSurface{q: q}, mu: &calls, after: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(tr)
+	_ = m.Init()
+	if len(m.types) != 0 {
+		t.Fatal("precondition: the descriptors must not be there yet")
+	}
+
+	_, cmd := m.Update(feedMsg{})
+	if cmd == nil {
+		t.Fatal("the drain stopped before the descriptors arrived — the list would stay empty until a key press")
+	}
+}
+
+// TestModelIdlesOnceDescriptorsAreLoaded is the counterpart: the idle-free
+// tick (NAVI-335) must still apply once there is nothing left to wait for.
+func TestModelIdlesOnceDescriptorsAreLoaded(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+	if len(m.types) == 0 {
+		t.Fatal("precondition: descriptors loaded")
+	}
+	if _, cmd := m.Update(feedMsg{}); cmd != nil {
+		t.Fatal("an idle in-process model should sleep until the user acts")
+	}
+}
+
+// TestRemoteTransportKeepsObservingWhileIdle: the navi a remote client watches
+// is in another process, so an idle client must keep draining.
+func TestRemoteTransportKeepsObservingWhileIdle(t *testing.T) {
+	rt, err := NewRemote("http://127.0.0.1:1", "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	if !rt.Remote() {
+		t.Fatal("a gateway attachment is remote")
+	}
+
+	m := NewModel(rt)
+	m.types = []object.Type{{Name: "thought", Label: "Thought", ID: "id"}}
+	m.list = view.ListOf(m.types[0], nil, "")
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Fatal("a remote attachment must keep observing while idle")
+	}
+}
+
+// TestRemoteClientRendersTheQueueThroughTheGateway is the operator's scenario:
+// a client attached to a served gateway must render the HOST's queue, with the
+// descriptors fetched over the wire. It fails if the model goes idle before the
+// descriptors arrive.
+func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
+	addr := portalFreePort(t)
+	rt := newPortalHarness(t, allowAllAuth{})
+
+	ln, lerr := net.Listen("tcp", addr)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+	time.Sleep(200 * time.Millisecond)
+
+	if err := rt.Queue.Enqueue(th("remote-q", 4)); err != nil {
+		t.Fatal(err)
+	}
+	rport, err := NewRemote("http://"+addr, "tui-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rport.Close()
+	m := NewModel(rport)
+
+	// Drive the feed ticks the poll command would deliver.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(m.types) == 0 && time.Now().Before(deadline) {
+		m.applyFeed(feedMsg{})
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(m.types) == 0 {
+		t.Fatal("descriptors never arrived over the gateway")
+	}
+	if !strings.Contains(m.View(), "remote-q") {
+		t.Fatalf("the remote client did not render the host's queue:\n%s", m.View())
 	}
 }

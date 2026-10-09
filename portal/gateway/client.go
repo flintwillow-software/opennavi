@@ -34,6 +34,9 @@ type Client struct {
 
 	mu    sync.Mutex
 	types []object.Type
+	// typesErr is why the last descriptor fetch failed, so a client can say
+	// "unreachable" instead of rendering an empty screen.
+	typesErr error
 }
 
 // NewClient builds a remote surface at base (the gateway's http://host:port)
@@ -68,12 +71,25 @@ func (c *Client) RefreshTypes() error {
 		Types []object.Type `json:"types"`
 	}
 	if err := c.do(http.MethodGet, "/_types", nil, nil, &doc); err != nil {
+		c.mu.Lock()
+		c.typesErr = err
+		c.mu.Unlock()
 		return err
 	}
 	c.mu.Lock()
 	c.types = doc.Types
+	c.typesErr = nil
 	c.mu.Unlock()
 	return nil
+}
+
+// TypesError reports why the last descriptor fetch failed (nil once one has
+// succeeded). It is an optional capability a renderer uses to explain an empty
+// view rather than showing nothing.
+func (c *Client) TypesError() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.typesErr
 }
 
 // Types returns the descriptors cached by RefreshTypes (nil before the first

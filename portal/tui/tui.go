@@ -55,6 +55,11 @@ type Transport interface {
 	// is what replaced the old remote snapshot (which could only converge
 	// from events).
 	Objects() object.Surface
+	// Remote reports whether this transport talks to a navi in ANOTHER
+	// process. A remote attachment keeps draining while idle — the work it
+	// observes is not this process's — whereas an in-process TUI may sleep
+	// until the user acts (NAVI-335).
+	Remote() bool
 	Steer(thoughtID, text string) error
 	Bump(thoughtID string, prio int) error
 	Pause(thoughtID string) error
@@ -108,6 +113,9 @@ func (t *inProcessTransport) Feed() portal.Subscription { return t.feed }
 
 // Objects is the navi's typed-object surface, handed through Deps.
 func (t *inProcessTransport) Objects() object.Surface { return t.objects }
+
+// Remote is false: this transport drives the navi in this process.
+func (t *inProcessTransport) Remote() bool { return false }
 func (t *inProcessTransport) Steer(thoughtID, text string) error {
 	return t.ts.RouteMessage(thoughtID, text)
 }
@@ -199,6 +207,9 @@ func (t *remoteTransport) Close() error {
 // Objects is the remote binding of the typed-object surface: the gateway
 // client this transport embeds.
 func (t *remoteTransport) Objects() object.Surface { return t.Client }
+
+// Remote is true: the navi this transport observes runs in another process.
+func (t *remoteTransport) Remote() bool { return true }
 
 // objectThought is the wire name of the thought type the navi exposes
 // (navi.TypeThought; the TUI cannot import the composition root).
@@ -646,12 +657,26 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = msg.next
 		}
 		m.applyFeed(msg)
-		if len(raw) == 0 && !msg.lost && !m.anyRunning() {
+		if m.maySleep(len(raw), msg.lost) {
 			return m, nil // idle: sleep until user input re-arms the drain
 		}
 		return m, m.poll()
 	}
 	return m, m.poll()
+}
+
+// maySleep reports whether the drain may stop: nothing arrived, nothing is
+// running, the descriptors are loaded, and this transport observes only this
+// process. Two of those are load-bearing. A client whose descriptors have not
+// arrived yet must keep polling until the surface answers — otherwise the
+// first idle tick wins the race against the fetch and the list stays empty
+// until a key press. And a remote attachment never sleeps, because the navi it
+// watches is in another process (ADR 0017).
+func (m *tuiModel) maySleep(raw int, lost bool) bool {
+	if raw > 0 || lost || m.anyRunning() || len(m.types) == 0 {
+		return false
+	}
+	return !m.transport.Remote()
 }
 
 func (m *tuiModel) View() string { return m.render() }
@@ -713,6 +738,10 @@ func (m *tuiModel) applyFeed(f feedMsg) {
 		m.loadTypes()
 		if len(m.types) > 0 {
 			m.refreshList()
+		} else if err := surfaceTypesError(m.objects); err != nil {
+			// Say why the screen is empty: an unreachable portal and a navi
+			// that exposes nothing look identical otherwise.
+			m.status = "portal: " + err.Error()
 		}
 	}
 	if f.lost {
@@ -1020,6 +1049,18 @@ func (m *tuiModel) typeByName(name string) (object.Type, bool) {
 		}
 	}
 	return object.Type{}, false
+}
+
+// typesErrorReporter is an optional surface capability: a surface that fetches
+// its descriptors over a transport can say why they are not here yet, so a
+// client reports "unreachable" instead of rendering an empty screen.
+type typesErrorReporter interface{ TypesError() error }
+
+func surfaceTypesError(s object.Surface) error {
+	if r, ok := s.(typesErrorReporter); ok {
+		return r.TypesError()
+	}
+	return nil
 }
 
 // key handles a key press; returns true when the user quits.
@@ -1334,7 +1375,7 @@ func repeat(s string, n int) string {
 func (m *tuiModel) renderList() string {
 	t, ok := m.currentType()
 	if !ok {
-		return " (no object types exposed)\n"
+		return " (waiting for the navi's object types…)\n"
 	}
 	out := ""
 	if len(m.types) > 1 {
