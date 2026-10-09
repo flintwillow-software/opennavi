@@ -4,8 +4,9 @@
 // runs in-process (binary run, NAVI-320) or against the gateway
 // attachment; the transport sits behind one seam. The queue is only
 // ever touched through the portal — never directly under q.mu — and
-// the feed mailbox is drained via tea Cmds (poll/cursor-resume), so
-// a slow UI never blocks the queue fanout.
+// the feed mailbox is drained by a push pump (Pump) woken by the
+// mailbox itself, so a slow UI never blocks the queue fanout and an
+// idle portal is never blind (ADR 0019 decision 5).
 //
 // Bubble Tea (charmbracelet/bubbletea) is the repo's first
 // third-party dependency: an explicitly approved, documented exception
@@ -14,14 +15,11 @@
 package tui
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,37 +38,13 @@ const LocalIdentity = "local"
 // drop-oldest; ReadAfter reports gaps as a UI notice).
 const DefaultFeedCap = 1024
 
-// Transport is the portal attachment seam: one interface so the same
-// model serves in-process (direct Portal) and remote (gateway HTTP
-// cursor-poll + control POST). Feed returns the subscription mailbox
-// the model drains; control ops return result-or-error for immediate
-// UI feedback (stream acks arrive on the feed where the portal emits
-// them).
-type Transport interface {
-	// Feed returns this transport's subscription mailbox.
-	Feed() portal.Subscription
-	// Objects is the typed-object surface the model renders and acts
-	// through (ADR 0017): the same contract in-process and remote, so the
-	// views are descriptor-driven in both modes. Reading the queue through it
-	// is what replaced the old remote snapshot (which could only converge
-	// from events).
-	Objects() object.Surface
-	// Remote reports whether this transport talks to a navi in ANOTHER
-	// process. A remote attachment drains at the active cadence always — the
-	// work it observes is not this process's — whereas an in-process TUI can
-	// fall back to the slower idle cadence (NAVI-389).
-	Remote() bool
-	// Actions are NOT here: every declared action goes through
-	// Objects().Act, so a transport implements one write path rather than a
-	// verb set per transport (ADR 0019 decision 7). Creation is the one
-	// exception, because an object that does not exist yet has no id.
-	//
-	// Enqueue creates a session thought: prompt with
-	// optional priority (1-10; 0 = default) and not-before time
-	// (zero = due now). In-process thoughts are foreground-tagged so
-	// they claim the foreground slot.
-	Enqueue(prompt string, prio int, deferUntil time.Time) error
-}
+// Transport is the portal attachment seam: it is the unified portal stream
+// (ADR 0019) — one stream per portal carrying the observation feed, the
+// object surface, and creation. The same model serves in-process and remote
+// because both bindings deliver the same contract; control ops return
+// result-or-error for immediate UI feedback (stream acks arrive on the feed
+// where the portal emits them).
+type Transport = portal.Stream
 
 // ── in-process transport ───────────────────────────────────────────────
 
@@ -113,8 +87,11 @@ func (t *inProcessTransport) Feed() portal.Subscription { return t.feed }
 // Objects is the navi's typed-object surface, handed through Deps.
 func (t *inProcessTransport) Objects() object.Surface { return t.objects }
 
-// Remote is false: this transport drives the navi in this process.
-func (t *inProcessTransport) Remote() bool { return false }
+// Close releases the feed subscription. Safe more than once.
+func (t *inProcessTransport) Close() error {
+	t.feed.Close()
+	return nil
+}
 
 // newThoughtID builds a session-created thought id (pattern: the fg- ids).
 func newThoughtID() string {
@@ -141,64 +118,27 @@ func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Ti
 	})
 }
 
-// ── remote transport (gateway attachment) ────────────────────────────────
+// ── remote transport (gateway stream attachment) ─────────────────────────
 
-// remoteTransport attaches to a gateway portal endpoint. Events arrive
-// via cursor polling (a pump goroutine keeps the feed mailbox topped
-// up; ReadAfter semantics are used at both ends, so a gap surfaces as
-// lost); control actions POST /portal/control. The embedded
-// gateway.Client binds the same object surface an in-process portal is
-// handed (ADR 0017), so a remote front-end lists and reads the navi's
-// objects rather than converging from events alone. In dev the reference
-// navi wires no authorizer, so remote observation/control fail closed (403)
-// until IAM — tests exercise the seam against the shim's authorized paths
-// with an injected authorizer.
-type remoteTransport struct {
-	*gateway.Client
-
-	base     string
-	identity string
-	feed     *portal.Mailbox
-	mu       sync.Mutex
-	cursor   int
-	closed   bool
-	httpc    *http.Client
-}
-
-// NewRemote builds the remote transport at base (http://host:port of a
-// gateway portal) for identity.
-func NewRemote(base, identity string) (*remoteTransport, error) {
+// NewRemote opens the unified stream at base (http://host:port of a gateway
+// portal) for identity and returns the stream client. The client IS the
+// transport: it implements portal.Stream (Feed/Objects/Enqueue/Close) and
+// object.Surface, so a remote front-end is handed the same contract an
+// in-process one is (ADR 0017/0019). OpenStream returns once the opening
+// snapshot has arrived, so descriptors are ready before the model renders.
+func NewRemote(base, identity string) (*gateway.Client, error) {
 	if base == "" || identity == "" {
 		return nil, fmt.Errorf("tui: remote transport requires base and identity")
 	}
-	t := &remoteTransport{
-		Client:   gateway.NewClient(base, identity),
-		base:     base,
-		identity: identity,
-		feed:     portal.NewMailbox(DefaultFeedCap),
-		httpc:    &http.Client{Timeout: 5 * time.Second},
+	c := gateway.NewClient(base, identity)
+	// Background, not a timeout: the stream must outlive this call (OpenStream
+	// bounds only the opening snapshot).
+	if err := c.OpenStream(context.Background()); err != nil {
+		_ = c.Close()
+		return nil, err
 	}
-	go t.pump()
-	return t, nil
+	return c, nil
 }
-
-func (t *remoteTransport) Feed() portal.Subscription { return t.feed }
-
-// Close stops the poll pump and releases the feed mailbox. Safe more than once.
-func (t *remoteTransport) Close() error {
-	t.mu.Lock()
-	t.closed = true
-	t.mu.Unlock()
-	t.feed.Close()
-	return nil
-}
-
-// Objects is the remote binding of the typed-object surface: the gateway
-// client this transport embeds.
-func (t *remoteTransport) Objects() object.Surface { return t.Client }
-
-// Remote is true: the navi this transport observes runs in another process.
-func (t *remoteTransport) Remote() bool { return true }
 
 // objectThought is the wire name of the thought type the navi exposes
 // (navi.TypeThought; the TUI cannot import the composition root).
@@ -225,127 +165,45 @@ func stringListField(obj object.Object, name string) []string {
 	return nil
 }
 
-// eventsURL builds the cursor-poll endpoint.
-func (t *remoteTransport) eventsURL() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return fmt.Sprintf("%s/portal/events?identity=%s&from=%d", t.base, t.identity, t.cursor)
-}
-
-// pump polls the gateway endpoint and tops up the feed mailbox, and fills
-// the descriptor cache once the server is reachable; it stops once the
-// transport is marked closed.
-func (t *remoteTransport) pump() {
-	time.Sleep(100 * time.Millisecond) // let the server come up
+// Pump drives a Bubble Tea loop from a portal stream's feed. It runs on its
+// own goroutine — never the queue's emitting goroutine — and is woken by the
+// mailbox (portal.Waker) rather than a timer, so an idle portal is woken the
+// instant an event lands and no cadence is chosen (ADR 0019 decision 5).
+//
+// A slow UI only loses its own events: send blocks on the program's message
+// queue while the bounded, drop-oldest mailbox keeps the producer free, so a
+// stuck UI reports a gap instead of stalling the navi. The cursor filter in
+// Update keeps a duplicate delivery harmless (NAVI-380).
+func Pump(ctx context.Context, feed portal.Subscription, send func(tea.Msg)) {
+	cursor := 0
 	for {
-		t.mu.Lock()
-		closed := t.closed
-		t.mu.Unlock()
-		if closed {
+		wake := notifyChan(feed)
+		evs, next, lost := feed.ReadAfter(cursor)
+		if next > cursor {
+			cursor = next
+		}
+		if len(evs) > 0 || lost {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			send(feedMsg{evs: evs, next: cursor, lost: lost})
+		}
+		select {
+		case <-ctx.Done():
 			return
+		case <-wake:
 		}
-		// Descriptors are frozen, so one successful fetch is enough; retry
-		// until the server answers (the generic toolkit renders from these).
-		if len(t.Types()) == 0 {
-			_ = t.RefreshTypes()
-		}
-		if resp, err := t.httpc.Get(t.eventsURL()); err == nil {
-			// Read and close eagerly: a defer inside this loop would not run
-			// until the pump exits, leaking one connection per poll.
-			blob, rerr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if rerr == nil {
-				t.ingest(string(blob))
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// ingest parses one /portal/events JSON response and pushes events
-// into the feed, advancing the cursor.
-func (t *remoteTransport) ingest(body string) {
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		return
-	}
-	evs, _ := doc["events"].([]any)
-	if v, ok := doc["lost"].(bool); ok && v {
-		t.feed.Push(portal.Event{
-			Category: portal.CategoryQueue,
-			Kind:     "stream_lost",
-			Detail:   "portal stream dropped events (resume gap)",
-			At:       time.Now().UTC(),
-		})
-	}
-	for _, e := range evs {
-		m, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		str := func(k string) string {
-			if v, ok := m[k].(string); ok {
-				return v
-			}
-			return ""
-		}
-		t.feed.Push(portal.Event{
-			Category:  portal.Category(str("category")),
-			Kind:      str("kind"),
-			ThoughtID: str("thoughtID"),
-			Detail:    str("detail"),
-			Delivery:  str("delivery"),
-			At:        time.Now().UTC(),
-		})
-	}
-	if n, ok := doc["next"].(float64); ok {
-		t.mu.Lock()
-		t.cursor = int(n)
-		t.mu.Unlock()
-	}
-}
-
-// Enqueue posts a session thought through the shim's enqueue control
-// (`{id, prompt, priority}`; the id is generated client-side). The
-// optional not-before time rides along as an ISO field for forward-
-// compat — the current shim ignores unknown fields, so remote
-// deferral is an in-process capability until the shim learns it.
-func (t *remoteTransport) Enqueue(prompt string, prio int, deferUntil time.Time) error {
-	if prio < 1 || prio > 10 {
-		prio = 4
-	}
-	payload := map[string]any{
-		"action": "enqueue",
-		"id":     newThoughtID(),
-		"prompt": prompt,
-	}
-	if prio > 0 {
-		payload["priority"] = prio
-	}
-	if !deferUntil.IsZero() {
-		payload["defer_until"] = deferUntil.UTC().Format(time.RFC3339Nano)
-	}
-	blob, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("tui: encode control: %w", err)
-	}
-	req, err := http.NewRequest(http.MethodPost,
-		fmt.Sprintf("%s/portal/control?identity=%s", t.base, t.identity), strings.NewReader(string(blob)))
-	if err != nil {
-		return fmt.Errorf("tui: build control: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.httpc.Do(req)
-	if err != nil {
-		return fmt.Errorf("tui: control enqueue: %w", err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("tui: enqueue: unauthorized (fail closed; no authorizer on the gateway)")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tui: enqueue: http %d: %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+// notifyChan returns the feed's push signal. A subscription that cannot wake
+// a consumer yields a channel that never fires, so the pump drains once and
+// waits (the caller chose a non-waking subscription).
+func notifyChan(feed portal.Subscription) <-chan struct{} {
+	if wk, ok := feed.(portal.Waker); ok {
+		return wk.Notify()
 	}
 	return nil
 }
@@ -378,7 +236,7 @@ type badge struct {
 
 // feedMsg delivers a drained mailbox batch to the model. next is the
 // cursor the batch ends at; Update advances the model's cursor with it
-// (NAVI-380 — advancing it in the poll command raced and replayed events).
+// (NAVI-380 — the pump's goroutine must not touch the model).
 type feedMsg struct {
 	evs  []portal.Event
 	next int
@@ -403,20 +261,16 @@ type tuiModel struct {
 	transport Transport
 	feed      portal.Subscription
 	cursor    int
-	// polling is true while a feed-drain command is in flight. Every
-	// Update path re-arms the drain, so without the guard a key press
-	// during an in-flight poll stacks a second timer; two timers read
-	// overlapping ranges from the non-destructive mailbox and each applies
-	// them, which rendered every event once per timer (NAVI-380 follow-up).
-	polling bool
 	// objects is the typed-object surface the model renders and acts through
 	// (ADR 0017) — the same contract in-process and remote.
 	objects object.Surface
 	// types is the exposed descriptor set (loaded once the surface answers)
 	// and typeIdx selects which one the list renders, so every exposed type is
-	// reachable without a per-type screen.
-	types   []object.Type
-	typeIdx int
+	// reachable without a per-type screen. typesErr is why the last load
+	// failed, so an empty screen can say why.
+	types    []object.Type
+	typesErr error
+	typeIdx  int
 	// list is the selected type's page, resolved by the toolkit; items keeps
 	// the objects it carried so the live overlay can read fields the declared
 	// columns do not include.
@@ -476,14 +330,21 @@ func NewModel(tr Transport) *tuiModel {
 // listPage bounds the page the list renders.
 const listPage = 200
 
-// loadTypes caches the exposed descriptors. A remote surface fetches them on
-// its own schedule, so this is retried until it answers.
+// loadTypes caches the exposed descriptors. A remote surface fetches them
+// as its opening snapshot, so a failure is recorded and retried on the next
+// feed batch rather than leaving the list empty forever.
 func (m *tuiModel) loadTypes() {
 	if m.objects == nil {
 		return
 	}
-	if types := m.objects.Types(); len(types) > 0 {
+	types, err := m.objects.Types()
+	if err != nil {
+		m.typesErr = err
+		return
+	}
+	if len(types) > 0 {
 		m.types = types
+		m.typesErr = nil
 	}
 }
 
@@ -522,75 +383,13 @@ func (m *tuiModel) refreshList() {
 	m.refreshBlocked()
 }
 
-// poll arms the feed-drain command: one non-blocking mailbox read a
-// cadence, so the tea event loop never blocks on the portal (a slow UI
-// just drains fewer events per tick). AT MOST ONE DRAIN IS IN FLIGHT:
-// the guard makes the re-arm idempotent, and Update's cursor filter
-// keeps a duplicate delivery harmless if one ever slips through
-// (NAVI-380 follow-up — the read is non-destructive, so re-reading an
-// applied range re-appends it).
-//
-// The drain is never stopped. NAVI-335 made an idle read end it ("no
-// busy-loop"), which assumed the TUI was the only actor — but a portal
-// cannot know that the navi will not change: thoughts arrive from `navi
-// enqueue`, from cron, and from other portals, and a stopped drain left the
-// host blind to a thought queued by the remote client. So an idle read now
-// re-arms at a slower cadence instead: cheaper than the active tick, and
-// never deaf.
-//
-// The wrapper message is always non-nil (even for an empty read): the
-// cadence decision belongs to Update, because a command runs on a Bubble Tea
-// goroutine and must never touch the model (NAVI-380).
-func (m *tuiModel) poll() tea.Cmd {
-	if m.polling {
-		return nil // a drain is already armed; re-arming would stack a timer
-	}
-	m.polling = true
-	// Capture the cursor and the cadence HERE, on the Update goroutine: the
-	// returned command runs on a Bubble Tea goroutine and must not read or
-	// write the model (NAVI-380).
-	cursor := m.cursor
-	interval := m.pollInterval()
-	return tea.Every(interval, func(time.Time) tea.Msg {
-		evs, next, lost := m.feed.ReadAfter(cursor)
-		return feedMsg{evs: evs, next: next, lost: lost}
-	})
-}
-
-// Poll cadences: fast while work is in flight or a remote navi is being
-// watched, slower when nothing is happening — but never stopped (see poll).
-const (
-	activePoll = 150 * time.Millisecond
-	idlePoll   = time.Second
-)
-
-// pollInterval is the drain cadence. The active cadence applies while
-// something is running, while the watched navi is in another process, and
-// while the descriptors have not arrived yet (a client must keep asking).
-func (m *tuiModel) pollInterval() time.Duration {
-	if m.anyRunning() || m.transport.Remote() || len(m.types) == 0 {
-		return activePoll
-	}
-	return idlePoll
-}
-
-// anyRunning reports whether any row is running (drives the idle-free
-// ticking refresh).
-func (m *tuiModel) anyRunning() bool {
-	for _, row := range m.list.Rows {
-		if m.statusOf(row.ID) == "running" {
-			return true
-		}
-	}
-	return false
-}
-
-// Init seeds from the transport snapshot and starts the
-// feed poll.
+// Init seeds the first screen from the surface. The feed is driven by the
+// portal's Pump, not by a timer, so Init arms no command (ADR 0019
+// decision 5).
 func (m *tuiModel) Init() tea.Cmd {
 	m.loadTypes()
 	m.refreshList()
-	return m.poll()
+	return nil
 }
 
 // Update is the Elm update: keys and feed batches mutate the model.
@@ -600,15 +399,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.key(msg) {
 			return m, tea.Quit
 		}
-		return m, m.poll()
+		return m, nil
 	case feedMsg:
-		// The drain is re-armed whatever the batch held: an idle portal keeps
-		// watching at a slower cadence (NAVI-389 — see poll).
-		m.polling = false
-		raw := msg.evs
 		// Apply only events past the consumer cursor, and never move the
 		// cursor backwards: a duplicate delivery of an applied range must
-		// not re-append its turns (NAVI-380 follow-up).
+		// not re-append its turns (NAVI-380).
+		raw := msg.evs
 		msg.evs = unseen(msg.evs, m.cursor)
 		if len(raw) > 0 && len(msg.evs) == 0 {
 			msg.lost = false // a fully-applied duplicate reports no gap
@@ -617,9 +413,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = msg.next
 		}
 		m.applyFeed(msg)
-		return m, m.poll()
+		return m, nil
 	}
-	return m, m.poll()
+	return m, nil
 }
 
 func (m *tuiModel) View() string { return m.render() }
@@ -674,17 +470,17 @@ func (m *tuiModel) age(t time.Time) string {
 
 // applyFeed folds one drained mailbox batch into the model.
 func (m *tuiModel) applyFeed(f feedMsg) {
-	// A remote surface fetches its descriptors asynchronously, so the first
-	// page may be requested before they arrive. Retry on each tick until the
-	// surface answers, then read the page once.
+	// A surface may not have answered with its descriptors yet (a stream that
+	// opened before the snapshot landed). Retry on each pushed batch until it
+	// answers, then read the page once.
 	if len(m.types) == 0 {
 		m.loadTypes()
 		if len(m.types) > 0 {
 			m.refreshList()
-		} else if err := surfaceTypesError(m.objects); err != nil {
+		} else if m.typesErr != nil {
 			// Say why the screen is empty: an unreachable portal and a navi
 			// that exposes nothing look identical otherwise.
-			m.status = "portal: " + err.Error()
+			m.status = "portal: " + m.typesErr.Error()
 		}
 	}
 	if f.lost {
@@ -992,18 +788,6 @@ func (m *tuiModel) typeByName(name string) (object.Type, bool) {
 		}
 	}
 	return object.Type{}, false
-}
-
-// typesErrorReporter is an optional surface capability: a surface that fetches
-// its descriptors over a transport can say why they are not here yet, so a
-// client reports "unreachable" instead of rendering an empty screen.
-type typesErrorReporter interface{ TypesError() error }
-
-func surfaceTypesError(s object.Surface) error {
-	if r, ok := s.(typesErrorReporter); ok {
-		return r.TypesError()
-	}
-	return nil
 }
 
 // key handles a key press; returns true when the user quits.
