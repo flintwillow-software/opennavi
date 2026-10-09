@@ -107,12 +107,17 @@ func (g *Gateway) Start(ctx context.Context, deps portal.Deps) error {
 		return fmt.Errorf("gateway: listen %s: %w", g.addr, err)
 	}
 	g.ln = ln
-	g.srv = &http.Server{
+	// The goroutine keeps its OWN reference: Stop nils g.srv, and reading the
+	// field from the serve goroutine raced that write — a fast shutdown
+	// (a daemon whose stdin is already at EOF, an aborted run) dereferenced
+	// the nil server and panicked.
+	srv := &http.Server{
 		Handler:           g,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	g.srv = srv
 	go func() {
-		if serr := g.srv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+		if serr := srv.Serve(ln); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
 			g.logf("gateway: serve error", "err", serr.Error())
 		}
 	}()

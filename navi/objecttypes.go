@@ -109,7 +109,7 @@ func thoughtType() object.Type {
 			{Name: "retry", Label: "Retry"},
 		},
 		Views: []object.View{
-			{Kind: object.ViewList, Label: "Thoughts", Columns: []string{"prompt", "status", "priority", "updated_at"}},
+			{Kind: object.ViewList, Label: "Thoughts", Columns: []string{"id", "prompt", "status", "priority", "model", "updated_at"}},
 			{Kind: object.ViewDetail, Label: "Thought"},
 			{Kind: object.ViewChat, Label: "Conversation", Detail: DetailTranscript},
 		},

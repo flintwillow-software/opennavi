@@ -29,6 +29,7 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/portal/view"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -48,9 +49,17 @@ const DefaultFeedCap = 1024
 type Transport interface {
 	// Feed returns this transport's subscription mailbox.
 	Feed() portal.Subscription
-	// Snapshot returns current queue state for seeding (in-process:
-	// full; remote: converges from events, may return empty).
-	Snapshot() ([]*thought.Thought, error)
+	// Objects is the typed-object surface the model renders and acts
+	// through (ADR 0017): the same contract in-process and remote, so the
+	// views are descriptor-driven in both modes. Reading the queue through it
+	// is what replaced the old remote snapshot (which could only converge
+	// from events).
+	Objects() object.Surface
+	// Remote reports whether this transport talks to a navi in ANOTHER
+	// process. A remote attachment keeps draining while idle — the work it
+	// observes is not this process's — whereas an in-process TUI may sleep
+	// until the user acts (NAVI-335).
+	Remote() bool
 	Steer(thoughtID, text string) error
 	Bump(thoughtID string, prio int) error
 	Pause(thoughtID string) error
@@ -73,26 +82,40 @@ type Transport interface {
 // live-only: transcript restore applies to every portal and is tracked
 // separately (NAVI-353).
 type inProcessTransport struct {
-	ts   thought.ThoughtSystem
-	feed portal.Subscription
+	ts      thought.ThoughtSystem
+	objects object.Surface
+	feed    portal.Subscription
 }
 
-// NewInProcess builds the in-process transport over a thought-system
-// handle and the runtime's observation source.
-func NewInProcess(ts thought.ThoughtSystem, obs portal.Observer) (*inProcessTransport, error) {
-	if ts == nil {
+// NewInProcess builds the in-process transport from the portal's Deps: the
+// thought-system handle for control, the runtime's observation source for the
+// live feed, and the typed-object surface for everything the model renders
+// (ADR 0017). A navi always exposes its own aggregates, so a TUI hosted by
+// one always has a surface.
+func NewInProcess(deps portal.Deps) (*inProcessTransport, error) {
+	if deps.ThoughtSystem == nil {
 		return nil, errors.New("tui: in-process transport requires a thought system")
 	}
-	if obs == nil {
+	if deps.Observation == nil {
 		return nil, errors.New("tui: in-process transport requires an observation source")
 	}
-	return &inProcessTransport{ts: ts, feed: obs.Subscribe(DefaultFeedCap)}, nil
+	if deps.Objects == nil {
+		return nil, errors.New("tui: in-process transport requires an object surface")
+	}
+	return &inProcessTransport{
+		ts:      deps.ThoughtSystem,
+		objects: deps.Objects,
+		feed:    deps.Observation.Subscribe(DefaultFeedCap),
+	}, nil
 }
 
 func (t *inProcessTransport) Feed() portal.Subscription { return t.feed }
-func (t *inProcessTransport) Snapshot() ([]*thought.Thought, error) {
-	return t.ts.GetThoughts(), nil
-}
+
+// Objects is the navi's typed-object surface, handed through Deps.
+func (t *inProcessTransport) Objects() object.Surface { return t.objects }
+
+// Remote is false: this transport drives the navi in this process.
+func (t *inProcessTransport) Remote() bool { return false }
 func (t *inProcessTransport) Steer(thoughtID, text string) error {
 	return t.ts.RouteMessage(thoughtID, text)
 }
@@ -172,71 +195,25 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 
 func (t *remoteTransport) Feed() portal.Subscription { return t.feed }
 
+// Close stops the poll pump and releases the feed mailbox. Safe more than once.
+func (t *remoteTransport) Close() error {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+	t.feed.Close()
+	return nil
+}
+
+// Objects is the remote binding of the typed-object surface: the gateway
+// client this transport embeds.
+func (t *remoteTransport) Objects() object.Surface { return t.Client }
+
+// Remote is true: the navi this transport observes runs in another process.
+func (t *remoteTransport) Remote() bool { return true }
+
 // objectThought is the wire name of the thought type the navi exposes
 // (navi.TypeThought; the TUI cannot import the composition root).
 const objectThought = "thought"
-
-// snapshotPage/snapshotPages bound the remote seed: enough to render a queue
-// without paging forever.
-const (
-	snapshotPage  = 100
-	snapshotPages = 5
-)
-
-// Snapshot lists pre-existing thoughts through the object surface: the remote
-// binding reads the same thought objects an in-process portal reads, so a
-// remote front-end sees the queue it attached to instead of converging from
-// events alone (the empty-snapshot bug this fixes).
-func (t *remoteTransport) Snapshot() ([]*thought.Thought, error) {
-	var out []*thought.Thought
-	cursor := ""
-	for page := 0; page < snapshotPages; page++ {
-		objs, next, err := t.List(objectThought, object.Query{Cursor: cursor, Limit: snapshotPage})
-		if err != nil {
-			return nil, err
-		}
-		for _, obj := range objs {
-			out = append(out, thoughtFromObject(obj))
-		}
-		if next == "" {
-			return out, nil
-		}
-		cursor = next
-	}
-	return out, nil
-}
-
-// thoughtFromObject maps one surface object back onto the TUI's thought view.
-// It is a bootstrap for the view kind the generic toolkit does not have yet
-// (ADR 0017 decision 7): sensitive working state (checkpoint, metadata) is not
-// exposed by the surface, so it is absent remotely.
-func thoughtFromObject(obj object.Object) *thought.Thought {
-	t := &thought.Thought{ID: obj.ID}
-	t.Prompt = stringField(obj, "prompt")
-	t.Context = stringField(obj, "context")
-	t.Result = stringField(obj, "result")
-	t.Provider = stringField(obj, "provider")
-	t.Model = stringField(obj, "model")
-	t.Mode = stringField(obj, "mode")
-	t.Status = thought.ThoughtStatus(stringField(obj, "status"))
-	if v, ok := obj.Fields["priority"].(float64); ok {
-		t.Priority = int(v)
-	}
-	if v, ok := obj.Fields["foreground"].(bool); ok {
-		t.Foreground = v
-	}
-	if v, ok := obj.Fields["verification"].(bool); ok && v {
-		// IsVerification reads the metadata role; the surface exposes the
-		// derived flag, not the free-form metadata map.
-		t.Metadata = map[string]string{thought.MetadataRole: thought.RoleVerification}
-	}
-	t.Skills = stringListField(obj, "skills")
-	t.DependsOn = stringListField(obj, "depends_on")
-	t.DeferUntil = timeField(obj, "defer_until")
-	t.CreatedAt = timeField(obj, "created_at")
-	t.UpdatedAt = timeField(obj, "updated_at")
-	return t
-}
 
 func stringField(obj object.Object, name string) string {
 	v, _ := obj.Fields[name].(string)
@@ -244,31 +221,19 @@ func stringField(obj object.Object, name string) string {
 }
 
 func stringListField(obj object.Object, name string) []string {
-	raw, ok := obj.Fields[name].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
+	switch raw := obj.Fields[name].(type) {
+	case []string:
+		return raw
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
 		}
+		return out
 	}
-	return out
-}
-
-// timeField reads a timestamp that crossed the wire as RFC 3339 (the surface
-// serves time.Time; JSON carries it as a string).
-func timeField(obj object.Object, name string) time.Time {
-	s, _ := obj.Fields[name].(string)
-	if s == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
+	return nil
 }
 
 // eventsURL builds the cursor-poll endpoint.
@@ -455,26 +420,24 @@ func (t *remoteTransport) Enqueue(prompt string, prio int, deferUntil time.Time)
 type ModeKind string
 
 const (
-	ModeList  ModeKind = "list"
-	ModeLive  ModeKind = "live"
-	ModeInput ModeKind = "input"
+	ModeList   ModeKind = "list"
+	ModeDetail ModeKind = "detail"
+	ModeLive   ModeKind = "live"
+	ModeInput  ModeKind = "input"
 )
 
-// row is one queue row.
-type row struct {
-	thoughtID string
-	status    string
-	blocked   bool     // pending with an unmet dependency (derived, not a lifecycle status)
-	deps      []string // ids this thought waits for (empty when unknown, e.g. remote convergence)
-	// verification marks a plan's closing check (ADR 0016), so the plan's
-	// last stage is visible as a check rather than more work.
-	verification bool
-	priority     int
-	prompt       string
-	at           time.Time // last activity time — the render computes the age (ticking clock)
-	model        string    // per-thought provider overrides/selected model (abbreviated)
-	checkpoint   bool      // thought carries a checkpoint (parked/resumable)
-	activity     string    // live preview: latest tool call / delta snippet (NAVI-335)
+// badge is the live overlay for one object: state the descriptor carries but
+// the event stream updates faster than a surface re-read (status), plus
+// derived or transient state the descriptor does not carry at all — a derived
+// blocked flag (ADR 0015), a checkpoint marker (sensitive, so absent from the
+// served object), and a running preview (NAVI-335). The columns and cells come
+// from the toolkit; the badge decorates them.
+type badge struct {
+	status     string
+	blocked    bool
+	activity   string
+	at         time.Time // last activity time — the render computes the age (ticking clock)
+	checkpoint bool      // thought carries a checkpoint (parked/resumable)
 }
 
 // feedMsg delivers a drained mailbox batch to the model. next is the
@@ -510,11 +473,26 @@ type tuiModel struct {
 	// overlapping ranges from the non-destructive mailbox and each applies
 	// them, which rendered every event once per timer (NAVI-380 follow-up).
 	polling bool
-	rows    []row
-	byID    map[string]int
-	sel     int
-	mode    ModeKind
-	liveID  string
+	// objects is the typed-object surface the model renders and acts through
+	// (ADR 0017) — the same contract in-process and remote.
+	objects object.Surface
+	// types is the exposed descriptor set (loaded once the surface answers)
+	// and typeIdx selects which one the list renders, so every exposed type is
+	// reachable without a per-type screen.
+	types   []object.Type
+	typeIdx int
+	// list is the selected type's page, resolved by the toolkit; items keeps
+	// the objects it carried so the live overlay can read fields the declared
+	// columns do not include.
+	list  view.List
+	items map[string]object.Object
+	// badges is the live overlay keyed by object id; detail is the open
+	// object's descriptor-driven view (ModeDetail).
+	badges map[string]badge
+	detail *view.Detail
+	sel    int
+	mode   ModeKind
+	liveID string
 	// turns is the reconstructed chat for the live view (NAVI-330):
 	// prompt as the opening user turn, assistant deltas accumulated,
 	// tool blocks, lifecycle system lines, steers as user turns.
@@ -546,13 +524,66 @@ type tuiModel struct {
 
 // NewModel builds the model over a transport.
 func NewModel(tr Transport) *tuiModel {
-	return &tuiModel{
+	m := &tuiModel{
 		transport:   tr,
+		objects:     tr.Objects(),
 		feed:        tr.Feed(),
-		byID:        make(map[string]int),
+		items:       make(map[string]object.Object),
+		badges:      make(map[string]badge),
 		transcripts: make(map[string][]turn),
 		mode:        ModeList,
 	}
+	m.loadTypes()
+	return m
+}
+
+// listPage bounds the page the list renders.
+const listPage = 200
+
+// loadTypes caches the exposed descriptors. A remote surface fetches them on
+// its own schedule, so this is retried until it answers.
+func (m *tuiModel) loadTypes() {
+	if m.objects == nil {
+		return
+	}
+	if types := m.objects.Types(); len(types) > 0 {
+		m.types = types
+	}
+}
+
+// currentType is the descriptor the list renders.
+func (m *tuiModel) currentType() (object.Type, bool) {
+	if len(m.types) == 0 || m.typeIdx >= len(m.types) {
+		return object.Type{}, false
+	}
+	return m.types[m.typeIdx], true
+}
+
+// refreshList re-reads the selected type's page through the surface and
+// resolves it with the toolkit, so the list is descriptor-driven (ADR 0017)
+// and identical in-process and remote.
+func (m *tuiModel) refreshList() {
+	t, ok := m.currentType()
+	if !ok || m.objects == nil {
+		return
+	}
+	objs, next, err := m.objects.List(t.Name, object.Query{Limit: listPage})
+	if err != nil {
+		m.status = "list " + t.Name + ": " + err.Error()
+		return
+	}
+	m.list = view.ListOf(t, objs, next)
+	m.items = make(map[string]object.Object, len(objs))
+	for _, o := range objs {
+		m.items[o.ID] = o
+	}
+	if m.sel >= len(m.list.Rows) {
+		m.sel = len(m.list.Rows) - 1
+	}
+	if m.sel < 0 {
+		m.sel = 0
+	}
+	m.refreshBlocked()
 }
 
 // poll arms the feed-drain command: one non-blocking mailbox read a
@@ -563,30 +594,55 @@ func NewModel(tr Transport) *tuiModel {
 // (NAVI-380 follow-up — the read is non-destructive, so re-reading an
 // applied range re-appends it).
 //
+// The drain is never stopped. NAVI-335 made an idle read end it ("no
+// busy-loop"), which assumed the TUI was the only actor — but a portal
+// cannot know that the navi will not change: thoughts arrive from `navi
+// enqueue`, from cron, and from other portals, and a stopped drain left the
+// host blind to a thought queued by the remote client. So an idle read now
+// re-arms at a slower cadence instead: cheaper than the active tick, and
+// never deaf.
+//
 // The wrapper message is always non-nil (even for an empty read): the
-// idle decision — stop draining until the next user input — belongs to
-// Update, because a command runs on a Bubble Tea goroutine and must
-// never touch the model (NAVI-380).
+// cadence decision belongs to Update, because a command runs on a Bubble Tea
+// goroutine and must never touch the model (NAVI-380).
 func (m *tuiModel) poll() tea.Cmd {
 	if m.polling {
 		return nil // a drain is already armed; re-arming would stack a timer
 	}
 	m.polling = true
-	// Capture the cursor HERE, on the Update goroutine: the returned
-	// command runs on a Bubble Tea goroutine and must not read or write
-	// the model (NAVI-380).
+	// Capture the cursor and the cadence HERE, on the Update goroutine: the
+	// returned command runs on a Bubble Tea goroutine and must not read or
+	// write the model (NAVI-380).
 	cursor := m.cursor
-	return tea.Every(150*time.Millisecond, func(time.Time) tea.Msg {
+	interval := m.pollInterval()
+	return tea.Every(interval, func(time.Time) tea.Msg {
 		evs, next, lost := m.feed.ReadAfter(cursor)
 		return feedMsg{evs: evs, next: next, lost: lost}
 	})
 }
 
+// Poll cadences: fast while work is in flight or a remote navi is being
+// watched, slower when nothing is happening — but never stopped (see poll).
+const (
+	activePoll = 150 * time.Millisecond
+	idlePoll   = time.Second
+)
+
+// pollInterval is the drain cadence. The active cadence applies while
+// something is running, while the watched navi is in another process, and
+// while the descriptors have not arrived yet (a client must keep asking).
+func (m *tuiModel) pollInterval() time.Duration {
+	if m.anyRunning() || m.transport.Remote() || len(m.types) == 0 {
+		return activePoll
+	}
+	return idlePoll
+}
+
 // anyRunning reports whether any row is running (drives the idle-free
 // ticking refresh).
 func (m *tuiModel) anyRunning() bool {
-	for _, r := range m.rows {
-		if r.status == "running" {
+	for _, row := range m.list.Rows {
+		if m.statusOf(row.ID) == "running" {
 			return true
 		}
 	}
@@ -596,9 +652,8 @@ func (m *tuiModel) anyRunning() bool {
 // Init seeds from the transport snapshot and starts the
 // feed poll.
 func (m *tuiModel) Init() tea.Cmd {
-	if thoughts, err := m.transport.Snapshot(); err == nil {
-		m.rebuild(thoughts)
-	}
+	m.loadTypes()
+	m.refreshList()
 	return m.poll()
 }
 
@@ -611,9 +666,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.poll()
 	case feedMsg:
-		// The drain delivered: clear the guard, apply the batch, and
-		// re-arm — unless the mailbox was genuinely empty and nothing is
-		// running (the idle-free tick of NAVI-335).
+		// The drain is re-armed whatever the batch held: an idle portal keeps
+		// watching at a slower cadence (NAVI-389 — see poll).
 		m.polling = false
 		raw := msg.evs
 		// Apply only events past the consumer cursor, and never move the
@@ -627,9 +681,6 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = msg.next
 		}
 		m.applyFeed(msg)
-		if len(raw) == 0 && !msg.lost && !m.anyRunning() {
-			return m, nil // idle: sleep until user input re-arms the drain
-		}
 		return m, m.poll()
 	}
 	return m, m.poll()
@@ -637,68 +688,45 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) View() string { return m.render() }
 
-// rebuild replaces the row set from a snapshot.
-func (m *tuiModel) rebuild(thoughts []*thought.Thought) {
-	m.rows = []row{}
-	m.byID = make(map[string]int)
-	for _, t := range thoughts {
-		m.upsert(t.ID, string(t.Status), t.EffectivePriority(), t.Prompt, t.Model, len(t.Checkpoint) > 0, t.DependsOn, t.UpdatedAt)
-		if i, ok := m.byID[t.ID]; ok {
-			m.rows[i].verification = t.IsVerification()
-		}
-	}
-	m.refreshBlocked()
-}
-
-// refreshBlocked derives the display-only "blocked" state: a pending row
-// whose dependency has not completed (NAVI-378). The dependency relation
-// is not a lifecycle status, so it is computed here from the rows the
-// model already holds — which works both for the in-process snapshot
-// (whose rows carry depends_on) and for event-driven convergence.
+// refreshBlocked derives the display-only "blocked" state: a pending object
+// whose dependency has not completed (ADR 0015). "Blocked" is not a lifecycle
+// status, so it is computed from the objects the page carries — the same way
+// in-process and remote.
 func (m *tuiModel) refreshBlocked() {
-	status := make(map[string]string, len(m.rows))
-	for _, r := range m.rows {
-		status[r.thoughtID] = r.status
+	status := make(map[string]string, len(m.list.Rows))
+	for _, row := range m.list.Rows {
+		status[row.ID] = m.statusOf(row.ID)
 	}
-	for i := range m.rows {
-		r := &m.rows[i]
-		r.blocked = false
-		if r.status != string(thought.ThoughtPending) || len(r.deps) == 0 {
-			continue
-		}
-		for _, dep := range r.deps {
-			if status[dep] != string(thought.ThoughtComplete) {
-				r.blocked = true
-				break
+	for _, row := range m.list.Rows {
+		m.setBadge(row.ID, func(b *badge) {
+			b.blocked = false
+			if m.statusOf(row.ID) != string(thought.ThoughtPending) {
+				return
 			}
-		}
+			for _, dep := range stringListField(m.items[row.ID], "depends_on") {
+				if status[dep] != string(thought.ThoughtComplete) {
+					b.blocked = true
+					return
+				}
+			}
+		})
 	}
 }
 
-func (m *tuiModel) upsert(id, status string, prio int, prompt, model string, checkpoint bool, deps []string, at time.Time) {
-	if i, ok := m.byID[id]; ok && i < len(m.rows) {
-		m.rows[i].status = status
-		m.rows[i].priority = prio
-		if prompt != "" {
-			m.rows[i].prompt = prompt
-		}
-		m.rows[i].model = model
-		m.rows[i].checkpoint = checkpoint
-		m.rows[i].deps = deps
-		m.rows[i].at = at
-		return
+// statusOf reports an object's status: the live overlay when the event stream
+// has updated it, else the declared field the surface served.
+func (m *tuiModel) statusOf(id string) string {
+	if b, ok := m.badges[id]; ok && b.status != "" {
+		return b.status
 	}
-	m.rows = append(m.rows, row{
-		thoughtID:  id,
-		status:     status,
-		priority:   prio,
-		prompt:     prompt,
-		model:      model,
-		checkpoint: checkpoint,
-		deps:       deps,
-		at:         at,
-	})
-	m.byID[id] = len(m.rows) - 1
+	return stringField(m.items[id], "status")
+}
+
+// setBadge merges the live overlay for one object.
+func (m *tuiModel) setBadge(id string, mutate func(*badge)) {
+	b := m.badges[id]
+	mutate(&b)
+	m.badges[id] = b
 }
 
 func (m *tuiModel) age(t time.Time) string {
@@ -710,6 +738,19 @@ func (m *tuiModel) age(t time.Time) string {
 
 // applyFeed folds one drained mailbox batch into the model.
 func (m *tuiModel) applyFeed(f feedMsg) {
+	// A remote surface fetches its descriptors asynchronously, so the first
+	// page may be requested before they arrive. Retry on each tick until the
+	// surface answers, then read the page once.
+	if len(m.types) == 0 {
+		m.loadTypes()
+		if len(m.types) > 0 {
+			m.refreshList()
+		} else if err := surfaceTypesError(m.objects); err != nil {
+			// Say why the screen is empty: an unreachable portal and a navi
+			// that exposes nothing look identical otherwise.
+			m.status = "portal: " + err.Error()
+		}
+	}
 	if f.lost {
 		m.lost = true
 		m.status = "notice: portal stream dropped events (slow UI — gap)"
@@ -732,27 +773,21 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 		m.status = ev.Detail
 		return
 	}
-	// A thought this run never saw arrived: refresh from the snapshot
-	// once so the row carries full fields (in-process: complete;
-	// remote: converges as events continue).
-	if _, ok := m.byID[ev.ThoughtID]; !ok {
-		if thoughts, _ := m.transport.Snapshot(); len(thoughts) > 0 {
-			m.rebuild(thoughts)
-		} else {
-			m.upsert(ev.ThoughtID, ev.Kind, 4, "(remote)", "", false, nil, time.Now().UTC())
-		}
-		_ = ok
+	// An object this run never saw arrived: re-read the page so the row
+	// carries its declared fields (the live overlay cannot invent them).
+	if _, known := m.items[ev.ThoughtID]; !known {
+		m.refreshList()
 	}
-	if i, ok := m.byID[ev.ThoughtID]; ok && i < len(m.rows) {
-		m.rows[i].status = displayStatus(ev.Kind)
-		m.rows[i].at = time.Now().UTC()
-		if ev.Kind == "completed" && m.activeID == ev.ThoughtID {
-			m.active = ""
-			m.activeID = ""
-		}
+	m.setBadge(ev.ThoughtID, func(b *badge) {
+		b.status = displayStatus(ev.Kind)
+		b.at = time.Now().UTC()
+	})
+	if ev.Kind == "completed" && m.activeID == ev.ThoughtID {
+		m.active = ""
+		m.activeID = ""
 	}
 	// A dependency's completion releases its dependents: recompute the
-	// derived blocked state from the rows.
+	// derived blocked state from the objects the page carries.
 	m.refreshBlocked()
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
@@ -867,9 +902,11 @@ func (m *tuiModel) homeAgentEvent(ev portal.Event) {
 	default:
 		return // lifecycle-ish agent events stay off the preview
 	}
-	if i, ok := m.byID[ev.ThoughtID]; ok && i < len(m.rows) {
-		m.rows[i].activity = preview
-		m.rows[i].at = time.Now().UTC()
+	if _, known := m.items[ev.ThoughtID]; known {
+		m.setBadge(ev.ThoughtID, func(b *badge) {
+			b.activity = preview
+			b.at = time.Now().UTC()
+		})
 	}
 	m.activeID = ev.ThoughtID
 	m.active = preview
@@ -934,54 +971,103 @@ type turn struct {
 // maxLiveTurns bounds the reconstructed chat (scrollback window).
 const maxLiveTurns = 80
 
-// enterLive opens the live view for thoughtID, seeding the chat from the
-// snapshot: the thought's prompt as the opening user turn plus Context
-// appends as steering turns. It is live-only — a viewer attaching mid-run
-// sees the snapshot plus events from attach on (transcript replay applies
-// to every portal and is tracked separately, NAVI-353).
+// enterLive opens a thought's conversation: the persisted transcript detail,
+// read through the object surface and resolved by the toolkit, so a completed
+// thought opened after the fact shows its full conversation and the in-process
+// and remote paths render the same thing (ADR 0017). Live events accumulate on
+// top of the seed.
 func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
 	m.liveScroll = 0
-	// Prefer the conversation accumulated from the event stream (this
-	// session): a thought that already finished still shows its response
-	// when opened after the fact. The prompt is prepended when the
-	// transcript has no opening user turn.
 	if tr := m.transcripts[thoughtID]; len(tr) > 0 {
+		// The accumulated stream may have started mid-run: the prompt opens
+		// the conversation when nothing else does.
 		if tr[0].role != TurnUser {
-			tr = append(m.promptTurns(thoughtID), tr...)
+			tr = append([]turn{{role: TurnUser, text: m.promptOf(thoughtID)}}, tr...)
 			m.transcripts[thoughtID] = tr
 		}
 		m.turns = tr
 		return
 	}
-	m.turns = m.promptTurns(thoughtID)
+	m.turns = m.seedTurns(thoughtID)
 	m.transcripts[thoughtID] = m.turns
 }
 
-// promptTurns seeds the live view from the queue snapshot: the thought's
-// prompt as the opening user turn plus its Context appends as steering
-// turns.
-func (m *tuiModel) promptTurns(thoughtID string) []turn {
+// seedTurns reads a thought's transcript through the surface and maps it to
+// turns. A navi with no datastore (or a thought with no persisted history yet)
+// yields just the prompt, so an empty transcript still renders something.
+func (m *tuiModel) seedTurns(thoughtID string) []turn {
 	var out []turn
-	if thoughts, err := m.transport.Snapshot(); err == nil {
-		for _, t := range thoughts {
-			if t.ID != thoughtID {
-				continue
+	if m.objects != nil {
+		if t, ok := m.typeByName(objectThought); ok {
+			detail := "transcript"
+			if v, ok := view.Hint(t, object.ViewChat); ok && v.Detail != "" {
+				detail = v.Detail
 			}
-			out = append(out, turn{role: TurnUser, text: t.Prompt})
-			for _, line := range strings.Split(t.Context, "\n") {
-				if strings.TrimSpace(line) != "" {
-					out = append(out, turn{role: TurnUser, text: line})
-				}
+			if chat, err := view.ReadChat(m.objects, t.Name, thoughtID, detail, object.Query{Limit: listPage}); err == nil {
+				out = turnsOf(chat)
 			}
-			break
 		}
 	}
 	if len(out) == 0 {
-		out = append(out, turn{role: TurnUser, text: thoughtID})
+		out = append(out, turn{role: TurnUser, text: m.promptOf(thoughtID)})
 	}
 	return out
+}
+
+// turnsOf converts toolkit chat turns into the model's rendering turns.
+func turnsOf(chat view.Chat) []turn {
+	out := make([]turn, 0, len(chat.Turns))
+	for _, t := range chat.Turns {
+		switch {
+		case t.Role == "tool" || (t.Tool != "" && t.Output != ""):
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolOut: t.Output})
+		case t.Tool != "" && t.Text == "":
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolIn: t.Input})
+		default:
+			role := TurnAssistant
+			switch t.Role {
+			case "user":
+				role = TurnUser
+			case "system":
+				role = TurnSystem
+			}
+			out = append(out, turn{role: role, text: t.Text})
+		}
+	}
+	return out
+}
+
+// promptOf returns a thought's prompt from the listed page (falling back to the
+// id, so a conversation always has an opening turn).
+func (m *tuiModel) promptOf(thoughtID string) string {
+	if s := stringField(m.items[thoughtID], "prompt"); s != "" {
+		return s
+	}
+	return thoughtID
+}
+
+// typeByName finds an exposed descriptor.
+func (m *tuiModel) typeByName(name string) (object.Type, bool) {
+	for _, t := range m.types {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return object.Type{}, false
+}
+
+// typesErrorReporter is an optional surface capability: a surface that fetches
+// its descriptors over a transport can say why they are not here yet, so a
+// client reports "unreachable" instead of rendering an empty screen.
+type typesErrorReporter interface{ TypesError() error }
+
+func surfaceTypesError(s object.Surface) error {
+	if r, ok := s.(typesErrorReporter); ok {
+		return r.TypesError()
+	}
+	return nil
 }
 
 // key handles a key press; returns true when the user quits.
@@ -1021,8 +1107,9 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 	case "q", "ctrl+c":
 		return true
 	case "esc", "escape", "l":
-		if m.mode == ModeLive {
+		if m.mode == ModeLive || m.mode == ModeDetail {
 			m.mode = ModeList
+			m.detail = nil
 		}
 	case "up", "k":
 		if m.mode == ModeLive {
@@ -1035,12 +1122,22 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			if m.liveScroll > 0 {
 				m.liveScroll--
 			}
-		} else if m.mode == ModeList && m.sel < len(m.rows)-1 {
+		} else if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
 			m.sel++
 		}
 	case "enter":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.enterLive(m.rows[m.sel].thoughtID)
+		if id, ok := m.selected(); ok {
+			m.open(id)
+		}
+	case "t":
+		if m.mode == ModeList && len(m.types) > 1 {
+			m.typeIdx = (m.typeIdx + 1) % len(m.types)
+			m.sel = 0
+			m.detail = nil
+			m.refreshList()
+			if t, ok := m.currentType(); ok {
+				m.status = "type: " + t.Name
+			}
 		}
 	case "n":
 		if m.mode == ModeList {
@@ -1051,36 +1148,36 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.mode = ModeInput
 		}
 	case "a":
-		if m.mode == ModeList && len(m.rows) > 0 {
+		if m.mode == ModeList && len(m.list.Rows) > 0 {
 			m.enqueue = false
-			m.inputID = m.rows[m.sel].thoughtID
+			m.inputID = m.list.Rows[m.sel].ID
 			m.stage = 0
 			m.input = ""
 			m.mode = ModeInput
 		}
 	case "p":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("bump", m.rows[m.sel].thoughtID, maxPriority(m.rows[m.sel].priority-1))
+		if id, ok := m.selected(); ok {
+			m.doAction("bump", id, maxPriority(intField(m.items[id].Fields["priority"])-1))
 		}
 	case "P":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("bump", m.rows[m.sel].thoughtID, minPriority(m.rows[m.sel].priority+1))
+		if id, ok := m.selected(); ok {
+			m.doAction("bump", id, minPriority(intField(m.items[id].Fields["priority"])+1))
 		}
 	case "s":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("pause", m.rows[m.sel].thoughtID, 0)
+		if id, ok := m.selected(); ok {
+			m.doAction("pause", id, 0)
 		}
 	case "r":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("resume", m.rows[m.sel].thoughtID, 0)
+		if id, ok := m.selected(); ok {
+			m.doAction("resume", id, 0)
 		}
 	case "c":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("cancel", m.rows[m.sel].thoughtID, 0)
+		if id, ok := m.selected(); ok {
+			m.doAction("cancel", id, 0)
 		}
 	case "R":
-		if m.mode == ModeList && len(m.rows) > 0 {
-			m.doAction("retry", m.rows[m.sel].thoughtID, 0)
+		if id, ok := m.selected(); ok {
+			m.doAction("retry", id, 0)
 		}
 	}
 	return false
@@ -1175,35 +1272,81 @@ func minPriority(p int) int {
 	return p
 }
 
-func (m *tuiModel) doAction(kind, id string, prio int) {
-	var err error
-	switch kind {
-	case "bump":
-		err = m.transport.Bump(id, prio)
-	case "pause":
-		err = m.transport.Pause(id)
-	case "resume":
-		err = m.transport.Resume(id)
-	case "cancel":
-		err = m.transport.Cancel(id)
-	case "retry":
-		err = m.transport.Retry(id)
+// selected returns the highlighted object's id in list mode.
+func (m *tuiModel) selected() (string, bool) {
+	if m.mode != ModeList || m.sel < 0 || m.sel >= len(m.list.Rows) {
+		return "", false
 	}
+	return m.list.Rows[m.sel].ID, true
+}
+
+// intField reads an int field that may have crossed the wire as a number.
+func intField(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+// open renders an object: a type that declares a chat view opens the
+// conversation (the thought case), anything else opens the sectioned detail
+// view. Both come from the descriptor, so a new type needs no new screen.
+func (m *tuiModel) open(id string) {
+	t, ok := m.currentType()
+	if !ok {
+		return
+	}
+	if _, isChat := view.Hint(t, object.ViewChat); isChat {
+		m.enterLive(id)
+		return
+	}
+	d, err := view.ReadDetail(m.objects, t.Name, id)
 	if err != nil {
-		m.status = fmt.Sprintf("%s %s failed: %v", kind, id, err)
-	} else {
-		m.status = fmt.Sprintf("%s → %s", kind, id)
+		m.status = "detail " + id + ": " + err.Error()
+		return
 	}
+	m.detail = &d
+	m.mode = ModeDetail
+}
+
+// doAction dispatches a declared action through the object surface (ADR 0017):
+// the descriptor decides what a type supports, so the model does not hardcode
+// verbs per type, and the same call works in-process and remote.
+func (m *tuiModel) doAction(action, id string, prio int) {
+	t, ok := m.currentType()
+	if !ok || m.objects == nil {
+		return
+	}
+	args := map[string]any{}
+	if action == "bump" {
+		args["priority"] = prio
+	}
+	if err := m.objects.Act(t.Name, id, action, args); err != nil {
+		m.status = fmt.Sprintf("%s %s failed: %v", action, id, err)
+		return
+	}
+	m.status = fmt.Sprintf("%s → %s", action, id)
 }
 
 // render draws the current screen (plain text; Bubble Tea repaints it
 // on every Update).
 func (m *tuiModel) render() string {
-	out := " navi · thought queue (portal" + terminalSuffix(m) + ")\n"
+	title := "thought queue"
+	if t, ok := m.currentType(); ok && t.Label != "" {
+		title = t.Label
+	}
+	out := " navi · " + title + " (portal" + terminalSuffix(m) + ")\n"
 	out += repeat("-", 60) + "\n"
 	switch m.mode {
 	case ModeList:
 		out += m.renderList()
+	case ModeDetail:
+		out += m.renderDetail()
 	case ModeLive:
 		out += m.renderLive()
 	case ModeInput:
@@ -1214,7 +1357,7 @@ func (m *tuiModel) render() string {
 		out += " ▸ " + sanitizeLine(m.activeID) + " · " + sanitizeLine(m.active) + "\n"
 	}
 	out += " " + sanitizeLine(m.status) + "\n"
-	out += " q quit · j/k move · enter/i live · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
+	out += " q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
 	return out
 }
 
@@ -1233,34 +1376,128 @@ func repeat(s string, n int) string {
 	return out
 }
 
+// renderList draws the selected type's page from the descriptor-resolved
+// columns, decorating each row with the live overlay (status, a derived
+// blocked flag, a checkpoint marker, a running preview).
 func (m *tuiModel) renderList() string {
-	out := ""
-	if len(m.rows) == 0 {
-		out += " (queue empty)\n"
-		return out
+	t, ok := m.currentType()
+	if !ok {
+		return " (waiting for the navi's object types…)\n"
 	}
-	for i, r := range m.rows {
+	out := ""
+	if len(m.types) > 1 {
+		out += " type: "
+		for i, ty := range m.types {
+			if i > 0 {
+				out += " · "
+			}
+			label := ty.Label
+			if label == "" {
+				label = ty.Name
+			}
+			if i == m.typeIdx {
+				out += "[" + sanitizeLine(label) + "]"
+			} else {
+				out += sanitizeLine(label)
+			}
+		}
+		out += "\n"
+	}
+	if len(m.list.Rows) == 0 {
+		return out + " (" + sanitizeLine(t.Name) + " empty)\n"
+	}
+	out += "    "
+	for _, c := range m.list.Columns {
+		out += fmt.Sprintf("%-*s ", columnWidth(c), m.clip(sanitizeLine(c.Label), columnWidth(c)))
+	}
+	out += "\n"
+	for i, row := range m.list.Rows {
 		mark := " "
 		if i == m.sel {
 			mark = ">"
 		}
+		b := m.badges[row.ID]
 		flags := "  "
-		if r.checkpoint {
+		if b.checkpoint {
 			flags = " C "
 		}
-		if r.verification {
+		if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
 			flags += "V"
 		}
-		suffix := ""
-		if r.activity != "" {
-			suffix = " «" + m.clip(sanitizeLine(r.activity), 24)
+		out += " " + mark + " "
+		for _, c := range m.list.Columns {
+			value := cellValue(row, c.Field)
+			if c.Field == "status" {
+				value = m.statusOf(row.ID)
+				if b.blocked {
+					value = "blocked"
+				}
+			}
+			out += fmt.Sprintf("%-*s ", columnWidth(c), m.clip(sanitizeLine(value), columnWidth(c)))
 		}
-		status := r.status
-		if r.blocked {
-			status = "blocked"
+		out += flags + " "
+		if b.activity != "" {
+			out += " «" + m.clip(sanitizeLine(b.activity), 24)
 		}
-		out += fmt.Sprintf(" %s %-3s %-11s p%d %6s %-10s %s %s%s\n",
-			mark, sanitizeLine(r.thoughtID), sanitizeLine(status), r.priority, m.age(r.at), m.clip(sanitizeLine(r.model), 10), flags, m.clip(sanitizeLine(r.prompt), 30), suffix)
+		out += "\n"
+	}
+	return out
+}
+
+// columnWidth bounds a rendered column so one long value cannot push the rest
+// off the screen. A text column (a prompt) gets room; everything else sizes to
+// its label with a floor.
+func columnWidth(c view.Column) int {
+	if c.Kind == object.KindText {
+		return 30
+	}
+	w := len(c.Label)
+	if w < 10 {
+		w = 10
+	}
+	if w > 30 {
+		w = 30
+	}
+	return w
+}
+
+// cellValue reads one resolved cell from a toolkit row.
+func cellValue(row view.Row, field string) string {
+	for _, c := range row.Cells {
+		if c.Field == field {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// renderDetail draws one object's descriptor-resolved sections and the actions
+// its type grants.
+func (m *tuiModel) renderDetail() string {
+	if m.detail == nil {
+		return ""
+	}
+	d := m.detail
+	label := d.Type.Label
+	if label == "" {
+		label = d.Type.Name
+	}
+	out := " " + sanitizeLine(label) + " · " + sanitizeLine(d.Title) + "\n"
+	for _, s := range d.Sections {
+		out += " " + sanitizeLine(s.Label) + "\n"
+		for _, f := range s.Fields {
+			out += fmt.Sprintf("   %-18s %s\n", sanitizeLine(f.Label), sanitizeLine(f.Value))
+		}
+	}
+	if len(d.Actions) > 0 {
+		out += " actions:"
+		for _, a := range d.Actions {
+			out += " " + sanitizeLine(a.Name)
+			if a.Confirm {
+				out += "!"
+			}
+		}
+		out += "\n"
 	}
 	return out
 }

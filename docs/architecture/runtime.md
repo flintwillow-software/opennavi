@@ -364,6 +364,19 @@ deliberate: the surface's `Types()` and `Watch()` cannot report an error, so
 the remote binding caches the frozen descriptors and reports a transport
 failure as a delta **gap** rather than as "nothing changed".
 
+**Portals.** `portal/view` is the framework-agnostic half of a portal: it
+resolves a type's descriptor into view models — a list's columns and
+kind-formatted cells, a detail's ordered sections, a detail collection as chat
+turns, a board's groups, a relation graph — and nothing in it renders, so the
+same model feeds a terminal UI, a web UI, and a test. A portal implements each
+view kind once, and a new type needs no new screen. The in-process TUI is the
+first consumer: its list is descriptor-driven with a live overlay for state the
+descriptor does not carry, `t` switches between exposed types, `enter` opens a
+conversation or a detail view, and the action keys dispatch through
+`Surface.Act`. Its conversation is the thought's `transcript` detail, which is
+also why the remote path renders the same thing — reading the queue through the
+surface replaced the old remote-only snapshot entirely.
+
 ## Agent and tools
 
 Each thought run resolves an agent run: mode-selected tool surface → registry

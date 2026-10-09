@@ -18,11 +18,12 @@ import (
 // no longer needs the concrete queue at construction, and its public API
 // depends only on component packages.
 
-// NewDepsTransport builds the Deps-backed transport a TUI portal uses.
-// It is live-only; transcript restore applies to every portal and is
-// tracked separately (NAVI-353).
+// NewDepsTransport builds the Deps-backed transport a TUI portal uses: the
+// thought system, the live observation feed, and the typed-object surface
+// (ADR 0017), so the TUI renders descriptors rather than a typed handle per
+// concern.
 func NewDepsTransport(deps portal.Deps) (*inProcessTransport, error) {
-	return NewInProcess(deps.ThoughtSystem, deps.Observation)
+	return NewInProcess(deps)
 }
 
 // Portal makes the TUI a navi component: Start builds the Deps-backed
@@ -39,6 +40,23 @@ type Portal struct {
 // at Start, per the Deps lifecycle rule). Done is live from construction,
 // so a host can cancel its run when the user quits.
 func NewPortal() *Portal { return &Portal{done: make(chan error, 1)} }
+
+// RunAttached runs the TUI against a remote navi's portal gateway until the
+// user quits. It is the whole client: no thought system, model, or datastore,
+// because everything it renders and every action it posts goes through the
+// remote object surface and observation stream (ADR 0017) — which is what a
+// remote front-end is.
+func RunAttached(ctx context.Context, base, identity string) error {
+	tr, err := NewRemote(base, identity)
+	if err != nil {
+		return err
+	}
+	defer tr.Close()
+	prog := tea.NewProgram(NewModel(tr),
+		tea.WithAltScreen(), tea.WithoutSignalHandler(), tea.WithContext(ctx))
+	_, err = prog.Run()
+	return err
+}
 
 // Start builds the transport from Deps and launches the TUI. The program
 // runs until the user quits or Stop is called; its completion is recorded

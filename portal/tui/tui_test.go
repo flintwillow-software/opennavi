@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/portal/view"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -43,7 +45,7 @@ func newInProcess(t *testing.T, q *thought.Queue) (*inProcessTransport, *portal.
 	t.Helper()
 	broker := portal.NewBroker()
 	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
-	tport, err := NewInProcess(q, broker)
+	tport, err := NewInProcess(portal.Deps{ThoughtSystem: q, Observation: broker, Objects: queueSurface{q: q}})
 	if err != nil {
 		t.Fatalf("NewInProcess: %v", err)
 	}
@@ -68,7 +70,31 @@ type portalHarness struct {
 type queueSurface struct{ q *thought.Queue }
 
 func (s queueSurface) Types() []object.Type {
-	return []object.Type{{Name: "thought", Label: "Thought", ID: "id"}}
+	return []object.Type{{
+		Name: "thought", Label: "Thought", ID: "id",
+		Fields: []object.Field{
+			{Name: "id", Kind: object.KindString, Section: "identity"},
+			{Name: "prompt", Label: "Prompt", Kind: object.KindText, Section: "core"},
+			{Name: "status", Kind: object.KindEnum, Section: "state"},
+			{Name: "priority", Kind: object.KindInt, Section: "state"},
+			{Name: "model", Kind: object.KindString, Section: "run"},
+			{Name: "foreground", Kind: object.KindBool, Section: "run"},
+			{Name: "depends_on", Kind: object.KindList, ItemKind: object.KindRef, Section: "relations"},
+			{Name: "verification", Kind: object.KindBool, Section: "run"},
+			{Name: "updated_at", Kind: object.KindTime, Section: "timestamps"},
+		},
+		Details: []object.Detail{{Name: "transcript", Label: "Transcript", Type: "entry", Key: "thought_id"}},
+		Actions: []object.Action{
+			{Name: "pause"}, {Name: "resume"}, {Name: "cancel"}, {Name: "retry"},
+			{Name: "steer", Args: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}}}`)},
+			{Name: "bump", Args: json.RawMessage(`{"type":"object","properties":{"priority":{"type":"integer"}}}`)},
+		},
+		Views: []object.View{
+			{Kind: object.ViewList, Label: "Thoughts", Columns: []string{"id", "prompt", "status", "priority", "model", "updated_at"}},
+			{Kind: object.ViewDetail, Label: "Thought"},
+			{Kind: object.ViewChat, Label: "Conversation", Detail: "transcript"},
+		},
+	}}
 }
 
 func (s queueSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
@@ -78,9 +104,10 @@ func (s queueSurface) List(typeName string, _ object.Query) ([]object.Object, st
 	out := make([]object.Object, 0, len(s.q.GetThoughts()))
 	for _, t := range s.q.GetThoughts() {
 		out = append(out, object.Object{Type: "thought", ID: t.ID, Fields: map[string]any{
-			"prompt": t.Prompt, "context": t.Context, "status": string(t.Status),
+			"id": t.ID, "prompt": t.Prompt, "context": t.Context, "status": string(t.Status),
 			"priority": t.Priority, "model": t.Model, "foreground": t.Foreground,
-			"depends_on": t.DependsOn, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt,
+			"verification": t.IsVerification(),
+			"depends_on":   t.DependsOn, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt,
 		}})
 	}
 	return out, "", nil
@@ -103,8 +130,27 @@ func (s queueSurface) Detail(string, string, string, object.Query) ([]object.Obj
 	return nil, "", object.ErrUnknownDetail
 }
 
-func (s queueSurface) Act(string, string, string, map[string]any) error {
-	return object.ErrUnsupported
+func (s queueSurface) Act(typeName, id, action string, args map[string]any) error {
+	if typeName != "thought" {
+		return object.ErrUnknownType
+	}
+	switch action {
+	case "steer":
+		msg, _ := args["message"].(string)
+		return s.q.RouteMessage(id, msg)
+	case "pause":
+		return s.q.Pause(id)
+	case "resume":
+		return s.q.Resume(id)
+	case "cancel":
+		return s.q.Cancel(id)
+	case "retry":
+		return s.q.Retry(id)
+	case "bump":
+		return s.q.BumpPriority(id, intField(args["priority"]))
+	default:
+		return object.ErrUnknownAction
+	}
 }
 
 func (s queueSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
@@ -163,7 +209,7 @@ func TestDepsTransport(t *testing.T) {
 	broker := portal.NewBroker()
 	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
 
-	tr, err := NewDepsTransport(portal.Deps{ThoughtSystem: q, Observation: broker})
+	tr, err := NewDepsTransport(portal.Deps{ThoughtSystem: q, Observation: broker, Objects: queueSurface{q: q}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,11 +218,11 @@ func TestDepsTransport(t *testing.T) {
 	if err := tr.Enqueue("hi", 5, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	thoughts, err := tr.Snapshot()
-	if err != nil || len(thoughts) != 1 {
-		t.Fatalf("snapshot = %v (%v)", thoughts, err)
+	objs, _, err := tr.Objects().List("thought", object.Query{})
+	if err != nil || len(objs) != 1 {
+		t.Fatalf("surface list = %v (%v)", objs, err)
 	}
-	id := thoughts[0].ID
+	id := objs[0].ID
 
 	// The lifecycle event arrived on the Deps-provided subscription.
 	evs, _, _ := tr.Feed().ReadAfter(0)
@@ -648,19 +694,23 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 		t.Error("remote-enqueued thought not in the queue")
 	}
 
-	// The remote snapshot reads pre-existing thoughts through the object
-	// surface (ADR 0017): the queue is visible to a remote front-end
-	// instead of only converging from events.
+	// The remote transport reads pre-existing thoughts through the object
+	// surface (ADR 0017): the queue is visible to a remote front-end instead
+	// of only converging from events, which is what replaced the old
+	// empty-snapshot path.
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		thoughts, serr := rport.Snapshot()
+		objs, _, serr := rport.Objects().List("thought", object.Query{})
 		if serr != nil {
-			t.Fatalf("remote snapshot: %v", serr)
+			t.Fatalf("remote surface list: %v", serr)
 		}
-		if len(thoughts) >= 2 {
+		if len(objs) >= 2 {
 			var sawSteered bool
-			for _, th := range thoughts {
-				if th.ID == "r1" && strings.Contains(th.Context, "from remote") {
+			for _, o := range objs {
+				if o.ID != "r1" {
+					continue
+				}
+				if ctx, _ := o.Fields["context"].(string); strings.Contains(ctx, "from remote") {
 					sawSteered = true
 				}
 			}
@@ -669,7 +719,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("remote snapshot never listed the queue: %+v", thoughts)
+			t.Fatalf("remote surface never listed the queue: %+v", objs)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -862,9 +912,11 @@ func TestHomeViewAgentPreview(t *testing.T) {
 // TestPollIsSingleFlightAndIdleFree pins the NAVI-380 follow-up: every
 // Update re-arms the drain, so the guard must make re-arming idempotent
 // (two in-flight timers read the same non-destructive mailbox range and
-// each apply it), while an idle read still stops the drain instead of
-// busy-looping — and a running thought keeps it alive so ages tick.
-func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
+// each apply it). The drain is NEVER stopped: NAVI-335 ended it on an idle
+// read, which assumed the TUI was the only actor — and left the host blind
+// to a thought queued by the remote client (NAVI-389). An idle read now
+// re-arms at a slower cadence instead.
+func TestPollIsSingleFlightAndNeverBlind(t *testing.T) {
 	q := newQueue(t)
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
@@ -878,12 +930,15 @@ func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
 		t.Fatal("key press stacked a second drain")
 	}
 
-	// Idle with no events: the drain stops until the next user input.
-	if _, cmd := m.Update(feedMsg{}); cmd != nil {
-		t.Error("idle drain re-armed — busy loop")
+	// Idle with no events: the drain keeps watching, at the slower cadence.
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Error("idle drain stopped — the portal would be blind to externally queued work")
 	}
-	if m.polling {
-		t.Error("idle drain left the poll armed")
+	if !m.polling {
+		t.Error("idle drain left the poll unarmed")
+	}
+	if got := m.pollInterval(); got != idlePoll {
+		t.Errorf("idle cadence = %v, want %v", got, idlePoll)
 	}
 
 	// Running: an eventless read keeps the drain alive (ticking clocks).
@@ -899,6 +954,42 @@ func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
 	}
 	if _, cmd := m.Update(feedMsg{}); cmd == nil {
 		t.Fatal("drain stopped while a thought runs")
+	}
+	if got := m.pollInterval(); got != activePoll {
+		t.Errorf("running cadence = %v, want %v", got, activePoll)
+	}
+}
+
+// TestIdleModelSeesAnExternallyQueuedThought is the operator's report: a
+// thought queued from the REMOTE client never appeared on the host. The navi
+// can change from outside the TUI (another portal, `navi enqueue`, cron), so
+// an idle portal must keep draining and re-read when it sees a new object.
+func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	// Idle: nothing queued, nothing running — but still draining.
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Fatal("an idle portal stopped draining — it would never see external work")
+	}
+	if strings.Contains(m.View(), "from-remote") {
+		t.Fatal("precondition: the thought must not exist yet")
+	}
+
+	// A thought arrives from another process (the remote client's enqueue).
+	if err := q.Enqueue(th("from-remote", 4)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next drain applies the enqueue event and re-reads the page.
+	evs, next, lost := m.feed.ReadAfter(m.cursor)
+	if _, cmd := m.Update(feedMsg{evs: evs, next: next, lost: lost}); cmd == nil {
+		t.Fatal("the drain stopped after applying the external enqueue")
+	}
+	if !strings.Contains(m.View(), "from-remote") {
+		t.Fatalf("the externally queued thought never appeared:\n%s", m.View())
 	}
 }
 
@@ -1099,14 +1190,363 @@ func TestModelShowsVerificationFlag(t *testing.T) {
 	}
 	drain(m)
 
-	i, ok := m.byID["verify-abcd1234"]
+	obj, ok := m.items["verify-abcd1234"]
 	if !ok {
 		t.Fatalf("verification row missing:\n%s", m.View())
 	}
-	if !m.rows[i].verification {
+	if v, _ := obj.Fields["verification"].(bool); !v {
 		t.Fatal("verification flag not derived from the record metadata")
 	}
 	if !strings.Contains(m.View(), "V ") {
 		t.Errorf("verification flag not rendered:\n%s", m.View())
+	}
+}
+
+// ── descriptor-driven views (NAVI-384) ───────────────────────────────────
+
+// multiSurface exposes a thought type (with a chat view) and a todo type
+// (detail only), so the type switcher, the detail screen, and generic action
+// dispatch are exercised without a navi.
+type multiSurface struct {
+	q          *thought.Queue
+	todos      []object.Object
+	transcript []object.Object
+	mu         sync.Mutex
+	acted      []string
+}
+
+func (s *multiSurface) Types() []object.Type {
+	return []object.Type{
+		{
+			Name: "thought", Label: "Thought", ID: "id",
+			Fields: []object.Field{
+				{Name: "id", Kind: object.KindString, Section: "identity"},
+				{Name: "prompt", Label: "Prompt", Kind: object.KindText, Section: "core"},
+				{Name: "status", Kind: object.KindEnum, Section: "state"},
+			},
+			Details: []object.Detail{{Name: "transcript", Type: "entry", Key: "thought_id"}},
+			Actions: []object.Action{{Name: "pause", Label: "Pause"}, {Name: "bump", Label: "Bump"}},
+			Views: []object.View{
+				{Kind: object.ViewList, Columns: []string{"id", "prompt", "status"}},
+				{Kind: object.ViewChat, Label: "Conversation", Detail: "transcript"},
+			},
+		},
+		{
+			Name: "todo", Label: "Todo", ID: "id",
+			Fields: []object.Field{
+				{Name: "id", Kind: object.KindString, Section: "identity"},
+				{Name: "text", Label: "Text", Kind: object.KindText, Section: "core"},
+				{Name: "status", Kind: object.KindEnum, Section: "state"},
+			},
+			Actions: []object.Action{{Name: "complete", Label: "Complete", Confirm: true}},
+			Views: []object.View{
+				{Kind: object.ViewList, Columns: []string{"text", "status"}},
+				{Kind: object.ViewDetail, Sections: []object.Section{{Name: "core", Label: "Task"}}},
+			},
+		},
+	}
+}
+
+func (s *multiSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
+	switch typeName {
+	case "thought":
+		objs := []object.Object{}
+		for _, t := range s.q.GetThoughts() {
+			objs = append(objs, object.Object{Type: "thought", ID: t.ID, Fields: map[string]any{
+				"id": t.ID, "prompt": t.Prompt, "status": string(t.Status),
+			}})
+		}
+		return objs, "", nil
+	case "todo":
+		return s.todos, "", nil
+	}
+	return nil, "", object.ErrUnknownType
+}
+
+func (s *multiSurface) Get(typeName, id string) (object.Object, error) {
+	objs, _, err := s.List(typeName, object.Query{})
+	if err != nil {
+		return object.Object{}, err
+	}
+	for _, o := range objs {
+		if o.ID == id {
+			return o, nil
+		}
+	}
+	return object.Object{}, object.ErrNotFound
+}
+
+func (s *multiSurface) Detail(typeName, id, detail string, _ object.Query) ([]object.Object, string, error) {
+	if typeName != "thought" {
+		return nil, "", object.ErrUnknownType
+	}
+	if detail != "transcript" {
+		return nil, "", object.ErrUnknownDetail
+	}
+	return s.transcript, "", nil
+}
+
+func (s *multiSurface) Act(typeName, id, action string, _ map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acted = append(s.acted, typeName+"/"+id+"/"+action)
+	return nil
+}
+
+func (s *multiSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
+
+// newMultiModel builds a model whose transport serves s.
+func newMultiModel(t *testing.T, q *thought.Queue, s object.Surface) *tuiModel {
+	t.Helper()
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	tr, err := NewInProcess(portal.Deps{ThoughtSystem: q, Observation: broker, Objects: s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(tr)
+	_ = m.Init()
+	return m
+}
+
+// TestModelSwitchesTypesAndOpensDetail is the toolkit's list/detail gate: the
+// list renders whichever type is selected from that type's declared columns,
+// and a type without a chat view opens its sectioned detail.
+func TestModelSwitchesTypesAndOpensDetail(t *testing.T) {
+	q := newQueue(t)
+	s := &multiSurface{q: q, todos: []object.Object{{Type: "todo", ID: "td1", Fields: map[string]any{
+		"id": "td1", "text": "ship the toolkit", "status": "pending"}}}}
+	m := newMultiModel(t, q, s)
+
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshList()
+	if !strings.Contains(m.View(), "task t1") {
+		t.Fatalf("thought list missing:\n%s", m.View())
+	}
+
+	// `t` selects the next exposed type and renders ITS declared columns.
+	keyRunes(t, m, "t")
+	if m.typeIdx != 1 {
+		t.Fatalf("typeIdx = %d, want 1", m.typeIdx)
+	}
+	if !strings.Contains(m.View(), "ship the toolkit") {
+		t.Fatalf("todo list missing:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "task t1") {
+		t.Fatalf("the todo list still renders thoughts:\n%s", m.View())
+	}
+
+	// enter opens the sectioned detail for a type with no chat view, with the
+	// actions its descriptor grants.
+	keyEnter(m)
+	if m.mode != ModeDetail || m.detail == nil {
+		t.Fatalf("mode = %q, want detail", m.mode)
+	}
+	detail := m.View()
+	for _, want := range []string{"ship the toolkit", "Task", "complete!"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, detail)
+		}
+	}
+
+	// The back key returns to the list.
+	keyRunes(t, m, "l")
+	if m.mode != ModeList {
+		t.Fatalf("mode = %q, want list", m.mode)
+	}
+}
+
+// TestModelOpensChatFromTheTranscript is the acceptance gate: opening a
+// thought renders its persisted conversation through the surface, so a
+// completed thought opened after the fact shows what happened.
+func TestModelOpensChatFromTheTranscript(t *testing.T) {
+	q := newQueue(t)
+	s := &multiSurface{q: q, transcript: []object.Object{
+		{Type: "entry", ID: "e1", Fields: map[string]any{"role": "user", "message": "what is the answer"}},
+		{Type: "entry", ID: "e2", Fields: map[string]any{"role": "assistant", "message": "the answer is 42"}},
+		{Type: "entry", ID: "e3", Fields: map[string]any{"role": "assistant", "tool_name": "calc", "tool_input": `{"expr":"6*7"}`}},
+		{Type: "entry", ID: "e4", Fields: map[string]any{"role": "tool", "tool_name": "calc", "message": "42"}},
+	}}
+	m := newMultiModel(t, q, s)
+	if err := q.Enqueue(th("late", 4)); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshList()
+	m.sel = 0
+
+	keyEnter(m)
+	if m.mode != ModeLive || m.liveID != "late" {
+		t.Fatalf("mode = %q id = %q, want the chat view", m.mode, m.liveID)
+	}
+	view := m.View()
+	for _, want := range []string{"what is the answer", "the answer is 42", "calc", `{"expr":"6*7"}`, "42"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestModelDispatchesDeclaredActions is the toolkit's action gate: an action
+// key reaches the surface as a declared action, not a hardcoded verb.
+func TestModelDispatchesDeclaredActions(t *testing.T) {
+	q := newQueue(t)
+	s := &multiSurface{q: q}
+	m := newMultiModel(t, q, s)
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshList()
+	m.sel = 0
+
+	keyRunes(t, m, "s") // pause
+	keyRunes(t, m, "p") // bump (carries its declared priority argument)
+
+	s.mu.Lock()
+	acted := append([]string(nil), s.acted...)
+	s.mu.Unlock()
+	if len(acted) != 2 || acted[0] != "thought/t1/pause" || acted[1] != "thought/t1/bump" {
+		t.Fatalf("surface saw %v, want thought/t1/pause then thought/t1/bump", acted)
+	}
+}
+
+// lateTypesSurface serves descriptors only after a few calls, the way a remote
+// surface does while its client fetches /_types in the background.
+type lateTypesSurface struct {
+	queueSurface
+	mu    *int
+	after int
+}
+
+func (s lateTypesSurface) Types() []object.Type {
+	if *s.mu < s.after {
+		*s.mu++
+		return nil
+	}
+	return s.queueSurface.Types()
+}
+
+// TestModelRetriesTypesUntilTheSurfaceAnswers pins the remote start-up path: a
+// surface whose descriptors are not there yet must not leave the list empty
+// forever — the model retries on each feed tick.
+func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
+	q := newQueue(t)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	calls := 0
+	tr, err := NewInProcess(portal.Deps{
+		ThoughtSystem: q, Observation: broker,
+		Objects: lateTypesSurface{queueSurface: queueSurface{q: q}, mu: &calls, after: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(tr)
+	_ = m.Init()
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.types) != 0 {
+		t.Fatalf("types = %+v, want none on the first call", m.types)
+	}
+
+	// Feed ticks stand in for the poll cadence.
+	for i := 0; i < 5 && len(m.types) == 0; i++ {
+		m.applyFeed(feedMsg{})
+	}
+	if len(m.types) == 0 {
+		t.Fatal("descriptors never arrived")
+	}
+	if !strings.Contains(m.View(), "task t1") {
+		t.Fatalf("list did not populate once descriptors arrived:\n%s", m.View())
+	}
+}
+
+// TestModelDoesNotIdleBeforeDescriptorsArrive: a remote surface answers
+// asynchronously, so an idle tick that lands first must NOT stop the drain —
+// otherwise the list stays empty until a key press.
+func TestModelDoesNotIdleBeforeDescriptorsArrive(t *testing.T) {
+	q := newQueue(t)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	calls := 0
+	tr, err := NewInProcess(portal.Deps{
+		ThoughtSystem: q, Observation: broker,
+		Objects: lateTypesSurface{queueSurface: queueSurface{q: q}, mu: &calls, after: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(tr)
+	_ = m.Init()
+	if len(m.types) != 0 {
+		t.Fatal("precondition: the descriptors must not be there yet")
+	}
+
+	_, cmd := m.Update(feedMsg{})
+	if cmd == nil {
+		t.Fatal("the drain stopped before the descriptors arrived — the list would stay empty until a key press")
+	}
+}
+
+// TestRemoteTransportKeepsObservingWhileIdle: the navi a remote client watches
+// is in another process, so an idle client must keep draining.
+func TestRemoteTransportKeepsObservingWhileIdle(t *testing.T) {
+	rt, err := NewRemote("http://127.0.0.1:1", "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	if !rt.Remote() {
+		t.Fatal("a gateway attachment is remote")
+	}
+
+	m := NewModel(rt)
+	m.types = []object.Type{{Name: "thought", Label: "Thought", ID: "id"}}
+	m.list = view.ListOf(m.types[0], nil, "")
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Fatal("a remote attachment must keep observing while idle")
+	}
+}
+
+// TestRemoteClientRendersTheQueueThroughTheGateway is the operator's scenario:
+// a client attached to a served gateway must render the HOST's queue, with the
+// descriptors fetched over the wire. It fails if the model goes idle before the
+// descriptors arrive.
+func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
+	addr := portalFreePort(t)
+	rt := newPortalHarness(t, allowAllAuth{})
+
+	ln, lerr := net.Listen("tcp", addr)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+	time.Sleep(200 * time.Millisecond)
+
+	if err := rt.Queue.Enqueue(th("remote-q", 4)); err != nil {
+		t.Fatal(err)
+	}
+	rport, err := NewRemote("http://"+addr, "tui-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rport.Close()
+	m := NewModel(rport)
+
+	// Drive the feed ticks the poll command would deliver.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(m.types) == 0 && time.Now().Before(deadline) {
+		m.applyFeed(feedMsg{})
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(m.types) == 0 {
+		t.Fatal("descriptors never arrived over the gateway")
+	}
+	if !strings.Contains(m.View(), "remote-q") {
+		t.Fatalf("the remote client did not render the host's queue:\n%s", m.View())
 	}
 }
