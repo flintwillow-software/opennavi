@@ -261,3 +261,29 @@ func TestToolStateTypesReadThroughTheBoundView(t *testing.T) {
 		t.Fatalf("Get(ghost note) = %v, want ErrNotFound", err)
 	}
 }
+
+// TestObjectSurfaceExposesDerivedVerification pins the one derived field the
+// thought type adds: a plan's verification is distinguishable without reading
+// the free-form metadata map it is recorded in (which stays omitted).
+func TestObjectSurfaceExposesDerivedVerification(t *testing.T) {
+	n, s := objectNavi(t)
+	now := time.Now().UTC()
+	if err := n.Thoughts.Enqueue(&thought.Thought{
+		ID: "v1", Prompt: "verify the plan", Status: thought.ThoughtPending,
+		Priority: 4, Metadata: map[string]string{thought.MetadataRole: thought.RoleVerification},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	obj, err := s.Get(TypeThought, "v1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if obj.Fields["verification"] != true {
+		t.Fatalf("verification = %v, want true", obj.Fields["verification"])
+	}
+	if _, leaked := obj.Fields["metadata"]; leaked {
+		t.Fatal("the free-form metadata map must stay omitted")
+	}
+}
