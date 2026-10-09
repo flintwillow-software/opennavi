@@ -1,0 +1,165 @@
+---
+status: proposed
+date: '2026-10-09'
+supersedes: []
+amends: ./0014-connectors-are-bidirectional-service-integrations.md
+tags:
+  - adr
+  - connector
+  - tool
+  - security
+---
+
+# 0020 — Egress tools: a lifecycle-gated connector seam
+
+## Context
+
+ADR 0014 established that a connector is a bidirectional service integration
+and that its outbound half is **connector-owned tools the author adds
+explicitly** — `connector.SendTool()` — never auto-registered, so every way a
+navi can talk outward stays visible in `main.go`. It also named the helper as
+specified work and left two questions open:
+
+1. **Bind timing.** Does `SendTool()` take a handle the author passes that
+   resolves against the started connector, or does the registry bind at `Start`?
+2. **Failure semantics.** Does an unreachable service fail the tool call, or may
+   a connector queue deliveries?
+
+The helper still does not exist, and the reason is recorded in the `connector`
+package's own doc comment: *"The exact SendTool signature binds the tool
+registry, which is not a component package yet."* That is a real constraint, not
+a note. `connector` is a **contract** package (ADR 0004), and the external-module
+CI guard fails the build if a contract package's dependency closure reaches an
+implementation package — its comment names `tool/registry` as the example. So a
+`connector.SendTool()` whose signature mentions the registry would break the
+boundary that makes an out-of-repo connector author's life predictable.
+
+Two things have changed since ADR 0014, and together they unblock the helper:
+
+- **`tool.Tool` / `tool.Def` are the contract-pure descriptor.** They mirror the
+  registry's `ToolDefinition` field-for-field, and `navi` already bridges them
+  mechanically (`toRegistryDefinition`). `tool` is a contract package.
+- **`navi.Tools` is a `*Collection[tool.Tool]`.** The navi's declared tool
+  surface is already expressed in the contract type, so a connector can hand its
+  egress tool straight to the composition root without the registry being
+  involved at all.
+
+So the egress seam can be contract-pure, and the only thing actually missing is
+the mechanism that makes an authoring-time tool safe against a `Start`-time
+client.
+
+## Decision
+
+1. **An egress tool is an ordinary `tool.Tool`, built by `connector.SendTool`.**
+   `SendTool` is a constructor in the contract `connector` package that
+   references only `tool` and the standard library. It does not mention the
+   registry, and the registry never learns that connectors exist.
+
+2. **Bind timing: the tool closes over the connector's own handle.** `SendTool`
+   returns a definition whose handler resolves the connector's live client at
+   *call* time. Nothing binds at `Start`, and there is no registry-side hook.
+   This is ADR 0002's authoring shape — construct the connector, then add the
+   tool it hands you:
+
+   ```go
+   gh := github.New(github.Config{Credential: "GITHUB_TOKEN", Repository: "acme/widgets"})
+   n.Connectors.Add(gh)
+   for _, t := range gh.SendTools() {   // explicit: absent unless the author adds it
+       n.Tools.Add(t)
+   }
+   ```
+
+3. **Lifecycle gating is structural, not a convention each author remembers.**
+   `connector.Live[C]` is a connector's gated handle to its service client: the
+   connector sets it in `Start`, clears it in `Stop`, and an egress handler reads
+   it through `Get`. `SendTool` builds the gate into the handler, so a call
+   before the connector serves returns `ErrNotStarted` — a clean error, never a
+   nil dereference. ADR 0014's consequence ("tools must tolerate an unstarted
+   connector") becomes a property of the mechanism rather than a rule authors
+   are trusted to follow.
+
+4. **Failure semantics: an unreachable service fails the tool call.** Egress is
+   a tool outcome, not a delivery queue. A connector that wants ordering and
+   retry owns that decision separately; it is not smuggled in as a default,
+   because a queue changes what a failed call means to the model and deserves
+   its own record.
+
+5. **Egress provenance is recorded, not inferred.** `SendTool` stamps the tool's
+   `SourceInfo` with the connector's identity, so "what can this navi reach, and
+   through which component?" is answerable from the catalog rather than by
+   reading every handler. A definition that does not declare a real access level
+   or a namespaced name is rejected at construction, so an egress tool cannot be
+   registered in a shape that hides what it does.
+
+6. **`security.md`'s Egress section is the trust record.** ADR 0014's open
+   question 4 is answered by what already shipped: the section holds decisions
+   4–6 (build-time declaration, no generic payload, call-site secrets) and this
+   ADR adds the gating rule to it.
+
+## Consequences
+
+- **The egress seam is contract-pure and testable out of repo.** A third-party
+  connector author imports `connector` and `tool` and nothing else, and can
+  prove their tool fails closed before `Start` without a navi in the loop.
+- **Capability by omission holds.** An egress tool exists in a binary only if the
+  author added it; the connector being present does not put its outbound
+  operations on the model's surface (ADR 0006).
+- **The registry stays ignorant of connectors.** No new registration path, no
+  bind-at-`Start` lifecycle, and the existing `n.Tools` → registry bridge is
+  unchanged.
+- **`SendTool` is a function, and `SendTools` is a convention.** A connector
+  exposes its own accessor (a method returning the tools it built) because only
+  the connector knows how many outbound operations it has. ADR 0002's
+  `discord.SendTool()` is that accessor; the singular form in the earlier records
+  is the same idea for a one-tool service.
+- **A connector still owes an inbound half.** This ADR settles egress only; a
+  connector that ships outbound operations and no inbound subscription is a
+  partial connector, and the documentation should say so rather than implying
+  the seam is the whole component.
+- **Gating costs a mutex read per call.** Negligible next to a network request,
+  and it removes a whole class of nil-client panics.
+
+## Alternatives considered
+
+- **`SendTool` returns a `registry.ToolDefinition`.** The original intent, and
+  the reason the helper was deferred. Rejected: it puts an implementation
+  package in the contract closure and fails the external-module guard.
+- **Bind at `Start` (registry-side hook).** Rejected: it makes the registry aware
+  of connectors, gives the tool a second lifecycle that must agree with the
+  connector's, and makes "is this capability in the binary?" a runtime question
+  instead of a `main.go` question.
+- **A generic `Service[C]` base type every connector embeds.** Rejected as
+  premature: the gated handle is the only part that is genuinely shared, and a
+  base type would constrain how connectors manage their own clients.
+- **No mechanism — each connector gates its own client.** Rejected: it is the
+  rule ADR 0014 already stated as a consequence and left unenforced, and the
+  failure mode is a panic in production rather than a clean error.
+- **A connector-owned delivery queue.** Deferred, not rejected: see decision 4.
+
+## Open questions
+
+1. **Inbound subscription configuration** — which events a connector watches,
+   and whether that is build-time declaration with runtime credentials or partly
+   runtime (ADR 0014 open question 3). Unchanged by this record.
+2. **Queued egress.** If a connector later wants at-least-once delivery, the
+   decision is what a queued call returns to the model and how ordering across
+   thoughts is defined.
+3. **Credential resolution in the contract layer.** `tool/http` defines an
+   `AuthResolver` seam with no bundled implementation, and a connector needs the
+   same thing. Whether that seam is shared or each component declares its own is
+   undecided.
+
+## Related
+
+- [ADR 0014](./0014-connectors-are-bidirectional-service-integrations.md) — the
+  record this amends; resolves its open questions 1, 2, and 4
+- [ADR 0010](./0010-three-capability-layers.md) — the three layers
+- [ADR 0002](./0002-navi-is-a-composition-root.md) — the composition-root
+  authoring shape this follows
+- [ADR 0004](./0004-component-packages-public-implementations-private.md) — the
+  contract boundary this keeps
+- [ADR 0006](./0006-compile-time-omission-plus-runtime-ceiling.md) — capability
+  by omission
+- [ADR 0008](./0008-secrets-interpolated-never-literal.md) — credentials as
+  references
+- [security.md](../architecture/security.md) — the Egress section
