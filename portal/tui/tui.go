@@ -56,16 +56,15 @@ type Transport interface {
 	// from events).
 	Objects() object.Surface
 	// Remote reports whether this transport talks to a navi in ANOTHER
-	// process. A remote attachment keeps draining while idle — the work it
-	// observes is not this process's — whereas an in-process TUI may sleep
-	// until the user acts (NAVI-335).
+	// process. A remote attachment drains at the active cadence always — the
+	// work it observes is not this process's — whereas an in-process TUI can
+	// fall back to the slower idle cadence (NAVI-389).
 	Remote() bool
-	Steer(thoughtID, text string) error
-	Bump(thoughtID string, prio int) error
-	Pause(thoughtID string) error
-	Resume(thoughtID string) error
-	Cancel(thoughtID string) error
-	Retry(thoughtID string) error
+	// Actions are NOT here: every declared action goes through
+	// Objects().Act, so a transport implements one write path rather than a
+	// verb set per transport (ADR 0019 decision 7). Creation is the one
+	// exception, because an object that does not exist yet has no id.
+	//
 	// Enqueue creates a session thought: prompt with
 	// optional priority (1-10; 0 = default) and not-before time
 	// (zero = due now). In-process thoughts are foreground-tagged so
@@ -116,16 +115,6 @@ func (t *inProcessTransport) Objects() object.Surface { return t.objects }
 
 // Remote is false: this transport drives the navi in this process.
 func (t *inProcessTransport) Remote() bool { return false }
-func (t *inProcessTransport) Steer(thoughtID, text string) error {
-	return t.ts.RouteMessage(thoughtID, text)
-}
-func (t *inProcessTransport) Bump(thoughtID string, prio int) error {
-	return t.ts.BumpPriority(thoughtID, prio)
-}
-func (t *inProcessTransport) Pause(thoughtID string) error  { return t.ts.Pause(thoughtID) }
-func (t *inProcessTransport) Resume(thoughtID string) error { return t.ts.Resume(thoughtID) }
-func (t *inProcessTransport) Cancel(thoughtID string) error { return t.ts.Cancel(thoughtID) }
-func (t *inProcessTransport) Retry(thoughtID string) error  { return t.ts.Retry(thoughtID) }
 
 // newThoughtID builds a session-created thought id (pattern: the fg- ids).
 func newThoughtID() string {
@@ -315,59 +304,6 @@ func (t *remoteTransport) ingest(body string) {
 		t.mu.Unlock()
 	}
 }
-
-// control POSTs a control action with the identity; non-200 statuses
-// (403 fail-closed without an authorizer) become errors.
-func (t *remoteTransport) control(action, thoughtID, text string, prio int) error {
-	payload := map[string]any{
-		"action":    action,
-		"thoughtID": thoughtID,
-	}
-	if text != "" {
-		payload["text"] = text
-	}
-	if prio > 0 {
-		payload["priority"] = prio
-	}
-	blob, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("tui: encode control: %w", err)
-	}
-	req, err := http.NewRequest(http.MethodPost,
-		fmt.Sprintf("%s/portal/control?identity=%s", t.base, t.identity), strings.NewReader(string(blob)))
-	if err != nil {
-		return fmt.Errorf("tui: build control: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.httpc.Do(req)
-	if err != nil {
-		return fmt.Errorf("tui: control %s: %w", action, err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("tui: control %s on %s: unauthorized (fail closed; no authorizer on the gateway)", action, thoughtID)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tui: control %s on %s: http %d: %s", action, thoughtID, resp.StatusCode, strings.TrimSpace(string(rb)))
-	}
-	return nil
-}
-
-func (t *remoteTransport) Steer(thoughtID, text string) error {
-	return t.control("steer", thoughtID, text, 0)
-}
-func (t *remoteTransport) Bump(thoughtID string, prio int) error {
-	return t.control("bump", thoughtID, "", prio)
-}
-func (t *remoteTransport) Pause(thoughtID string) error { return t.control("pause", thoughtID, "", 0) }
-func (t *remoteTransport) Resume(thoughtID string) error {
-	return t.control("resume", thoughtID, "", 0)
-}
-func (t *remoteTransport) Cancel(thoughtID string) error {
-	return t.control("cancel", thoughtID, "", 0)
-}
-func (t *remoteTransport) Retry(thoughtID string) error { return t.control("retry", thoughtID, "", 0) }
 
 // Enqueue posts a session thought through the shim's enqueue control
 // (`{id, prompt, priority}`; the id is generated client-side). The
@@ -1189,7 +1125,7 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 func (m *tuiModel) submitInput() {
 	if m.inputID != "" {
 		if strings.TrimSpace(m.input) != "" {
-			if err := m.transport.Steer(m.inputID, m.input); err != nil {
+			if err := m.act(m.inputID, "steer", map[string]any{"message": m.input}); err != nil {
 				m.status = "steer failed: " + err.Error()
 			} else {
 				m.status = fmt.Sprintf("steered %s", m.inputID)
@@ -1317,16 +1253,27 @@ func (m *tuiModel) open(id string) {
 // doAction dispatches a declared action through the object surface (ADR 0017):
 // the descriptor decides what a type supports, so the model does not hardcode
 // verbs per type, and the same call works in-process and remote.
-func (m *tuiModel) doAction(action, id string, prio int) {
+// act dispatches a declared action on one object of the selected type through
+// the surface — the single write path (ADR 0019 decision 7). Creation is the
+// only exception (`Enqueue`), because an object that does not exist yet has no
+// id to act on.
+func (m *tuiModel) act(id, action string, args map[string]any) error {
 	t, ok := m.currentType()
 	if !ok || m.objects == nil {
-		return
+		return fmt.Errorf("tui: no object surface")
 	}
+	return m.objects.Act(t.Name, id, action, args)
+}
+
+// doAction dispatches one of the list's action keys. The descriptor decides
+// what a type supports, so the model does not hardcode verbs per type, and the
+// same call works in-process and remote.
+func (m *tuiModel) doAction(action, id string, prio int) {
 	args := map[string]any{}
 	if action == "bump" {
 		args["priority"] = prio
 	}
-	if err := m.objects.Act(t.Name, id, action, args); err != nil {
+	if err := m.act(id, action, args); err != nil {
 		m.status = fmt.Sprintf("%s %s failed: %v", action, id, err)
 		return
 	}
