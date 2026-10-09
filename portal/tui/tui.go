@@ -594,23 +594,48 @@ func (m *tuiModel) refreshList() {
 // (NAVI-380 follow-up — the read is non-destructive, so re-reading an
 // applied range re-appends it).
 //
+// The drain is never stopped. NAVI-335 made an idle read end it ("no
+// busy-loop"), which assumed the TUI was the only actor — but a portal
+// cannot know that the navi will not change: thoughts arrive from `navi
+// enqueue`, from cron, and from other portals, and a stopped drain left the
+// host blind to a thought queued by the remote client. So an idle read now
+// re-arms at a slower cadence instead: cheaper than the active tick, and
+// never deaf.
+//
 // The wrapper message is always non-nil (even for an empty read): the
-// idle decision — stop draining until the next user input — belongs to
-// Update, because a command runs on a Bubble Tea goroutine and must
-// never touch the model (NAVI-380).
+// cadence decision belongs to Update, because a command runs on a Bubble Tea
+// goroutine and must never touch the model (NAVI-380).
 func (m *tuiModel) poll() tea.Cmd {
 	if m.polling {
 		return nil // a drain is already armed; re-arming would stack a timer
 	}
 	m.polling = true
-	// Capture the cursor HERE, on the Update goroutine: the returned
-	// command runs on a Bubble Tea goroutine and must not read or write
-	// the model (NAVI-380).
+	// Capture the cursor and the cadence HERE, on the Update goroutine: the
+	// returned command runs on a Bubble Tea goroutine and must not read or
+	// write the model (NAVI-380).
 	cursor := m.cursor
-	return tea.Every(150*time.Millisecond, func(time.Time) tea.Msg {
+	interval := m.pollInterval()
+	return tea.Every(interval, func(time.Time) tea.Msg {
 		evs, next, lost := m.feed.ReadAfter(cursor)
 		return feedMsg{evs: evs, next: next, lost: lost}
 	})
+}
+
+// Poll cadences: fast while work is in flight or a remote navi is being
+// watched, slower when nothing is happening — but never stopped (see poll).
+const (
+	activePoll = 150 * time.Millisecond
+	idlePoll   = time.Second
+)
+
+// pollInterval is the drain cadence. The active cadence applies while
+// something is running, while the watched navi is in another process, and
+// while the descriptors have not arrived yet (a client must keep asking).
+func (m *tuiModel) pollInterval() time.Duration {
+	if m.anyRunning() || m.transport.Remote() || len(m.types) == 0 {
+		return activePoll
+	}
+	return idlePoll
 }
 
 // anyRunning reports whether any row is running (drives the idle-free
@@ -641,9 +666,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.poll()
 	case feedMsg:
-		// The drain delivered: clear the guard, apply the batch, and
-		// re-arm — unless the mailbox was genuinely empty and nothing is
-		// running (the idle-free tick of NAVI-335).
+		// The drain is re-armed whatever the batch held: an idle portal keeps
+		// watching at a slower cadence (NAVI-389 — see poll).
 		m.polling = false
 		raw := msg.evs
 		// Apply only events past the consumer cursor, and never move the
@@ -657,26 +681,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = msg.next
 		}
 		m.applyFeed(msg)
-		if m.maySleep(len(raw), msg.lost) {
-			return m, nil // idle: sleep until user input re-arms the drain
-		}
 		return m, m.poll()
 	}
 	return m, m.poll()
-}
-
-// maySleep reports whether the drain may stop: nothing arrived, nothing is
-// running, the descriptors are loaded, and this transport observes only this
-// process. Two of those are load-bearing. A client whose descriptors have not
-// arrived yet must keep polling until the surface answers — otherwise the
-// first idle tick wins the race against the fetch and the list stays empty
-// until a key press. And a remote attachment never sleeps, because the navi it
-// watches is in another process (ADR 0017).
-func (m *tuiModel) maySleep(raw int, lost bool) bool {
-	if raw > 0 || lost || m.anyRunning() || len(m.types) == 0 {
-		return false
-	}
-	return !m.transport.Remote()
 }
 
 func (m *tuiModel) View() string { return m.render() }

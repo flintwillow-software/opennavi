@@ -912,9 +912,11 @@ func TestHomeViewAgentPreview(t *testing.T) {
 // TestPollIsSingleFlightAndIdleFree pins the NAVI-380 follow-up: every
 // Update re-arms the drain, so the guard must make re-arming idempotent
 // (two in-flight timers read the same non-destructive mailbox range and
-// each apply it), while an idle read still stops the drain instead of
-// busy-looping — and a running thought keeps it alive so ages tick.
-func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
+// each apply it). The drain is NEVER stopped: NAVI-335 ended it on an idle
+// read, which assumed the TUI was the only actor — and left the host blind
+// to a thought queued by the remote client (NAVI-389). An idle read now
+// re-arms at a slower cadence instead.
+func TestPollIsSingleFlightAndNeverBlind(t *testing.T) {
 	q := newQueue(t)
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
@@ -928,12 +930,15 @@ func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
 		t.Fatal("key press stacked a second drain")
 	}
 
-	// Idle with no events: the drain stops until the next user input.
-	if _, cmd := m.Update(feedMsg{}); cmd != nil {
-		t.Error("idle drain re-armed — busy loop")
+	// Idle with no events: the drain keeps watching, at the slower cadence.
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Error("idle drain stopped — the portal would be blind to externally queued work")
 	}
-	if m.polling {
-		t.Error("idle drain left the poll armed")
+	if !m.polling {
+		t.Error("idle drain left the poll unarmed")
+	}
+	if got := m.pollInterval(); got != idlePoll {
+		t.Errorf("idle cadence = %v, want %v", got, idlePoll)
 	}
 
 	// Running: an eventless read keeps the drain alive (ticking clocks).
@@ -949,6 +954,42 @@ func TestPollIsSingleFlightAndIdleFree(t *testing.T) {
 	}
 	if _, cmd := m.Update(feedMsg{}); cmd == nil {
 		t.Fatal("drain stopped while a thought runs")
+	}
+	if got := m.pollInterval(); got != activePoll {
+		t.Errorf("running cadence = %v, want %v", got, activePoll)
+	}
+}
+
+// TestIdleModelSeesAnExternallyQueuedThought is the operator's report: a
+// thought queued from the REMOTE client never appeared on the host. The navi
+// can change from outside the TUI (another portal, `navi enqueue`, cron), so
+// an idle portal must keep draining and re-read when it sees a new object.
+func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+
+	// Idle: nothing queued, nothing running — but still draining.
+	if _, cmd := m.Update(feedMsg{}); cmd == nil {
+		t.Fatal("an idle portal stopped draining — it would never see external work")
+	}
+	if strings.Contains(m.View(), "from-remote") {
+		t.Fatal("precondition: the thought must not exist yet")
+	}
+
+	// A thought arrives from another process (the remote client's enqueue).
+	if err := q.Enqueue(th("from-remote", 4)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next drain applies the enqueue event and re-reads the page.
+	evs, next, lost := m.feed.ReadAfter(m.cursor)
+	if _, cmd := m.Update(feedMsg{evs: evs, next: next, lost: lost}); cmd == nil {
+		t.Fatal("the drain stopped after applying the external enqueue")
+	}
+	if !strings.Contains(m.View(), "from-remote") {
+		t.Fatalf("the externally queued thought never appeared:\n%s", m.View())
 	}
 }
 
@@ -1446,21 +1487,6 @@ func TestModelDoesNotIdleBeforeDescriptorsArrive(t *testing.T) {
 	_, cmd := m.Update(feedMsg{})
 	if cmd == nil {
 		t.Fatal("the drain stopped before the descriptors arrived — the list would stay empty until a key press")
-	}
-}
-
-// TestModelIdlesOnceDescriptorsAreLoaded is the counterpart: the idle-free
-// tick (NAVI-335) must still apply once there is nothing left to wait for.
-func TestModelIdlesOnceDescriptorsAreLoaded(t *testing.T) {
-	q := newQueue(t)
-	tport, _ := newInProcess(t, q)
-	m := NewModel(tport)
-	_ = m.Init()
-	if len(m.types) == 0 {
-		t.Fatal("precondition: descriptors loaded")
-	}
-	if _, cmd := m.Update(feedMsg{}); cmd != nil {
-		t.Fatal("an idle in-process model should sleep until the user acts")
 	}
 }
 
