@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,43 @@ func TestToOllamaMessages(t *testing.T) {
 	}
 	if out[1].ToolCalls[0].Function.Arguments["a"] != float64(1) {
 		t.Fatalf("arguments = %+v", out[1].ToolCalls[0].Function.Arguments)
+	}
+}
+
+// TestOllamaProviderThinkParameter pins the reasoning knob: unset sends no
+// `think` at all (the model's own default — a reasoning model reasons), and an
+// explicit value is sent verbatim. `false` is the difference between an answer
+// and a budget spent on hidden reasoning before any visible token.
+func TestOllamaProviderThinkParameter(t *testing.T) {
+	capture := func(t *testing.T, think *bool) string {
+		t.Helper()
+		var body []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}` + "\n"))
+			_, _ = w.Write([]byte(`{"done":true}` + "\n"))
+		}))
+		defer srv.Close()
+
+		p := &OllamaProvider{BaseURL: srv.URL, client: srv.Client(), Think: think}
+		ch, err := p.Stream(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, Config{Model: "m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		drain(t, ch)
+		return string(body)
+	}
+
+	if got := capture(t, nil); strings.Contains(got, "think") {
+		t.Fatalf("an unset reasoning setting must send no `think` parameter: %s", got)
+	}
+	off := false
+	if got := capture(t, &off); !strings.Contains(got, `"think":false`) {
+		t.Fatalf("think=false missing from the request: %s", got)
+	}
+	on := true
+	if got := capture(t, &on); !strings.Contains(got, `"think":true`) {
+		t.Fatalf("think=true missing from the request: %s", got)
 	}
 }

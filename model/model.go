@@ -29,6 +29,12 @@ type Provider struct {
 	// Mode is "local" or "cloud". Informational, but it tells a reader
 	// whether the provider leaves the machine.
 	Mode string
+	// Thinking asks a reasoning-capable provider for its extended reasoning,
+	// or its absence. Nil says nothing, leaving the model's own default;
+	// false turns hidden reasoning off, so a reasoning model answers instead
+	// of spending the budget thinking (the `think` parameter, where the
+	// provider supports it).
+	Thinking *bool
 	// Default marks the provider a thought uses when it names none
 	// (ADR 0009). A navi declares a set and exactly one default.
 	Default bool
@@ -74,6 +80,12 @@ type Option func(*Provider)
 // WithEndpoint overrides the compiled endpoint default.
 func WithEndpoint(endpoint string) Option {
 	return func(p *Provider) { p.Endpoint = endpoint }
+}
+
+// WithThinking asks the provider for its extended reasoning, or its absence.
+// Unset (the default) sends no reasoning parameter at all.
+func WithThinking(enabled bool) Option {
+	return func(p *Provider) { p.Thinking = &enabled }
 }
 
 // WithCredential names where the provider's secret lives (ADR 0008).
