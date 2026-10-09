@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: superseded
 date: '2026-09-30'
 supersedes: []
 tags:
