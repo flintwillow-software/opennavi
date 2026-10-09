@@ -121,58 +121,46 @@ func (p *Portal) transport() (Transport, error) {
 	return p.tr, nil
 }
 
-// Steer routes a message to a thought through the transport.
-func (p *Portal) Steer(identity, thoughtID, message string) error {
+// act dispatches a declared action on a thought through the object surface:
+// the one write path (ADR 0019 decision 7). These portal methods exist to
+// satisfy portal.Portal; they are deliberately not a second way to reach the
+// queue.
+func (p *Portal) act(thoughtID, action string, args map[string]any) error {
 	tr, err := p.transport()
 	if err != nil {
 		return err
 	}
-	return tr.Steer(thoughtID, message)
+	return tr.Objects().Act(objectThought, thoughtID, action, args)
+}
+
+// Steer routes a message to a thought.
+func (p *Portal) Steer(identity, thoughtID, message string) error {
+	return p.act(thoughtID, "steer", map[string]any{"message": message})
 }
 
 // Pause parks a running thought.
 func (p *Portal) Pause(identity, thoughtID string) error {
-	tr, err := p.transport()
-	if err != nil {
-		return err
-	}
-	return tr.Pause(thoughtID)
+	return p.act(thoughtID, "pause", nil)
 }
 
 // Resume re-queues a paused thought.
 func (p *Portal) Resume(identity, thoughtID string) error {
-	tr, err := p.transport()
-	if err != nil {
-		return err
-	}
-	return tr.Resume(thoughtID)
+	return p.act(thoughtID, "resume", nil)
 }
 
 // Cancel removes queued/paused work.
 func (p *Portal) Cancel(identity, thoughtID string) error {
-	tr, err := p.transport()
-	if err != nil {
-		return err
-	}
-	return tr.Cancel(thoughtID)
+	return p.act(thoughtID, "cancel", nil)
 }
 
 // BumpPriority changes a queued thought's priority.
 func (p *Portal) BumpPriority(identity, thoughtID string, prio int) error {
-	tr, err := p.transport()
-	if err != nil {
-		return err
-	}
-	return tr.Bump(thoughtID, prio)
+	return p.act(thoughtID, "bump", map[string]any{"priority": prio})
 }
 
 // Retry re-queues a failed thought.
 func (p *Portal) Retry(identity, thoughtID string) error {
-	tr, err := p.transport()
-	if err != nil {
-		return err
-	}
-	return tr.Retry(thoughtID)
+	return p.act(thoughtID, "retry", nil)
 }
 
 // Enqueue schedules a thought.

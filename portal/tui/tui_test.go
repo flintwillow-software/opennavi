@@ -236,11 +236,12 @@ func TestDepsTransport(t *testing.T) {
 		t.Fatal("enqueued event not observed through Deps")
 	}
 
-	// Control goes through the thought-system handle.
-	if err := tr.Steer(id, "steered"); err != nil {
+	// Actions go through the object surface (ADR 0019 decision 7) — the same
+	// path the remote binding uses.
+	if err := tr.Objects().Act("thought", id, "steer", map[string]any{"message": "steered"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Bump(id, 2); err != nil {
+	if err := tr.Objects().Act("thought", id, "bump", map[string]any{"priority": 2}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := q.GetThought(id)
@@ -386,23 +387,26 @@ func TestModelLiveView(t *testing.T) {
 	}
 }
 
-func TestActionsThroughTransport(t *testing.T) {
+func TestActionsThroughTheSurface(t *testing.T) {
 	q := newQueue(t)
 	tport, _ := newInProcess(t, q)
-	if err := tport.Bump("x", 2); err == nil {
+	act := func(id, action string, args map[string]any) error {
+		return tport.Objects().Act("thought", id, action, args)
+	}
+	if err := act("x", "bump", map[string]any{"priority": 2}); err == nil {
 		t.Error("bump of unknown thought succeeded")
 	}
 	if err := q.Enqueue(th("t4", 4)); err != nil {
 		t.Fatal(err)
 	}
-	if err := tport.Steer("t4", "queue me right"); err != nil {
+	if err := act("t4", "steer", map[string]any{"message": "queue me right"}); err != nil {
 		t.Fatalf("steer: %v", err)
 	}
 	got, err := q.GetThought("t4")
 	if err != nil || !strings.Contains(got.Context, "queue me right") {
 		t.Fatalf("steer did not reach the thought: %v", err)
 	}
-	if err := tport.Bump("t4", 2); err != nil {
+	if err := act("t4", "bump", map[string]any{"priority": 2}); err != nil {
 		t.Fatalf("bump: %v", err)
 	}
 	got, _ = q.GetThought("t4")
@@ -410,7 +414,7 @@ func TestActionsThroughTransport(t *testing.T) {
 		t.Errorf("priority not bumped: %d", got.Priority)
 	}
 	// Cancel a pending thought.
-	if err := tport.Cancel("t4"); err != nil {
+	if err := act("t4", "cancel", nil); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	// Pause/resume a running thought.
@@ -420,10 +424,10 @@ func TestActionsThroughTransport(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("no claim for pause")
 	}
-	if err := tport.Pause("t5"); err != nil {
+	if err := act("t5", "pause", nil); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	if err := tport.Resume("t5"); err != nil {
+	if err := act("t5", "resume", nil); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	// Park t5 again so the retry thought below is the only claimable
@@ -431,7 +435,7 @@ func TestActionsThroughTransport(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("t5 no longer claimable after resume")
 	}
-	if err := tport.Pause("t5"); err != nil {
+	if err := act("t5", "pause", nil); err != nil {
 		t.Fatalf("re-pause: %v", err)
 	}
 	// Retry a failed thought.
@@ -444,7 +448,7 @@ func TestActionsThroughTransport(t *testing.T) {
 	if err := q.Fail("t6", "boom"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
-	if err := tport.Retry("t6"); err != nil {
+	if err := act("t6", "retry", nil); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	got, _ = q.GetThought("t6")
@@ -648,7 +652,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if err := rt.Queue.Enqueue(th("r1", 4)); err != nil {
 		t.Fatal(err)
 	}
-	if err := rport.Steer("r1", "from remote"); err != nil {
+	if err := rport.Objects().Act("thought", "r1", "steer", map[string]any{"message": "from remote"}); err != nil {
 		t.Fatalf("remote steer: %v", err)
 	}
 	got, err := rt.Queue.GetThought("r1")
@@ -742,7 +746,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	if gerr := failport.Steer("x", "hi"); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
+	if gerr := failport.Objects().Act("thought", "x", "steer", map[string]any{"message": "hi"}); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
 		t.Errorf("remote control without authorizer: %v, want fail-closed", gerr)
 	}
 	if gerr := failport.Enqueue("nope", 0, time.Time{}); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
@@ -1548,5 +1552,48 @@ func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "remote-q") {
 		t.Fatalf("the remote client did not render the host's queue:\n%s", m.View())
+	}
+}
+
+// TestPortalControlGoesThroughTheSurface pins the one write path (ADR 0019
+// decision 7): the TUI's portal.Portal methods dispatch declared actions
+// through the object surface rather than a transport verb set, so a new
+// transport implements no second verb path.
+func TestPortalControlGoesThroughTheSurface(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	if err := q.Enqueue(th("pc1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	p := &Portal{done: make(chan error, 1)}
+	p.tr = tport // same package: the transport Start would have built
+
+	if err := p.Steer("u", "pc1", "steered via portal"); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if got, _ := q.GetThought("pc1"); !strings.Contains(got.Context, "steered via portal") {
+		t.Fatalf("steer did not land: %q", got.Context)
+	}
+	if err := p.BumpPriority("u", "pc1", 2); err != nil {
+		t.Fatalf("BumpPriority: %v", err)
+	}
+	if got, _ := q.GetThought("pc1"); got.Priority != 2 {
+		t.Fatalf("priority = %d, want 2", got.Priority)
+	}
+	if err := p.Cancel("u", "pc1"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got, _ := q.GetThought("pc1"); got.Status != thought.ThoughtCancelled {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+
+	// An undeclared action is refused by the surface rather than ignored.
+	if err := p.act("pc1", "frobnicate", nil); err == nil {
+		t.Fatal("an undeclared action must be refused")
+	}
+	// A missing surface is an error, not a silent no-op.
+	empty := &Portal{done: make(chan error, 1)}
+	if err := empty.Steer("u", "pc1", "hi"); err == nil {
+		t.Fatal("control without a transport must fail")
 	}
 }
