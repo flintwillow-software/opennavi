@@ -15,16 +15,18 @@ import (
 // This file binds the navi's typed-object surface to HTTP (ADR 0017
 // decision 10): the type root is the namespace — `GET /{type}`,
 // `GET /{type}/{id}`, `GET /{type}/{id}/{detail}`,
-// `POST /{type}/{id}/{action}` — and the surface's own routes are namespaced
-// away from it (`GET /_types`, `GET /_deltas`) so a type may be named
-// anything except the reserved `portal` and `_`-prefixed roots.
+// `POST /{type}/{id}/{action}` — and the surface's descriptor route is
+// namespaced away from it (`GET /_types`) so a type may be named anything
+// except the reserved `portal` and `_`-prefixed roots.
 //
-// Every route is authorized through the same fail-closed Attach path as the
-// observation stream, so there is one attachment story; the action route is
-// additionally authorized by the surface itself (the navi wires its
-// authorizer), so a remote portal cannot perform what an in-process one
-// could not. Reads are bounded: a page carries a cursor and a limit, and a
-// large transcript is never returned in one response.
+// These routes are a convenience API for non-portal clients (curl, a
+// script); the portal path is the unified stream (ADR 0019). Every route is
+// authorized through the same fail-closed Attach path as the stream, so
+// there is one attachment story; the action route is additionally authorized
+// by the surface itself (the navi wires its authorizer), so a remote portal
+// cannot perform what an in-process one could not. Reads are bounded: a page
+// carries a cursor and a limit, and a large transcript is never returned in
+// one response.
 
 // ── surface's own routes ────────────────────────────────────────────────
 
@@ -38,36 +40,15 @@ func (g *Gateway) serveTypes(w http.ResponseWriter, r *http.Request) {
 	if !ok || !g.authorizeAttach(w, r) {
 		return
 	}
-	types := surface.Types()
+	types, err := surface.Types()
+	if err != nil {
+		g.objectRefusal(w, err)
+		return
+	}
 	if types == nil {
 		types = []object.Type{}
 	}
 	writeJSON(w, map[string]any{"types": types})
-}
-
-// serveDeltas answers GET /_deltas?from=N with the object deltas after
-// cursor N. Like the observation stream it is a bounded, cursor-ed read: a
-// slow consumer is told it has a gap (`lost`) rather than being served an
-// unbounded backlog.
-func (g *Gateway) serveDeltas(w http.ResponseWriter, r *http.Request) {
-	if !methodIs(w, r, http.MethodGet) {
-		return
-	}
-	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
-		return
-	}
-	from := 0
-	if v := r.URL.Query().Get("from"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			from = n
-		}
-	}
-	deltas, next, lost := surface.Watch(from)
-	if deltas == nil {
-		deltas = []object.Delta{}
-	}
-	writeJSON(w, map[string]any{"deltas": deltas, "next": next, "lost": lost})
 }
 
 // ── type root ───────────────────────────────────────────────────────────
@@ -251,19 +232,25 @@ func writeObjectPage(w http.ResponseWriter, objs []object.Object, next string) {
 // 400, an unserved capability is 501, a refusal is 403, and anything else is
 // a server-side failure.
 func (g *Gateway) objectRefusal(w http.ResponseWriter, err error) {
+	http.Error(w, "object: "+err.Error(), statusForError(err))
+}
+
+// statusForError classifies a surface error, so the stream's POST channel and
+// the object routes answer with the same status.
+func statusForError(err error) int {
 	switch {
 	case errors.Is(err, portal.ErrUnauthorized):
-		http.Error(w, "portal: unauthorized (fail closed)", http.StatusForbidden)
+		return http.StatusForbidden
 	case errors.Is(err, object.ErrUnknownType),
 		errors.Is(err, object.ErrNotFound),
 		errors.Is(err, object.ErrUnknownDetail):
-		http.Error(w, "object: "+err.Error(), http.StatusNotFound)
+		return http.StatusNotFound
 	case errors.Is(err, object.ErrUnknownAction),
 		errors.Is(err, object.ErrInvalidArgs):
-		http.Error(w, "object: "+err.Error(), http.StatusBadRequest)
+		return http.StatusBadRequest
 	case errors.Is(err, object.ErrUnsupported):
-		http.Error(w, "object: "+err.Error(), http.StatusNotImplemented)
+		return http.StatusNotImplemented
 	default:
-		http.Error(w, "gateway: "+err.Error(), http.StatusInternalServerError)
+		return http.StatusInternalServerError
 	}
 }

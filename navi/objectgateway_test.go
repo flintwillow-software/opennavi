@@ -49,9 +49,10 @@ func gatewayParity(t *testing.T) (*Navi, *objectSurface, object.Surface) {
 	t.Cleanup(srv.Close)
 
 	c := gateway.NewClient(srv.URL, "test")
-	if err := c.RefreshTypes(); err != nil {
-		t.Fatalf("RefreshTypes: %v", err)
+	if err := c.OpenStream(context.Background()); err != nil {
+		t.Fatalf("OpenStream: %v", err)
 	}
+	t.Cleanup(func() { _ = c.Close() })
 	return n, n.objects, c
 }
 
@@ -73,7 +74,15 @@ func mustJSON(t *testing.T, v any) string {
 func TestGatewayClientMatchesInProcessReads(t *testing.T) {
 	_, local, remote := gatewayParity(t)
 
-	if got, want := mustJSON(t, remote.Types()), mustJSON(t, local.Types()); got != want {
+	remoteTypes, err := remote.Types()
+	if err != nil {
+		t.Fatalf("remote Types: %v", err)
+	}
+	localTypes, err := local.Types()
+	if err != nil {
+		t.Fatalf("local Types: %v", err)
+	}
+	if got, want := mustJSON(t, remoteTypes), mustJSON(t, localTypes); got != want {
 		t.Fatalf("descriptors differ over the wire:\n remote %s\n local  %s", got, want)
 	}
 
@@ -190,26 +199,45 @@ func TestGatewayClientWatchSeesDeltas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deltas, next, lost := remote.Watch(0)
-	if lost {
-		t.Fatal("a first read from cursor 0 must not report a gap")
+	// The cancellation is pushed down the stream; read the local window until
+	// it lands (the stream is asynchronous).
+	deadline := time.Now().Add(5 * time.Second)
+	var deltas []object.Delta
+	var next int
+	for {
+		var lost bool
+		var err error
+		deltas, next, lost, err = remote.Watch(0)
+		if err != nil {
+			t.Fatalf("remote Watch: %v", err)
+		}
+		if lost {
+			t.Fatal("a first read from cursor 0 must not report a gap")
+		}
+		var sawCancel bool
+		for _, d := range deltas {
+			if d.Type == TypeThought && d.ID == "t2" && d.Op == object.OpUpdate &&
+				d.Fields["status"] == string(thought.ThoughtCancelled) {
+				sawCancel = true
+			}
+		}
+		if sawCancel {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("remote deltas did not carry the cancellation: %+v", deltas)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if next == 0 {
 		t.Fatal("watch returned no cursor")
 	}
-	var sawCancel bool
-	for _, d := range deltas {
-		if d.Type == TypeThought && d.ID == "t2" && d.Op == object.OpUpdate &&
-			d.Fields["status"] == string(thought.ThoughtCancelled) {
-			sawCancel = true
-		}
-	}
-	if !sawCancel {
-		t.Fatalf("remote deltas did not carry the cancellation: %+v", deltas)
-	}
 
 	// Resuming from the returned cursor yields nothing already seen.
-	again, _, _ := remote.Watch(next)
+	again, _, _, err := remote.Watch(next)
+	if err != nil {
+		t.Fatalf("remote Watch resume: %v", err)
+	}
 	for _, d := range again {
 		if d.ID == "t2" && d.Op == object.OpUpdate {
 			t.Fatalf("cursor resume re-delivered a seen delta: %+v", d)

@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -196,21 +195,26 @@ func (g *Gateway) Enqueue(identity string, t *thought.Thought) error {
 
 // ── HTTP surface ────────────────────────────────────────────────────────
 
-// ServeHTTP routes the gateway endpoints. The observation stream and
-// control channel keep their `/portal` namespace; the typed-object surface
-// owns the type root (`/{type}`, `/{type}/{id}`, `/{type}/{id}/{detail}`,
-// `POST /{type}/{id}/{action}`) with its own routes namespaced under `_`
-// (`/_types`, `/_deltas`), so `portal` and `_`-prefixed roots are reserved
+// ServeHTTP routes the gateway endpoints. The portal path is the unified
+// stream (`GET /portal/stream` for the SSE downstream, `POST /portal/stream`
+// for upstream calls); the control channel keeps `/portal/control` for
+// non-portal clients (navi enqueue), and the typed-object surface owns the
+// type root (`/{type}`, `/{type}/{id}`, `/{type}/{id}/{detail}`,
+// `POST /{type}/{id}/{action}`) with its own descriptor route namespaced
+// under `_` (`/_types`), so `portal` and `_`-prefixed roots are reserved
 // type names.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(r.URL.Path, "/")
 	switch path {
-	case "portal/events":
-		if r.Method != http.MethodGet {
+	case "portal/stream":
+		switch r.Method {
+		case http.MethodGet:
+			g.serveStream(w, r)
+		case http.MethodPost:
+			g.serveStreamCall(w, r)
+		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
 		}
-		g.serveEvents(w, r)
 	case "portal/control":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -219,8 +223,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.serveControl(w, r)
 	case "_types":
 		g.serveTypes(w, r)
-	case "_deltas":
-		g.serveDeltas(w, r)
 	case "":
 		http.NotFound(w, r)
 	default:
@@ -235,49 +237,6 @@ func attachIdentity(r *http.Request) string {
 		return v
 	}
 	return r.Header.Get("X-Portal-Identity")
-}
-
-// serveEvents answers GET /portal/events?from=N&identity=ID with the
-// events after cursor N. Streaming requires an authorized attachment: the
-// identity is authorized through the control portal's Attach; with no
-// authorizer every attachment is refused 403 fail-closed.
-func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
-	if g.sub == nil {
-		http.Error(w, "gateway: not started", http.StatusServiceUnavailable)
-		return
-	}
-	if aerr := g.Attach(attachIdentity(r)); aerr != nil {
-		g.refusal(w, aerr)
-		return
-	}
-
-	cursor := 0
-	if v := r.URL.Query().Get("from"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
-			cursor = int(n)
-		}
-	}
-	events, next, lost := g.sub.ReadAfter(cursor)
-
-	out := make([]map[string]any, 0, len(events))
-	for _, ev := range events {
-		out = append(out, map[string]any{
-			"seq":       ev.Seq,
-			"category":  ev.Category,
-			"kind":      ev.Kind,
-			"thoughtID": ev.ThoughtID,
-			"detail":    ev.Detail,
-			"delivery":  ev.Delivery,
-			"at":        ev.At.UTC().Format(time.RFC3339Nano),
-		})
-	}
-	blob, err := json.Marshal(map[string]any{"lost": lost, "next": next, "events": out})
-	if err != nil {
-		http.Error(w, "gateway: encode: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(blob)
 }
 
 // controlRequest is the POST /portal/control body.
