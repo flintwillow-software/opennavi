@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/object"
 	pubportal "github.com/flintwillow-software/opennavi/portal"
@@ -27,13 +28,13 @@ type fakeSurface struct {
 	mu       sync.Mutex
 	thoughts []object.Object
 	entries  []object.Object
-	deltas   []object.Delta
+	deltas   *object.DeltaWindow
 	actErr   error
 	acted    []string
 }
 
 func newFakeSurface() *fakeSurface {
-	f := &fakeSurface{}
+	f := &fakeSurface{deltas: object.NewDeltaWindow(0)}
 	for _, id := range []string{"t1", "t2", "t3"} {
 		f.thoughts = append(f.thoughts, object.Object{
 			Type: "thought", ID: id, Version: 1,
@@ -46,14 +47,16 @@ func newFakeSurface() *fakeSurface {
 			Fields: map[string]any{"id": fmt.Sprintf("e%d", i), "thought_id": "t1", "message": msg, "role": "user"},
 		})
 	}
-	f.deltas = []object.Delta{
-		{Type: "thought", ID: "t1", Op: object.OpUpdate, Fields: map[string]any{"status": "running"}},
-		{Type: "thought", ID: "t1", Op: object.OpAppend, Detail: "transcript", Fields: map[string]any{"message": "hi"}},
-	}
+	f.deltas.Push(object.Delta{Type: "thought", ID: "t1", Op: object.OpUpdate, Fields: map[string]any{"status": "running"}})
+	f.deltas.Push(object.Delta{Type: "thought", ID: "t1", Op: object.OpAppend, Detail: "transcript", Fields: map[string]any{"message": "hi"}})
 	return f
 }
 
-func (f *fakeSurface) Types() []object.Type {
+// pushDelta publishes a live delta, waking a stream binding (the tests' push
+// seam).
+func (f *fakeSurface) pushDelta(d object.Delta) { f.deltas.Push(d) }
+
+func (f *fakeSurface) Types() ([]object.Type, error) {
 	return []object.Type{
 		{
 			Name: "thought", Label: "Thought", ID: "id",
@@ -70,7 +73,7 @@ func (f *fakeSurface) Types() []object.Type {
 			},
 		},
 		{Name: "entry", Label: "Transcript entry", ID: "id"},
-	}
+	}, nil
 }
 
 // page is the bounded-read slice both List and Detail use: an opaque cursor
@@ -148,16 +151,14 @@ func (f *fakeSurface) Act(typeName, id, action string, args map[string]any) erro
 	return nil
 }
 
-func (f *fakeSurface) Watch(after int) ([]object.Delta, int, bool) {
-	start := 0
-	if after > 1 {
-		start = after - 1
-	}
-	if start > len(f.deltas) {
-		start = len(f.deltas)
-	}
-	return append([]object.Delta(nil), f.deltas[start:]...), len(f.deltas) + 1, false
+func (f *fakeSurface) Watch(after int) ([]object.Delta, int, bool, error) {
+	deltas, next, lost := f.deltas.ReadAfter(after)
+	return deltas, next, lost, nil
 }
+
+// Notify implements object.Notifier, so the gateway's stream is woken by a
+// pushed delta rather than polling.
+func (f *fakeSurface) Notify() <-chan struct{} { return f.deltas.Notify() }
 
 // newObjectServer serves the gateway over a fake surface with the given
 // authorizer.
@@ -416,48 +417,13 @@ func setActErr(f *fakeSurface, err error) {
 	f.mu.Unlock()
 }
 
-func TestGatewayServesDeltas(t *testing.T) {
-	srv := newObjectServer(t, allowAll{}, newFakeSurface())
-
-	status, body := get(t, srv.URL+"/_deltas")
-	if status != http.StatusOK {
-		t.Fatalf("/_deltas = %d: %s", status, body)
-	}
-	var doc struct {
-		Deltas []object.Delta `json:"deltas"`
-		Next   int            `json:"next"`
-		Lost   bool           `json:"lost"`
-	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Deltas) != 2 || doc.Next != 3 || doc.Lost {
-		t.Fatalf("/_deltas = %+v next=%d lost=%v, want two deltas and cursor 3", doc.Deltas, doc.Next, doc.Lost)
-	}
-	if doc.Deltas[1].Op != object.OpAppend || doc.Deltas[1].Detail != "transcript" {
-		t.Fatalf("second delta = %+v, want a transcript append", doc.Deltas[1])
-	}
-
-	// Resume from the reported cursor: nothing re-delivered.
-	status, body = get(t, srv.URL+"/_deltas?from=3")
-	if status != http.StatusOK {
-		t.Fatalf("/_deltas?from=3 = %d: %s", status, body)
-	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Deltas) != 0 {
-		t.Fatalf("resume re-delivered %d deltas", len(doc.Deltas))
-	}
-}
-
 // TestGatewayObjectRoutesFailClosed pins the security property: every object
 // route refuses (403) when no authorizer is wired, exactly like the
 // observation stream and the control channel.
 func TestGatewayObjectRoutesFailClosed(t *testing.T) {
 	srv := newObjectServer(t, nil, newFakeSurface())
 
-	for _, path := range []string{"/_types", "/_deltas", "/thought", "/thought/t1", "/thought/t1/transcript"} {
+	for _, path := range []string{"/_types", "/thought", "/thought/t1", "/thought/t1/transcript"} {
 		status, _ := get(t, srv.URL+path)
 		if status != http.StatusForbidden {
 			t.Fatalf("%s without authorizer = %d, want 403", path, status)
@@ -486,13 +452,17 @@ func TestClientRoundTripsTheSurface(t *testing.T) {
 	fake := newFakeSurface()
 	srv := newObjectServer(t, allowAll{}, fake)
 	c := NewClient(srv.URL, "u")
+	if err := c.OpenStream(context.Background()); err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer c.Close()
 
 	if err := c.RefreshTypes(); err != nil {
 		t.Fatalf("RefreshTypes: %v", err)
 	}
-	types := c.Types()
-	if len(types) != 2 || types[0].Name != "thought" {
-		t.Fatalf("Types = %+v, want the served descriptors", types)
+	types, err := c.Types()
+	if err != nil || len(types) != 2 || types[0].Name != "thought" {
+		t.Fatalf("Types = %+v (%v), want the served descriptors", types, err)
 	}
 	if _, ok := types[0].Action("steer"); !ok {
 		t.Fatal("descriptor lost its action across the wire")
@@ -520,16 +490,38 @@ func TestClientRoundTripsTheSurface(t *testing.T) {
 	if err := c.Act("thought", "t1", "steer", map[string]any{"message": "hi"}); err != nil {
 		t.Fatalf("Act: %v", err)
 	}
-	deltas, dnext, lost := c.Watch(0)
-	if len(deltas) != 2 || dnext != 3 || lost {
-		t.Fatalf("Watch = %d deltas, next %d, lost %v", len(deltas), dnext, lost)
+
+	// A delta pushed after the opening snapshot is delivered live on the
+	// stream and read from the client's local bounded window.
+	fake.pushDelta(object.Delta{
+		Type: "thought", ID: "t1", Op: object.OpUpdate,
+		Fields: map[string]any{"status": "complete"},
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		deltas, _, lost, werr := c.Watch(0)
+		if werr != nil {
+			t.Fatalf("Watch: %v", werr)
+		}
+		if len(deltas) > 0 {
+			if lost {
+				t.Fatal("Watch reported a gap, want the pushed delta")
+			}
+			if deltas[0].ID != "t1" || deltas[0].Fields["status"] != "complete" {
+				t.Fatalf("delta = %+v, want the pushed update", deltas[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pushed delta never arrived on the stream")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // TestClientReportsRefusalsAndGaps pins the remote binding's failure
-// behaviour: typed HTTP statuses for the error-returning methods, and a
-// reported gap (not a silent "nothing changed") where the Surface contract
-// has no error.
+// behaviour: typed HTTP statuses for refusals, and an error — never a silent
+// "nothing changed" — when the stream is not usable (ADR 0019 decision 8).
 func TestClientReportsRefusalsAndGaps(t *testing.T) {
 	srv := newObjectServer(t, nil, newFakeSurface())
 	c := NewClient(srv.URL, "u")
@@ -540,17 +532,24 @@ func TestClientReportsRefusalsAndGaps(t *testing.T) {
 		t.Fatalf("List without authorizer = %v, want a 403 StatusError", err)
 	}
 
-	// Watch cannot return an error, so a refusal must surface as a gap with
-	// the cursor unchanged rather than as "no deltas".
-	deltas, next, lost := c.Watch(7)
-	if len(deltas) != 0 || next != 7 || !lost {
-		t.Fatalf("Watch under refusal = %d deltas, next %d, lost %v; want 0/7/true", len(deltas), next, lost)
+	// The stream was never opened: Watch must say so rather than answer
+	// "no deltas".
+	if _, _, _, werr := c.Watch(0); werr == nil {
+		t.Fatal("Watch on an unopened stream must fail, not report no changes")
+	}
+	if _, terr := c.Types(); terr == nil {
+		t.Fatal("Types before the stream opens must fail")
 	}
 
-	// A transport failure behaves the same way.
+	// A transport failure is an error too, not a gap.
 	dead := NewClient("http://127.0.0.1:1", "u")
-	if _, _, lost := dead.Watch(3); !lost {
-		t.Fatal("Watch against a dead endpoint must report a gap")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := dead.OpenStream(ctx); err == nil {
+		t.Fatal("OpenStream against a dead endpoint must fail")
+	}
+	if _, _, _, werr := dead.Watch(3); werr == nil {
+		t.Fatal("Watch against a dead endpoint must fail")
 	}
 	if err := dead.RefreshTypes(); err == nil {
 		t.Fatal("RefreshTypes against a dead endpoint must fail")

@@ -30,10 +30,11 @@ func NewDepsTransport(deps portal.Deps) (*inProcessTransport, error) {
 // transport and launches the Bubble Tea program; Stop quits it. It
 // satisfies portal.Portal so a navi can register the TUI in n.Portals.
 type Portal struct {
-	mu      sync.Mutex
-	tr      Transport
-	program *tea.Program
-	done    chan error
+	mu         sync.Mutex
+	tr         Transport
+	program    *tea.Program
+	done       chan error
+	pumpCancel context.CancelFunc
 }
 
 // NewPortal builds the TUI portal component (no handles yet; they arrive
@@ -54,6 +55,11 @@ func RunAttached(ctx context.Context, base, identity string) error {
 	defer tr.Close()
 	prog := tea.NewProgram(NewModel(tr),
 		tea.WithAltScreen(), tea.WithoutSignalHandler(), tea.WithContext(ctx))
+	pumpCtx, pumpCancel := context.WithCancel(ctx)
+	defer pumpCancel()
+	// The pump pushes mailbox batches into the program; the program's Send
+	// unblocks on its context, so the goroutine ends when the TUI exits.
+	go Pump(pumpCtx, tr.Feed(), func(msg tea.Msg) { prog.Send(msg) })
 	_, err = prog.Run()
 	return err
 }
@@ -69,16 +75,25 @@ func (p *Portal) Start(ctx context.Context, deps portal.Deps) error {
 	model := NewModel(tr)
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
 
+	pumpCtx, pumpCancel := context.WithCancel(context.Background())
+
 	p.mu.Lock()
 	p.tr = tr
 	p.program = prog
+	p.pumpCancel = pumpCancel
 	if p.done == nil {
 		p.done = make(chan error, 1)
 	}
 	p.mu.Unlock()
 
+	// The feed is pushed into the program from its own goroutine, woken by
+	// the mailbox rather than a timer (ADR 0019 decision 5). It is never the
+	// queue's emitting goroutine, and a slow UI only loses its own events.
+	go Pump(pumpCtx, tr.Feed(), func(msg tea.Msg) { prog.Send(msg) })
+
 	go func() {
 		_, rerr := prog.Run()
+		pumpCancel()
 		p.mu.Lock()
 		done := p.done
 		p.mu.Unlock()
@@ -100,8 +115,13 @@ func (p *Portal) Done() <-chan error {
 func (p *Portal) Stop() error {
 	p.mu.Lock()
 	prog := p.program
+	cancel := p.pumpCancel
 	p.program = nil
+	p.pumpCancel = nil
 	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if prog != nil {
 		prog.Quit()
 	}

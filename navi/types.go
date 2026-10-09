@@ -72,31 +72,35 @@ type objectSurface struct {
 	auth     portal.Authorizer
 	identity string
 
-	// deltas is the bounded, cursor-ed live-change mailbox Watch reads
+	// deltas is the bounded, cursor-ed live-change window Watch reads
 	// (ADR 0017 decision 6). Producers push translated queue, agent, action,
-	// and memory changes onto it.
-	deltas *deltaMailbox
+	// and memory changes onto it. It is exported from object so the gateway's
+	// stream binding uses the same discipline as the in-process surface.
+	deltas *object.DeltaWindow
 }
 
 var _ object.Surface = (*objectSurface)(nil)
+var _ object.Notifier = (*objectSurface)(nil)
 
 func newObjectSurface(types *TypeCollection, auth portal.Authorizer, identity string) *objectSurface {
 	return &objectSurface{
 		types:    types,
 		auth:     auth,
 		identity: identity,
-		deltas:   newDeltaMailbox(0),
+		deltas:   object.NewDeltaWindow(0),
 	}
 }
 
-// Types returns every exposed type descriptor, in declaration order.
-func (s *objectSurface) Types() []object.Type {
+// Types returns every exposed type descriptor, in declaration order. The
+// in-process collection cannot fail, so the error is always nil; it exists
+// so a stream binding can report a mid-flight failure (ADR 0019 decision 8).
+func (s *objectSurface) Types() ([]object.Type, error) {
 	regs := s.types.All()
 	out := make([]object.Type, 0, len(regs))
 	for _, r := range regs {
 		out = append(out, r.Type)
 	}
-	return out
+	return out, nil
 }
 
 // List returns a bounded page of one type's objects.
@@ -193,8 +197,15 @@ func (s *objectSurface) authorize(action string) error {
 // behind the bounded window). The cursor is the mailbox sequence, so a
 // portal resumes without gaps and learns when it has a gap (ADR 0017
 // decision 6).
-func (s *objectSurface) Watch(after int) ([]object.Delta, int, bool) {
-	return s.deltas.readAfter(after)
+func (s *objectSurface) Watch(after int) ([]object.Delta, int, bool, error) {
+	deltas, next, lost := s.deltas.ReadAfter(after)
+	return deltas, next, lost, nil
+}
+
+// Notify implements object.Notifier: a stream binding is woken when a delta
+// lands instead of polling Watch on a timer (ADR 0019 decision 5).
+func (s *objectSurface) Notify() <-chan struct{} {
+	return s.deltas.Notify()
 }
 
 func (s *objectSurface) registration(typeName string) (TypeRegistration, error) {

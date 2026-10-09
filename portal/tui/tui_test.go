@@ -17,7 +17,6 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
-	"github.com/flintwillow-software/opennavi/portal/view"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -69,7 +68,14 @@ type portalHarness struct {
 // the navi's; a portal test must not import the composition root).
 type queueSurface struct{ q *thought.Queue }
 
-func (s queueSurface) Types() []object.Type {
+// neverWake never fires: a test surface with no push channel, so a stream
+// bound to it is woken only by the observation side.
+var neverWake = make(chan struct{})
+
+// Notify implements object.Notifier.
+func (s queueSurface) Notify() <-chan struct{} { return neverWake }
+
+func (s queueSurface) Types() ([]object.Type, error) {
 	return []object.Type{{
 		Name: "thought", Label: "Thought", ID: "id",
 		Fields: []object.Field{
@@ -94,7 +100,7 @@ func (s queueSurface) Types() []object.Type {
 			{Kind: object.ViewDetail, Label: "Thought"},
 			{Kind: object.ViewChat, Label: "Conversation", Detail: "transcript"},
 		},
-	}}
+	}}, nil
 }
 
 func (s queueSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
@@ -153,7 +159,7 @@ func (s queueSurface) Act(typeName, id, action string, args map[string]any) erro
 	}
 }
 
-func (s queueSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
+func (s queueSurface) Watch(int) ([]object.Delta, int, bool, error) { return nil, 0, false, nil }
 
 func newPortalHarness(t *testing.T, auth portal.Authorizer) *portalHarness {
 	t.Helper()
@@ -742,10 +748,9 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	defer cancelSrv2()
 	defer func() { _ = srv2.Shutdown(shutdown2) }()
 	time.Sleep(250 * time.Millisecond)
-	failport, ferr := NewRemote("http://"+addr2, "intruder")
-	if ferr != nil {
-		t.Fatal(ferr)
-	}
+	// The stream refuses (403), so open the client without the stream: the
+	// point here is that its calls fail closed, not that it attached.
+	failport := gateway.NewClient("http://"+addr2, "intruder")
 	if gerr := failport.Objects().Act("thought", "x", "steer", map[string]any{"message": "hi"}); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
 		t.Errorf("remote control without authorizer: %v, want fail-closed", gerr)
 	}
@@ -913,54 +918,61 @@ func TestHomeViewAgentPreview(t *testing.T) {
 	}
 }
 
-// TestPollIsSingleFlightAndIdleFree pins the NAVI-380 follow-up: every
-// Update re-arms the drain, so the guard must make re-arming idempotent
-// (two in-flight timers read the same non-destructive mailbox range and
-// each apply it). The drain is NEVER stopped: NAVI-335 ended it on an idle
-// read, which assumed the TUI was the only actor — and left the host blind
-// to a thought queued by the remote client (NAVI-389). An idle read now
-// re-arms at a slower cadence instead.
-func TestPollIsSingleFlightAndNeverBlind(t *testing.T) {
+// TestPumpWakesOnPushAndDeliversEveryEvent pins ADR 0019 decision 5: the
+// feed is pushed, not polled. The pump is woken by the mailbox the instant an
+// event lands — no timer, no cadence — and delivers every event, in order,
+// from its own goroutine.
+func TestPumpWakesOnPushAndDeliversEveryEvent(t *testing.T) {
 	q := newQueue(t)
-	tport, _ := newInProcess(t, q)
-	m := NewModel(tport)
-	_ = m.Init() // arms the drain
+	tport, broker := newInProcess(t, q)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	msgs := make(chan feedMsg, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Pump(ctx, tport.Feed(), func(msg tea.Msg) {
+			if fm, ok := msg.(feedMsg); ok {
+				msgs <- fm
+			}
+		})
+	}()
 
-	// Armed: re-arming from a key press must be a no-op.
-	if cmd := m.poll(); cmd != nil {
-		t.Fatal("poll re-armed while a drain is already in flight")
+	// The pump is blocked until something lands; a push wakes it.
+	select {
+	case fm := <-msgs:
+		t.Fatalf("the pump delivered %+v before anything was pushed", fm)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}); cmd != nil {
-		t.Fatal("key press stacked a second drain")
-	}
-
-	// Idle with no events: the drain keeps watching, at the slower cadence.
-	if _, cmd := m.Update(feedMsg{}); cmd == nil {
-		t.Error("idle drain stopped — the portal would be blind to externally queued work")
-	}
-	if !m.polling {
-		t.Error("idle drain left the poll unarmed")
-	}
-	if got := m.pollInterval(); got != idlePoll {
-		t.Errorf("idle cadence = %v, want %v", got, idlePoll)
-	}
-
-	// Running: an eventless read keeps the drain alive (ticking clocks).
-	if err := q.Enqueue(th("run2", 1)); err != nil {
+	if err := q.Enqueue(th("p1", 4)); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := q.Dequeue(); !ok {
-		t.Fatal("no claim")
+	broker.Publish(portal.Event{Category: portal.CategoryAgent, Kind: "content_delta", ThoughtID: "p1", Detail: "A"})
+
+	deadline := time.After(5 * time.Second)
+	var sawEnqueued, sawDelta bool
+	for !sawDelta {
+		select {
+		case fm := <-msgs:
+			for _, ev := range fm.evs {
+				if ev.Kind == "enqueued" && ev.ThoughtID == "p1" {
+					sawEnqueued = true
+				}
+				if ev.Kind == "content_delta" && ev.Detail == "A" {
+					sawDelta = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("the pump never delivered the pushed events (enqueued=%v)", sawEnqueued)
+		}
 	}
-	drain(m)
-	if !m.anyRunning() {
-		t.Fatal("no running row after claim")
-	}
-	if _, cmd := m.Update(feedMsg{}); cmd == nil {
-		t.Fatal("drain stopped while a thought runs")
-	}
-	if got := m.pollInterval(); got != activePoll {
-		t.Errorf("running cadence = %v, want %v", got, activePoll)
+
+	// Cancelling the pump ends it (the goroutine does not leak).
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the pump did not stop when its context was cancelled")
 	}
 }
 
@@ -974,24 +986,21 @@ func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
 	m := NewModel(tport)
 	_ = m.Init()
 
-	// Idle: nothing queued, nothing running — but still draining.
-	if _, cmd := m.Update(feedMsg{}); cmd == nil {
-		t.Fatal("an idle portal stopped draining — it would never see external work")
-	}
 	if strings.Contains(m.View(), "from-remote") {
 		t.Fatal("precondition: the thought must not exist yet")
 	}
 
 	// A thought arrives from another process (the remote client's enqueue).
+	// The portal's pump wakes on the mailbox push and hands the batch to the
+	// model, which applies it and re-reads the page — no timer involved.
 	if err := q.Enqueue(th("from-remote", 4)); err != nil {
 		t.Fatal(err)
 	}
-
-	// The next drain applies the enqueue event and re-reads the page.
 	evs, next, lost := m.feed.ReadAfter(m.cursor)
-	if _, cmd := m.Update(feedMsg{evs: evs, next: next, lost: lost}); cmd == nil {
-		t.Fatal("the drain stopped after applying the external enqueue")
+	if len(evs) == 0 {
+		t.Fatal("the external enqueue never reached the feed")
 	}
+	_, _ = m.Update(feedMsg{evs: evs, next: next, lost: lost})
 	if !strings.Contains(m.View(), "from-remote") {
 		t.Fatalf("the externally queued thought never appeared:\n%s", m.View())
 	}
@@ -1219,7 +1228,7 @@ type multiSurface struct {
 	acted      []string
 }
 
-func (s *multiSurface) Types() []object.Type {
+func (s *multiSurface) Types() ([]object.Type, error) {
 	return []object.Type{
 		{
 			Name: "thought", Label: "Thought", ID: "id",
@@ -1248,7 +1257,7 @@ func (s *multiSurface) Types() []object.Type {
 				{Kind: object.ViewDetail, Sections: []object.Section{{Name: "core", Label: "Task"}}},
 			},
 		},
-	}
+	}, nil
 }
 
 func (s *multiSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
@@ -1297,7 +1306,10 @@ func (s *multiSurface) Act(typeName, id, action string, _ map[string]any) error 
 	return nil
 }
 
-func (s *multiSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
+func (s *multiSurface) Watch(int) ([]object.Delta, int, bool, error) { return nil, 0, false, nil }
+
+// Notify implements object.Notifier.
+func (s *multiSurface) Notify() <-chan struct{} { return neverWake }
 
 // newMultiModel builds a model whose transport serves s.
 func newMultiModel(t *testing.T, q *thought.Queue, s object.Surface) *tuiModel {
@@ -1423,10 +1435,10 @@ type lateTypesSurface struct {
 	after int
 }
 
-func (s lateTypesSurface) Types() []object.Type {
+func (s lateTypesSurface) Types() ([]object.Type, error) {
 	if *s.mu < s.after {
 		*s.mu++
-		return nil
+		return nil, nil
 	}
 	return s.queueSurface.Types()
 }
@@ -1455,7 +1467,7 @@ func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
 		t.Fatalf("types = %+v, want none on the first call", m.types)
 	}
 
-	// Feed ticks stand in for the poll cadence.
+	// Each pushed feed batch retries the descriptor load.
 	for i := 0; i < 5 && len(m.types) == 0; i++ {
 		m.applyFeed(feedMsg{})
 	}
@@ -1464,53 +1476,6 @@ func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "task t1") {
 		t.Fatalf("list did not populate once descriptors arrived:\n%s", m.View())
-	}
-}
-
-// TestModelDoesNotIdleBeforeDescriptorsArrive: a remote surface answers
-// asynchronously, so an idle tick that lands first must NOT stop the drain —
-// otherwise the list stays empty until a key press.
-func TestModelDoesNotIdleBeforeDescriptorsArrive(t *testing.T) {
-	q := newQueue(t)
-	broker := portal.NewBroker()
-	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
-	calls := 0
-	tr, err := NewInProcess(portal.Deps{
-		ThoughtSystem: q, Observation: broker,
-		Objects: lateTypesSurface{queueSurface: queueSurface{q: q}, mu: &calls, after: 3},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := NewModel(tr)
-	_ = m.Init()
-	if len(m.types) != 0 {
-		t.Fatal("precondition: the descriptors must not be there yet")
-	}
-
-	_, cmd := m.Update(feedMsg{})
-	if cmd == nil {
-		t.Fatal("the drain stopped before the descriptors arrived — the list would stay empty until a key press")
-	}
-}
-
-// TestRemoteTransportKeepsObservingWhileIdle: the navi a remote client watches
-// is in another process, so an idle client must keep draining.
-func TestRemoteTransportKeepsObservingWhileIdle(t *testing.T) {
-	rt, err := NewRemote("http://127.0.0.1:1", "cli")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rt.Close()
-	if !rt.Remote() {
-		t.Fatal("a gateway attachment is remote")
-	}
-
-	m := NewModel(rt)
-	m.types = []object.Type{{Name: "thought", Label: "Thought", ID: "id"}}
-	m.list = view.ListOf(m.types[0], nil, "")
-	if _, cmd := m.Update(feedMsg{}); cmd == nil {
-		t.Fatal("a remote attachment must keep observing while idle")
 	}
 }
 
@@ -1540,15 +1505,12 @@ func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
 	}
 	defer rport.Close()
 	m := NewModel(rport)
+	_ = m.Init()
 
-	// Drive the feed ticks the poll command would deliver.
-	deadline := time.Now().Add(5 * time.Second)
-	for len(m.types) == 0 && time.Now().Before(deadline) {
-		m.applyFeed(feedMsg{})
-		time.Sleep(50 * time.Millisecond)
-	}
+	// NewRemote returned only once the opening snapshot arrived, so the
+	// descriptors are ready before the first render — no polling, no retry.
 	if len(m.types) == 0 {
-		t.Fatal("descriptors never arrived over the gateway")
+		t.Fatal("the opening snapshot did not deliver the descriptors")
 	}
 	if !strings.Contains(m.View(), "remote-q") {
 		t.Fatalf("the remote client did not render the host's queue:\n%s", m.View())

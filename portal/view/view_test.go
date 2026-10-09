@@ -329,7 +329,7 @@ type fakeSurface struct {
 	entries []object.Object
 }
 
-func (f *fakeSurface) Types() []object.Type { return f.types }
+func (f *fakeSurface) Types() ([]object.Type, error) { return f.types, nil }
 
 func (f *fakeSurface) List(typeName string, _ object.Query) ([]object.Object, string, error) {
 	if typeName != "thought" {
@@ -367,7 +367,7 @@ func (f *fakeSurface) Act(string, string, string, map[string]any) error {
 	return object.ErrUnsupported
 }
 
-func (f *fakeSurface) Watch(int) ([]object.Delta, int, bool) { return nil, 0, false }
+func (f *fakeSurface) Watch(int) ([]object.Delta, int, bool, error) { return nil, 0, false, nil }
 
 func newFakeSurface() *fakeSurface {
 	return &fakeSurface{

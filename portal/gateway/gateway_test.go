@@ -2,10 +2,8 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -71,49 +69,16 @@ func TestGatewayServesObservationAndControl(t *testing.T) {
 	}
 
 	// Observation: the lifecycle event is on the served stream.
-	resp, err = http.Get(base + "/portal/events?identity=u")
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp, frames := openSSE(t, base+"/portal/stream?identity=u")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("events status = %d", resp.StatusCode)
+		t.Fatalf("stream status = %d", resp.StatusCode)
 	}
-	var page struct {
-		Events []struct {
-			Kind      string `json:"kind"`
-			ThoughtID string `json:"thoughtID"`
-		} `json:"events"`
-		Next int `json:"next"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		t.Fatal(err)
-	}
-	sawEnqueued := false
-	for _, ev := range page.Events {
-		if ev.Kind == "enqueued" && ev.ThoughtID == "g1" {
-			sawEnqueued = true
-		}
-	}
-	if !sawEnqueued {
-		t.Fatalf("enqueued event not served: %+v", page)
-	}
-
-	// Cursor resume: reading after Next returns no duplicate of the batch.
-	req, _ := http.NewRequest(http.MethodGet, base+"/portal/events?identity=u&from="+strconv.Itoa(page.Next), nil)
-	resp2, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	var second struct {
-		Events []json.RawMessage `json:"events"`
-	}
-	if err := json.NewDecoder(resp2.Body).Decode(&second); err != nil {
-		t.Fatal(err)
-	}
-	if len(second.Events) != 0 {
-		t.Fatalf("cursor resume re-delivered %d events", len(second.Events))
+	ev := waitFrame(t, frames, func(f pubportal.Frame) bool {
+		return f.Kind == pubportal.FrameEvent && f.Event != nil && f.Event.ThoughtID == "g1"
+	})
+	if ev.Event.Kind != "enqueued" {
+		t.Fatalf("stream event = %+v, want the enqueued lifecycle event", ev.Event)
 	}
 }
 
@@ -133,12 +98,12 @@ func TestGatewayFailsClosedWithoutAuthorizer(t *testing.T) {
 		t.Fatalf("control without authorizer = %d, want 403", resp.StatusCode)
 	}
 
-	resp, err = http.Get(base + "/portal/events?identity=u")
+	resp, err = http.Get(base + "/portal/stream?identity=u")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("observation without authorizer = %d, want 403", resp.StatusCode)
+		t.Fatalf("stream without authorizer = %d, want 403", resp.StatusCode)
 	}
 }

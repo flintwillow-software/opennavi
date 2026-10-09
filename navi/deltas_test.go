@@ -20,40 +20,55 @@ func liveNavi(t *testing.T) *Navi {
 	return New("deltas", WithPlanCloseCheck(false), WithObjectAuthorizer(portal.AllowAll(), "test"))
 }
 
-func TestDeltaMailboxCursorAndGap(t *testing.T) {
-	m := newDeltaMailbox(2)
+func TestDeltaWindowCursorAndGap(t *testing.T) {
+	m := object.NewDeltaWindow(2)
 	for _, id := range []string{"a", "b", "c"} {
-		m.push(object.Delta{Type: TypeThought, ID: id, Op: object.OpUpdate})
+		m.Push(object.Delta{Type: TypeThought, ID: id, Op: object.OpUpdate})
 	}
 
 	// The window holds the two newest; a cursor at 0 is behind it.
-	deltas, next, lost := m.readAfter(0)
+	deltas, next, lost := m.ReadAfter(0)
 	if !lost {
-		t.Fatal("readAfter(0) after a drop must report lost")
+		t.Fatal("ReadAfter(0) after a drop must report lost")
 	}
 	if len(deltas) != 2 || deltas[0].ID != "b" || deltas[1].ID != "c" {
-		t.Fatalf("readAfter(0) = %+v, want the two newest (b, c)", deltas)
+		t.Fatalf("ReadAfter(0) = %+v, want the two newest (b, c)", deltas)
 	}
 	if next != 4 {
 		t.Fatalf("next cursor = %d, want 4", next)
 	}
 
 	// Reading from the live cursor yields nothing new and no gap.
-	deltas, next, lost = m.readAfter(next)
+	deltas, next, lost = m.ReadAfter(next)
 	if len(deltas) != 0 || lost || next != 4 {
-		t.Fatalf("readAfter(4) = %+v next=%d lost=%v, want empty/4/false", deltas, next, lost)
+		t.Fatalf("ReadAfter(4) = %+v next=%d lost=%v, want empty/4/false", deltas, next, lost)
 	}
 
 	// A cursor past everything is not a gap: nothing was dropped.
-	if _, next, lost := m.readAfter(99); lost || next != 99 {
-		t.Fatalf("readAfter(99) = next=%d lost=%v, want 99/false", next, lost)
+	if _, next, lost := m.ReadAfter(99); lost || next != 99 {
+		t.Fatalf("ReadAfter(99) = next=%d lost=%v, want 99/false", next, lost)
 	}
 
 	// An in-window cursor resumes without a gap.
-	m.push(object.Delta{Type: TypeThought, ID: "d", Op: object.OpUpdate})
-	deltas, next, lost = m.readAfter(4)
+	m.Push(object.Delta{Type: TypeThought, ID: "d", Op: object.OpUpdate})
+	deltas, next, lost = m.ReadAfter(4)
 	if lost || len(deltas) != 1 || deltas[0].ID != "d" || next != 5 {
-		t.Fatalf("readAfter(4) = %+v next=%d lost=%v, want [d]/5/false", deltas, next, lost)
+		t.Fatalf("ReadAfter(4) = %+v next=%d lost=%v, want [d]/5/false", deltas, next, lost)
+	}
+
+	// Notify is a push signal: a reader that captures the channel before
+	// reading is woken by the next push, and no wakeup is lost.
+	wake := m.Notify()
+	select {
+	case <-wake:
+		t.Fatal("Notify fired before a push")
+	default:
+	}
+	m.Push(object.Delta{Type: TypeThought, ID: "e", Op: object.OpUpdate})
+	select {
+	case <-wake:
+	case <-time.After(time.Second):
+		t.Fatal("Push did not wake a captured Notify channel")
 	}
 }
 
@@ -61,7 +76,7 @@ func TestWatchTranslatesQueueLifecycle(t *testing.T) {
 	n := liveNavi(t)
 	enqueueThought(t, n, "t1", time.Now().UTC())
 
-	deltas, cursor, _ := n.objects.Watch(0)
+	deltas, cursor, _, _ := n.objects.Watch(0)
 	if len(deltas) != 1 {
 		t.Fatalf("enqueue produced %d deltas, want 1: %+v", len(deltas), deltas)
 	}
@@ -78,7 +93,7 @@ func TestWatchTranslatesQueueLifecycle(t *testing.T) {
 	if err := n.Thoughts.Cancel("t1"); err != nil {
 		t.Fatal(err)
 	}
-	deltas, cursor, _ = n.objects.Watch(cursor)
+	deltas, cursor, _, _ = n.objects.Watch(cursor)
 	if len(deltas) != 1 || deltas[0].Op != object.OpUpdate {
 		t.Fatalf("cancel deltas = %+v, want one update", deltas)
 	}
@@ -92,7 +107,7 @@ func TestWatchTranslatesQueueLifecycle(t *testing.T) {
 	if err := n.Thoughts.Delete("t2"); err != nil {
 		t.Fatal(err)
 	}
-	deltas, _, _ = n.objects.Watch(cursor)
+	deltas, _, _, _ = n.objects.Watch(cursor)
 	last := deltas[len(deltas)-1]
 	if last.Op != object.OpDelete || last.ID != "t2" {
 		t.Fatalf("delete deltas = %+v, want a delete for t2", deltas)
@@ -102,7 +117,7 @@ func TestWatchTranslatesQueueLifecycle(t *testing.T) {
 func TestWatchTranslatesAgentTranscript(t *testing.T) {
 	n := liveNavi(t)
 	enqueueThought(t, n, "t1", time.Now().UTC())
-	_, cursor, _ := n.objects.Watch(0)
+	_, cursor, _, _ := n.objects.Watch(0)
 
 	n.objects.observeAgent("t1", agent.AgentEvent{
 		Type:    agent.AgentEventContentDelta,
@@ -119,7 +134,7 @@ func TestWatchTranslatesAgentTranscript(t *testing.T) {
 	// Lifecycle events are not transcript content.
 	n.objects.observeAgent("t1", agent.AgentEvent{Type: agent.AgentEventTurnStart})
 
-	deltas, _, _ := n.objects.Watch(cursor)
+	deltas, _, _, _ := n.objects.Watch(cursor)
 	if len(deltas) != 3 {
 		t.Fatalf("agent deltas = %d, want 3 (delta, call, result): %+v", len(deltas), deltas)
 	}
@@ -145,12 +160,12 @@ func TestWatchPostActionEmitsTheNewState(t *testing.T) {
 	if _, ok := n.Thoughts.Dequeue(); !ok {
 		t.Fatal("could not claim t1")
 	}
-	_, cursor, _ := n.objects.Watch(0)
+	_, cursor, _, _ := n.objects.Watch(0)
 
 	if err := n.objects.Act(TypeThought, "t1", "pause", nil); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	deltas, _, _ := n.objects.Watch(cursor)
+	deltas, _, _, _ := n.objects.Watch(cursor)
 	if len(deltas) == 0 {
 		t.Fatal("pause produced no delta")
 	}
@@ -171,7 +186,7 @@ func TestWatchPostRemoveEmitsDelete(t *testing.T) {
 	if err := s.Act(TypeTodo, id, "remove", nil); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	deltas, _, _ := s.Watch(0)
+	deltas, _, _, _ := s.Watch(0)
 	var found bool
 	for _, d := range deltas {
 		if d.Type == TypeTodo && d.ID == id && d.Op == object.OpDelete {
@@ -195,7 +210,7 @@ func TestMemoryChangeProjectsToDeltas(t *testing.T) {
 	n.memoryChanged(rec, memory.ChangeUpdated)
 	n.memoryChanged(rec, memory.ChangeRemoved)
 
-	deltas, _, _ := n.objects.Watch(0)
+	deltas, _, _, _ := n.objects.Watch(0)
 	if len(deltas) != 3 {
 		t.Fatalf("memory deltas = %d, want 3: %+v", len(deltas), deltas)
 	}

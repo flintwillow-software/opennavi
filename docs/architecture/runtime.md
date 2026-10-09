@@ -279,22 +279,24 @@ slowing the queue.
   stalling the queue (NAVI-352). A portal also reads a thought's full
   conversation — live and historical — through `Deps.ThoughtSystem`, so attach
   and restart show what happened rather than only what happened next
-  (ADR 0011). The intended end state is one bidirectional stream a portal
-  translates for its transport, with access scoped by IAM rather than by
-  separate read and write surfaces (ADR 0012, proposed).
+  (ADR 0011). The portal path is one unified stream per portal, with access
+  scoped by IAM rather than by separate read and write surfaces (ADR 0019).
 - The SDK ships an HTTP **`portal/gateway`** component: a `portal.Portal`
-  that frames the bounded observation stream, the control channel, and the
-  typed-object surface over HTTP and delegates authorization to the control
-  portal (the `Hub`), so there is one authorization path and a remote
-  front-end attaches through the same interface as every other portal. The
-  object routes are the type root (`GET /{type}`, `GET /{type}/{id}`,
-  `GET /{type}/{id}/{detail}`, `POST /{type}/{id}/{action}`) with the
-  surface's own routes namespaced under `_` (`GET /_types`, `GET /_deltas`);
-  `gateway.Client` is the matching remote binding of `object.Surface`, so a
-  remote portal reads the same objects an in-process one does. The TUI is
-  likewise a public `portal.Portal` component built from `Deps`, registered by
-  the reference navi through `n.Portals`, and its remote transport holds a
-  `gateway.Client`. The wire framing is ADR 0018.
+  that frames the unified portal stream over HTTP — `GET /portal/stream` is
+  the SSE downstream (the bounded opening snapshot, observation events, and
+  object deltas) and `POST /portal/stream` is the upstream Surface call
+  channel — and delegates authorization to the control portal (the `Hub`), so
+  there is one authorization path and a remote front-end attaches through the
+  same interface as every other portal. The object routes remain as a
+  convenience API for non-portal clients (`GET /{type}`, `GET /{type}/{id}`,
+  `GET /{type}/{id}/{detail}`, `POST /{type}/{id}/{action}`, plus `GET
+  /_types`), as does `POST /portal/control` (which `navi enqueue` uses);
+  `gateway.Client` is a stream client that implements both `object.Surface`
+  and `portal.Stream`, so a remote portal reads the same objects an
+  in-process one does. The TUI is likewise a public `portal.Portal` component
+  built from `Deps`, registered by the reference navi through `n.Portals`,
+  and its remote transport *is* the `gateway.Client`. The object-route wire
+  framing is ADR 0018; the stream's is ADR 0019.
 - **Control** is an interface capability too: `portal.Control` authorizes
   attach/control through a `portal.Authorizer` and applies the actions
   through the thought system it receives at `Start`. The gateway delegates
@@ -314,10 +316,12 @@ reference navi exposes `todo` and `note` over the stateful view its tools
 share). `portal.Deps.Objects` is the `object.Surface` a portal consumes:
 
 ```
-Types() / List / Get / Detail   — the read path: descriptor-enforced,
-                                  RAM-first, bounded pages with a cursor
-Act(type, id, action, args)     — the write path: a declared action
-Watch(after)                    — the live path: deltas since a cursor
+Types() ([]Type, error)           — the descriptor set (a stream can fail)
+List / Get / Detail               — the read path: descriptor-enforced,
+                                    RAM-first, bounded pages with a cursor
+Act(type, id, action, args)       — the write path: a declared action
+Watch(after) ([]Delta, int, bool, error)
+                                  — the live path: deltas since a cursor
 ```
 
 The surface enforces the descriptor rather than trusting the portal: fields
@@ -346,23 +350,30 @@ queue lifecycle transition is a thought `update` carrying the same projection a
 change); streaming agent content and tool input/output are `append`s to the
 thought's `transcript` detail; a persisted short-term-memory mutation is a
 memory create/update/delete; and a mutation the surface performed publishes the
-resulting state. Deltas land in a bounded, cursor-ed mailbox that mirrors
-`portal.Mailbox`: a slow consumer drops the oldest and is told it has a gap,
-never slowing a producer. A portal therefore keeps its objects current without
-knowing queue or agent event kinds.
+resulting state. Deltas land in a bounded, cursor-ed `object.DeltaWindow`
+(shared by the in-process surface and the gateway's stream binding, so the two
+cannot drift): a slow consumer drops the oldest and is told it has a gap,
+never slowing a producer. A consumer is **woken** rather than polling — the
+surface exposes `object.Notifier` (`Notify() <-chan struct{}`), and the
+observation mailbox exposes `portal.Waker` — so an idle portal is not blind.
+A portal therefore keeps its objects current without knowing queue or agent
+event kinds.
 
-**The remote binding.** `portal/gateway` frames the same surface over HTTP —
-the type root is the namespace, with `/_types` and `/_deltas` namespaced away
-from it — and `gateway.Client` implements `object.Surface` over those routes,
-so a portal written against the surface runs in-process or remotely without a
-second code path. Every object route is authorized on the observation stream's
-fail-closed `Attach` path, and the action route is additionally authorized by
-the surface itself, so the gateway never decides who may act. Reads are bounded
-(the surface's page cap, not the caller's limit, is what bounds them), and the
-framing — routes, bodies, and error mapping — is ADR 0018. One difference is
-deliberate: the surface's `Types()` and `Watch()` cannot report an error, so
-the remote binding caches the frozen descriptors and reports a transport
-failure as a delta **gap** rather than as "nothing changed".
+**The remote binding.** `gateway.Client` opens the unified stream once
+(`GET /portal/stream`) and issues Surface calls on the same endpoint's POST
+channel, so a portal written against the surface runs in-process or remotely
+without a second code path. Every stream is authorized on the fail-closed
+`Attach` path, and actions are additionally authorized by the surface itself,
+so the gateway never decides who may act. Reads are bounded (the surface's
+page cap, not the caller's limit, is what bounds them), and the framing —
+routes, bodies, and error mapping — is ADR 0018. The stream's opening snapshot
+carries the descriptors and one bounded page per declared type, so a remote
+portal renders from the first frame instead of racing an asynchronous fetch;
+the delta cursor is captured before the pages are read, so a change during the
+snapshot replays as a delta rather than being lost. A reconnecting client
+resumes from its cursors (`from`, `events`); a reported gap forces a fresh
+snapshot. `Types()` and `Watch()` return errors, so a broken stream is never
+reported as "no changes" (ADR 0019 decision 8).
 
 **Portals.** `portal/view` is the framework-agnostic half of a portal: it
 resolves a type's descriptor into view models — a list's columns and
@@ -380,10 +391,14 @@ surface replaced the old remote-only snapshot entirely.
 **Transport is a separate axis.** Where a portal's state lives (in-process, a
 streaming HTTP binding, a socket) is chosen once at the navi level; the CLI role
 (`host` / `connect`) and the connection's identity are different questions. The
-portal path today is a cursor poll against the split observation, delta, and
-control surfaces; ADR 0019 decides the unified stream that replaces them — one
-stream per portal, frames carrying the same contract, SSE before websockets,
-and a push wake-up in place of the poll cadence.
+portal path is the unified stream (ADR 0019): one stream per portal carrying
+the opening snapshot, observation events, object deltas, and control results,
+with SSE + POST as the first remote binding and a socket only when a named
+consumer needs a low-latency upstream. Both bindings **push**: the TUI's pump
+(`tui.Pump`) is woken by the mailbox and hands batches to Bubble Tea's
+`Program.Send`, so the 150 ms active / 1 s idle poll cadences are gone and an
+idle portal is never blind. A slow UI loses only its own events (bounded,
+drop-oldest mailbox) and reports a gap rather than stalling the queue.
 
 ## Agent and tools
 
