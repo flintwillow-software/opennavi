@@ -2,7 +2,6 @@ package navi
 
 import (
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
@@ -14,92 +13,17 @@ import (
 
 // This file is the live path of the typed-object surface (ADR 0017 decision
 // 6): the observation fanout and the surface's own mutations are translated
-// into object.Delta and published on a bounded, cursor-ed mailbox Watch
+// into object.Delta and published on a bounded, cursor-ed window Watch
 // reads. A portal therefore keeps its objects current without knowing queue
 // or agent event kinds — a queue transition is a thought `update`, streaming
 // agent content is an `append` to the thought's transcript detail, and a
 // mutation the surface performed is an `update`/`delete`.
-
-// defaultDeltaWindow bounds the live-change mailbox. It mirrors the
-// observation mailbox's default: a slow consumer degrades itself (drop
-// oldest) and is told it has a gap, never the producers.
-const defaultDeltaWindow = 512
+//
+// The window itself is object.DeltaWindow, shared with the gateway's stream
+// binding so the in-process and remote paths cannot drift (ADR 0019).
 
 // timeNow is the delta timestamp source (UTC).
 func timeNow() time.Time { return time.Now().UTC() }
-
-// ── the bounded delta mailbox ───────────────────────────────────────────
-
-// deltaMailbox is one subscriber's bounded live-change window. Producers
-// push under the lock; a consumer drains with readAfter, which is
-// non-destructive so several portals may read the same surface with
-// independent cursors. It mirrors portal.Mailbox's slow-consumer discipline
-// (drop-oldest plus a resumable cursor and a lost flag).
-type deltaMailbox struct {
-	mu   sync.Mutex
-	ring []deltaEntry
-	cap  int
-	seq  int // next sequence to assign (1-based on first push)
-}
-
-// deltaEntry pairs a delta with the mailbox sequence it was assigned. The
-// delta type itself carries no cursor, so the window tracks it.
-type deltaEntry struct {
-	seq   int
-	delta object.Delta
-}
-
-func newDeltaMailbox(capacity int) *deltaMailbox {
-	if capacity <= 0 {
-		capacity = defaultDeltaWindow
-	}
-	return &deltaMailbox{cap: capacity}
-}
-
-// push appends a delta, assigning its sequence. When the window is full the
-// OLDEST delta is dropped, so memory stays bounded.
-func (m *deltaMailbox) push(d object.Delta) {
-	if d.At.IsZero() {
-		d.At = timeNow()
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.seq++
-	m.ring = append(m.ring, deltaEntry{seq: m.seq, delta: d})
-	if len(m.ring) > m.cap {
-		m.ring = m.ring[1:]
-	}
-}
-
-// readAfter returns the deltas after the given cursor plus the next cursor to
-// use, and whether deltas before the cursor were dropped (lost=true: the
-// consumer fell behind the bounded window and must expect a gap).
-func (m *deltaMailbox) readAfter(after int) ([]object.Delta, int, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.ring) == 0 {
-		return []object.Delta{}, after, false
-	}
-	first := m.ring[0].seq
-	// The cursor precedes the bounded window: deltas were dropped while the
-	// consumer was away (slow-consumer gap).
-	lost := after < first-1
-	start := len(m.ring)
-	for i, e := range m.ring {
-		if e.seq >= after {
-			start = i
-			break
-		}
-	}
-	out := make([]object.Delta, 0, len(m.ring)-start)
-	for _, e := range m.ring[start:] {
-		out = append(out, e.delta)
-	}
-	if len(out) > 0 {
-		return out, m.ring[len(m.ring)-1].seq + 1, lost
-	}
-	return out, after, lost
-}
 
 // ── producers ───────────────────────────────────────────────────────────
 
@@ -108,7 +32,7 @@ func (s *objectSurface) push(d object.Delta) {
 	if s == nil || s.deltas == nil {
 		return
 	}
-	s.deltas.push(d)
+	s.deltas.Push(d)
 }
 
 // observeQueue translates a queue lifecycle event into a thought delta. A

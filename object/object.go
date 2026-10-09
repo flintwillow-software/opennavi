@@ -375,8 +375,10 @@ type Provider interface {
 // without knowing queue or agent event kinds. A Surface that does not serve
 // them returns ErrUnsupported.
 type Surface interface {
-	// Types returns every exposed type descriptor.
-	Types() []Type
+	// Types returns every exposed type descriptor. It fails when the
+	// descriptors cannot be read (a stream can fail mid-flight; answering
+	// "no types" would be a silent fail-open — ADR 0019 decision 8).
+	Types() ([]Type, error)
 	// List returns a bounded page of one type's objects.
 	List(typeName string, q Query) ([]Object, string, error)
 	// Get returns one object of one type.
@@ -386,6 +388,8 @@ type Surface interface {
 	// Act performs a declared action on one object.
 	Act(typeName, id, action string, args map[string]any) error
 	// Watch returns the deltas after a cursor, the next cursor, and whether
-	// deltas before the cursor were dropped.
-	Watch(after int) ([]Delta, int, bool)
+	// deltas before the cursor were dropped. It fails when the deltas cannot
+	// be read, so a live path never mistakes a broken stream for "no
+	// changes" (ADR 0019 decision 8).
+	Watch(after int) ([]Delta, int, bool, error)
 }

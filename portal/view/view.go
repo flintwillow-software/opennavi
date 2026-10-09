@@ -590,7 +590,11 @@ func Primary(t object.Type) object.ViewKind {
 // typeOf resolves a type descriptor from the surface, so a caller never has to
 // hold the descriptor set itself.
 func typeOf(s object.Surface, typeName string) (object.Type, error) {
-	for _, t := range s.Types() {
+	types, err := s.Types()
+	if err != nil {
+		return object.Type{}, err
+	}
+	for _, t := range types {
 		if t.Name == typeName {
 			return t, nil
 		}

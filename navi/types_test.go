@@ -36,8 +36,12 @@ func enqueueThought(t *testing.T, n *Navi, id string, created time.Time) {
 
 func TestObjectSurfaceExposesBuiltinTypes(t *testing.T) {
 	_, s := objectNavi(t)
+	types, err := s.Types()
+	if err != nil {
+		t.Fatalf("Types: %v", err)
+	}
 	names := map[string]bool{}
-	for _, ty := range s.Types() {
+	for _, ty := range types {
 		names[ty.Name] = true
 	}
 	for _, want := range []string{TypeThought, TypeEntry, TypeMemory} {

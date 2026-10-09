@@ -36,19 +36,19 @@ const (
 type Event struct {
 	// Seq is the per-subscription cursor: the mailbox that delivered the
 	// event assigned it, so a consumer resumes without gaps via ReadAfter.
-	Seq int
+	Seq int `json:"seq"`
 	// Category buckets the event by source.
-	Category Category
+	Category Category `json:"category"`
 	// Kind is the source event kind ("started", "content_delta", ...).
-	Kind string
+	Kind string `json:"kind"`
 	// ThoughtID identifies the thought the event belongs to.
-	ThoughtID string
+	ThoughtID string `json:"thoughtID"`
 	// Detail is a human-short summary (truncated; never raw credentials).
-	Detail string
+	Detail string `json:"detail"`
 	// Delivery is the routing path for acks; empty otherwise.
-	Delivery string
+	Delivery string `json:"delivery"`
 	// At is the event time.
-	At time.Time
+	At time.Time `json:"at"`
 }
 
 // Subscription is a bounded, cursor-ed view of the observation stream.
@@ -60,6 +60,17 @@ type Subscription interface {
 	// Close stops the subscription from accepting new events;
 	// already-queued events remain readable until drained.
 	Close()
+}
+
+// Waker is an optional Subscription capability: a subscription that can wake
+// a consumer when events arrive, so a stream binding pushes instead of
+// polling on a timer (ADR 0019 decision 5). A Subscription that does not
+// implement it is read on whatever cadence its owner chooses.
+type Waker interface {
+	// Notify returns a channel closed when new events may be available.
+	// Capture it BEFORE ReadAfter: an event that lands between the two
+	// closes the captured channel, so no wakeup is lost.
+	Notify() <-chan struct{}
 }
 
 // Observer is the observation source handed to a component through Deps.
@@ -124,13 +135,22 @@ func (b *Broker) Publish(ev Event) {
 // Mailbox is one subscriber's bounded event mailbox. Producers Push under
 // the mailbox lock; the consumer drains via ReadAfter. Bounded with
 // drop-oldest, so a slow consumer degrades itself and never the fanout.
+// It implements Subscription and Waker: a consumer captures the wake channel,
+// drains with ReadAfter, and sleeps until the next Push (or Close) — no timer
+// (ADR 0019 decision 5).
 type Mailbox struct {
 	mu     sync.Mutex
 	ring   []Event // oldest first, capped at cap
 	cap    int
 	closed bool
-	seq    int // next Seq to assign (1-based on first push)
+	seq    int           // next Seq to assign (1-based on first push)
+	wake   chan struct{} // closed (and replaced) on Push; nil until Notify
 }
+
+var (
+	_ Subscription = (*Mailbox)(nil)
+	_ Waker        = (*Mailbox)(nil)
+)
 
 // NewMailbox builds a bounded mailbox. A capacity <= 0 uses the default.
 func NewMailbox(capacity int) *Mailbox {
@@ -154,6 +174,10 @@ func (m *Mailbox) Push(ev Event) {
 	m.ring = append(m.ring, ev)
 	if len(m.ring) > m.cap {
 		m.ring = m.ring[1:]
+	}
+	if m.wake != nil {
+		close(m.wake)
+		m.wake = nil
 	}
 }
 
@@ -185,9 +209,24 @@ func (m *Mailbox) ReadAfter(after int) ([]Event, int, bool) {
 }
 
 // Close stops the mailbox from accepting new events; already-queued events
-// remain readable until drained.
+// remain readable until drained. A consumer waiting on Notify is woken.
 func (m *Mailbox) Close() {
 	m.mu.Lock()
 	m.closed = true
+	if m.wake != nil {
+		close(m.wake)
+		m.wake = nil
+	}
 	m.mu.Unlock()
+}
+
+// Notify implements Waker: a consumer captures the channel before ReadAfter
+// and is woken by the next Push (or by Close), so it never polls.
+func (m *Mailbox) Notify() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.wake == nil {
+		m.wake = make(chan struct{})
+	}
+	return m.wake
 }
