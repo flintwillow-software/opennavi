@@ -46,7 +46,7 @@ func runNavi(t *testing.T, args ...string) (int, string) {
 	return code, string(out)
 }
 
-// TestTUIPipedStdinNoPanic: the operator's repro — `navi run` with
+// TestTUIPipedStdinNoPanic: the operator's repro — `navi host` with
 // piped stdin (< /dev/null). Pre-NAVI-332 this panicked with
 // close-of-closed-channel (readSession's EOF close racing the TUI-quit
 // close). Post-fix there is exactly one closer (the TUI), so the run
@@ -105,14 +105,14 @@ func TestDaemonPipedStdinDrainsAndExits(t *testing.T) {
 // TestTUIBranchHasNoStdinReader: source-level tripwire for the
 // NAVI-332 contention bug — the TUI path must not spawn readSession
 // (Bubble Tea owns stdin). The reference navi guards the stdin loop
-// behind `if p.daemonMode`, and run.go must not call it at all.
+// behind `if p.daemonMode`, and host.go must not call it at all.
 func TestTUIBranchHasNoStdinReader(t *testing.T) {
-	src, err := os.ReadFile("run.go")
+	src, err := os.ReadFile("host.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(src), "readSession(") {
-		t.Fatal("run.go spawns readSession — the reference navi must guard it behind --daemon")
+		t.Fatal("host.go spawns readSession — the reference navi must guard it behind --daemon")
 	}
 
 	ref, err := os.ReadFile("reference.go")

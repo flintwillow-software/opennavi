@@ -1368,3 +1368,55 @@ func TestModelDispatchesDeclaredActions(t *testing.T) {
 		t.Fatalf("surface saw %v, want thought/t1/pause then thought/t1/bump", acted)
 	}
 }
+
+// lateTypesSurface serves descriptors only after a few calls, the way a remote
+// surface does while its client fetches /_types in the background.
+type lateTypesSurface struct {
+	queueSurface
+	mu    *int
+	after int
+}
+
+func (s lateTypesSurface) Types() []object.Type {
+	if *s.mu < s.after {
+		*s.mu++
+		return nil
+	}
+	return s.queueSurface.Types()
+}
+
+// TestModelRetriesTypesUntilTheSurfaceAnswers pins the remote start-up path: a
+// surface whose descriptors are not there yet must not leave the list empty
+// forever — the model retries on each feed tick.
+func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
+	q := newQueue(t)
+	broker := portal.NewBroker()
+	q.OnEvent(func(ev thought.Event) { broker.Publish(portal.QueueEvent(ev)) })
+	calls := 0
+	tr, err := NewInProcess(portal.Deps{
+		ThoughtSystem: q, Observation: broker,
+		Objects: lateTypesSurface{queueSurface: queueSurface{q: q}, mu: &calls, after: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(tr)
+	_ = m.Init()
+	if err := q.Enqueue(th("t1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.types) != 0 {
+		t.Fatalf("types = %+v, want none on the first call", m.types)
+	}
+
+	// Feed ticks stand in for the poll cadence.
+	for i := 0; i < 5 && len(m.types) == 0; i++ {
+		m.applyFeed(feedMsg{})
+	}
+	if len(m.types) == 0 {
+		t.Fatal("descriptors never arrived")
+	}
+	if !strings.Contains(m.View(), "task t1") {
+		t.Fatalf("list did not populate once descriptors arrived:\n%s", m.View())
+	}
+}

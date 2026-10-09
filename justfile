@@ -54,7 +54,7 @@ test-race:
 # Start the daemon with its database under var/
 daemon *args:
     mkdir -p var/data
-    ./var/bin/navi daemon -db var/data/navi.db "$@"
+    ./var/bin/navi host --daemon -db var/data/navi.db "$@"
 
 # Run a health probe against the data/ database
 health *args:

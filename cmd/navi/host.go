@@ -15,15 +15,15 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/ops/logging"
 )
 
-// runInteractive is the `navi run` subcommand: it assembles the reference
-// navi through navi.New and serves it. The TUI is the front door;
-// --daemon is the headless presentation, which also serves the HTTP
-// portal gateway (remote portal attachments) when --portal-addr is set.
-func runInteractive(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+// runHost is the `navi host` role: this process IS the navi — it assembles the
+// reference navi through navi.New and serves it. The TUI is the front door;
+// --daemon is the headless presentation, which also serves the HTTP portal
+// gateway (remote portal attachments) when --portal-addr is set.
+func runHost(args []string) error {
+	fs := flag.NewFlagSet("host", flag.ExitOnError)
 	runtimeFile := fs.String("config", "", "path to runtime config YAML (optional)")
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
-	model := fs.String("model", "", "LLM model name (required)")
+	model := fs.String("model", "", "LLM model name (default: config/env, then the provider's compiled default)")
 	ollamaHost := fs.String("ollama-host", "", "Ollama base URL (overrides $OLLAMA_HOST and YAML; default http://localhost:11434)")
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
@@ -36,9 +36,6 @@ func runInteractive(args []string) error {
 	daemonMode := fs.Bool("daemon", false, "headless presentation: no TUI, stdin-loop session driver, no foreground slot")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if *model == "" {
-		return fmt.Errorf("run: --model is required")
 	}
 
 	// Log routing (NAVI-331): in TUI mode the Bubble Tea alt-screen owns
@@ -111,8 +108,15 @@ func slogLevel(name string) slog.Level {
 // stderrIsTTY reports whether stderr is an interactive terminal — the
 // documented log-format default basis (NAVI-328): human on an interactive
 // TTY, json otherwise (pipes, redirects, log files).
-func stderrIsTTY() bool {
-	fi, err := os.Stderr.Stat()
+func stderrIsTTY() bool { return isTTY(os.Stderr) }
+
+// stdoutIsTTY reports whether stdout is an interactive terminal: the default
+// role's basis for hosting (a human is watching) versus orienting (a script
+// got the command wrong).
+func stdoutIsTTY() bool { return isTTY(os.Stdout) }
+
+func isTTY(f *os.File) bool {
+	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}

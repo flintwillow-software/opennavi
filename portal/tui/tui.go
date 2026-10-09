@@ -187,6 +187,15 @@ func NewRemote(base, identity string) (*remoteTransport, error) {
 
 func (t *remoteTransport) Feed() portal.Subscription { return t.feed }
 
+// Close stops the poll pump and releases the feed mailbox. Safe more than once.
+func (t *remoteTransport) Close() error {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+	t.feed.Close()
+	return nil
+}
+
 // Objects is the remote binding of the typed-object surface: the gateway
 // client this transport embeds.
 func (t *remoteTransport) Objects() object.Surface { return t.Client }
@@ -697,6 +706,15 @@ func (m *tuiModel) age(t time.Time) string {
 
 // applyFeed folds one drained mailbox batch into the model.
 func (m *tuiModel) applyFeed(f feedMsg) {
+	// A remote surface fetches its descriptors asynchronously, so the first
+	// page may be requested before they arrive. Retry on each tick until the
+	// surface answers, then read the page once.
+	if len(m.types) == 0 {
+		m.loadTypes()
+		if len(m.types) > 0 {
+			m.refreshList()
+		}
+	}
 	if f.lost {
 		m.lost = true
 		m.status = "notice: portal stream dropped events (slow UI — gap)"
