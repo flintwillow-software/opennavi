@@ -377,6 +377,14 @@ conversation or a detail view, and the action keys dispatch through
 also why the remote path renders the same thing — reading the queue through the
 surface replaced the old remote-only snapshot entirely.
 
+**Transport is a separate axis.** Where a portal's state lives (in-process, a
+streaming HTTP binding, a socket) is chosen once at the navi level; the CLI role
+(`host` / `connect`) and the connection's identity are different questions. The
+portal path today is a cursor poll against the split observation, delta, and
+control surfaces; ADR 0019 decides the unified stream that replaces them — one
+stream per portal, frames carrying the same contract, SSE before websockets,
+and a push wake-up in place of the poll cadence.
+
 ## Agent and tools
 
 Each thought run resolves an agent run: mode-selected tool surface → registry
@@ -394,9 +402,10 @@ requires a configured store — there is no volatile-memory mode.
 - [security.md](./security.md) — permission ceiling and omission
 - [extension-model.md](./extension-model.md) — third-party components
 - [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) — datastores, RAM-first persistence
-- [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping
+- [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) — the portal stream and IAM scoping (superseded by 0019)
 - [ADR 0013](../adr/0013-the-thought-queue-is-the-context-mechanism.md) — context assembly, skills, and why the queue is the context limit
 - [ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md) — connectors and connector-owned egress
 - [ADR 0017](../adr/0017-navi-state-as-typed-objects.md) — typed objects, actions, and live deltas
 - [ADR 0018](../adr/0018-object-surface-http-framing.md) — the object surface's HTTP framing
+- [ADR 0019](../adr/0019-portal-transport-bindings.md) — portal transport bindings and the unified stream
 - [rewrite-plan.md](./rewrite-plan.md) — migration milestones
