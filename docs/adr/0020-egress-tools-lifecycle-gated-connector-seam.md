@@ -109,6 +109,18 @@ client.
    `tool/http` already set: without an `AuthResolver` its tool refuses the
    call rather than refusing to load.
 
+8. **A credential is a token source, not a string.** The connector asks a
+   `TokenSource` for its bearer token instead of resolving a value, because
+   GitHub credentials are not all static. A personal access token is a string
+   read from the environment — and so is the `GITHUB_TOKEN` a GitHub Actions
+   workflow mints per run — but a **GitHub App installation** holds a private
+   key, signs an RS256 JWT, exchanges it for an installation access token that
+   **expires in an hour**, and must re-mint it. A resolver returning a string
+   cannot express that, and resolving per request would mint a token per call,
+   so the source owns its own caching and refresh and is asked only for a
+   usable token. This is what makes the App case an *addition* rather than a
+   refactor of the static path.
+
 ## Consequences
 
 - **The egress seam is contract-pure and testable out of repo.** A third-party
@@ -135,6 +147,10 @@ client.
   inert until the operator supplies the credential; the rest of the navi is
   unaffected. The cost is that a missing credential is discovered from a warning
   or a refused call rather than from a startup failure.
+- **A credential that must be minted is an addition, not a refactor.** Because
+  the seam yields a token rather than a string (decision 8), a GitHub App
+  installation is a new `TokenSource` implementation plus configuration — the
+  static path, the tools, the gate, and the template wiring are untouched.
 
 ## Alternatives considered
 
@@ -168,10 +184,13 @@ client.
 2. **Queued egress.** If a connector later wants at-least-once delivery, the
    decision is what a queued call returns to the model and how ordering across
    thoughts is defined.
-3. **Credential resolution in the contract layer.** `tool/http` defines an
-   `AuthResolver` seam with no bundled implementation, and a connector needs the
-   same thing. Whether that seam is shared or each component declares its own is
-   undecided.
+3. **Credential resolution in the contract layer — answered in part.** A
+   credential is a token source (decision 8), which settles the *shape*. The
+   *home* is still open: `tool/http` declares an `AuthResolver` returning a
+   string, which has the same limitation this decision fixes, and it cannot
+   simply import this one — `connector` imports `tool`, so a shared seam would
+   need its own leaf package. Until a second consumer exists, the seam lives
+   here and `tool/http` is left alone.
 
 ## Related
 

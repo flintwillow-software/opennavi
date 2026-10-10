@@ -8,9 +8,11 @@
 // lands rather than as the whole component.
 //
 // Egress tools are built with connector.SendTool and are added explicitly by
-// the navi author; nothing auto-registers them (ADR 0006/0014). The
-// credential is a REFERENCE (ADR 0008) resolved at the call site, so the token
-// is never held in a field that could be logged or dumped.
+// the navi author; nothing auto-registers them (ADR 0006/0014). The credential
+// arrives through a TokenSource (ADR 0020): a static reference resolved at the
+// call site (ADR 0008), or a source that mints and refreshes its own token —
+// which is what a GitHub App installation needs, since its token expires in an
+// hour.
 package github
 
 import (
@@ -39,12 +41,65 @@ const ToolIssueComment = "github_issue_comment"
 // maxErrorBody bounds how much of a failed response reaches the model.
 const maxErrorBody = 8 << 10
 
+// TokenSource yields the bearer token for a request. It is an interface rather
+// than a value because GitHub credentials are not all static: a personal
+// access token is a string read from the environment, while a **GitHub App
+// installation** holds a private key, signs an RS256 JWT, exchanges it for an
+// installation access token that expires in an hour, and must re-mint it. A
+// resolver returning a string cannot express that, and resolving per request
+// would mint a token per call — so the source owns its own caching and
+// refresh, and is asked only for a usable token.
+//
+// An implementation must never write the token it yields to a log, an error, or
+// the transcript; a static source holds no value at all, and a minting source
+// holds only its short-lived cache.
+type TokenSource interface {
+	// Token returns a usable bearer token. The context bounds any minting the
+	// source has to do; a static source ignores it. The error must name what is
+	// missing (a reference, an app ID) and never a secret value.
+	Token(ctx context.Context) (string, error)
+}
+
+// StaticToken is a TokenSource over a credential REFERENCE: it reads the value
+// from Env at each call, so a rotated token is picked up without a restart and
+// the value is never stored (ADR 0014 decision 6).
+//
+// This is the right source for a personal access token, and for the
+// GITHUB_TOKEN a GitHub Actions workflow mints per run.
+type StaticToken struct {
+	// Ref names where the token lives — an environment variable or file path,
+	// never the value (ADR 0008).
+	Ref string
+	// Env resolves Ref. Nil = os.Getenv.
+	Env func(string) string
+}
+
+// Token implements TokenSource.
+func (s StaticToken) Token(context.Context) (string, error) {
+	ref := strings.TrimSpace(s.Ref)
+	if ref == "" {
+		return "", errors.New("github: no credential declared; set Config.Credential to the reference (ADR 0008)")
+	}
+	env := s.Env
+	if env == nil {
+		env = os.Getenv
+	}
+	if v := strings.TrimSpace(env(ref)); v != "" {
+		return v, nil
+	}
+	return "", fmt.Errorf("github: credential %q is unset; the connector is disabled (fail closed)", ref)
+}
+
 // Config declares the connector at build time (ADR 0013: what a component can
 // reach is a composition decision, not a runtime one).
 type Config struct {
-	// Credential names where the token lives — an environment variable or file
-	// path, never the value (ADR 0008). Required.
+	// Credential names where a static token lives — an environment variable or
+	// file path, never the value (ADR 0008). Required unless Token is set.
 	Credential string
+	// Token overrides Credential with a token source, for a credential that is
+	// not a static string (a GitHub App installation, which mints and refreshes
+	// its own tokens). Nil means StaticToken{Credential, Env}.
+	Token TokenSource
 	// BaseURL overrides the API root (GitHub Enterprise, tests).
 	// Empty = DefaultBaseURL.
 	BaseURL string
@@ -81,8 +136,11 @@ func New(cfg Config) *Connector {
 // other capability. Each egress call refuses at the call site, naming the
 // reference (ADR 0008: fail closed, never silently degrade), and Start warns
 // once so the operator sees it without waiting for a failed call.
-func (c *Connector) Start(_ context.Context, deps connector.Deps) error {
-	if _, err := c.token(); err != nil && deps.Log != nil {
+func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
+	// Ask the source for a token once so a misconfiguration is visible at start
+	// rather than at the first call. A minting source may reach the network
+	// here; a failure is warned, not fatal (see above), and retried at the call.
+	if _, err := c.tokenSource().Token(ctx); err != nil && deps.Log != nil {
 		deps.Log.Warn("github connector has no usable credential; its egress tools will refuse", "err", err)
 	}
 	c.live.Set(c.newClient())
@@ -116,22 +174,14 @@ func (c *Connector) SendTools() ([]tool.Tool, error) {
 	return []tool.Tool{comment}, nil
 }
 
-// token resolves the credential reference to its value. It is called at the
-// call site and the result is never stored (ADR 0014 decision 6), so a token
-// cannot leak through a struct dump, a log line, or the transcript.
-func (c *Connector) token() (string, error) {
-	ref := strings.TrimSpace(c.cfg.Credential)
-	if ref == "" {
-		return "", errors.New("github: no credential declared; set Config.Credential to the reference (ADR 0008)")
+// tokenSource is the configured source, or the static one over Credential.
+// Building it once keeps a minting source's cache in one place rather than
+// giving every client its own.
+func (c *Connector) tokenSource() TokenSource {
+	if c.cfg.Token != nil {
+		return c.cfg.Token
 	}
-	env := c.cfg.Env
-	if env == nil {
-		env = os.Getenv
-	}
-	if v := strings.TrimSpace(env(ref)); v != "" {
-		return v, nil
-	}
-	return "", fmt.Errorf("github: credential %q is unset; the connector is disabled (fail closed)", ref)
+	return StaticToken{Ref: c.cfg.Credential, Env: c.cfg.Env}
 }
 
 // newClient builds the service client. It carries the credential REFERENCE,
@@ -148,19 +198,17 @@ func (c *Connector) newClient() *client {
 	return &client{
 		base:       base,
 		repository: strings.TrimSpace(c.cfg.Repository),
-		credential: strings.TrimSpace(c.cfg.Credential),
-		env:        c.cfg.Env,
+		tokens:     c.tokenSource(),
 		http:       hc,
 	}
 }
 
 // client is the live service client an egress handler is handed. It holds no
-// secret: the token is resolved per request.
+// secret: the token comes from the TokenSource at the moment of the request.
 type client struct {
 	base       string
 	repository string
-	credential string
-	env        func(string) string
+	tokens     TokenSource
 	http       *http.Client
 }
 
@@ -170,7 +218,7 @@ func (c *client) comment(ctx context.Context, args map[string]any) (string, erro
 	// The credential is checked first: without one no call can succeed, so a
 	// missing credential is reported as itself rather than masked by whatever
 	// else is wrong with the arguments.
-	token, err := c.token()
+	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -235,21 +283,6 @@ func (c *client) comment(ctx context.Context, args map[string]any) (string, erro
 		return "", fmt.Errorf("github: encode result: %w", err)
 	}
 	return string(blob), nil
-}
-
-// token resolves the credential at the call site.
-func (c *client) token() (string, error) {
-	if c.credential == "" {
-		return "", errors.New("github: no credential declared; set Config.Credential to the reference (ADR 0008)")
-	}
-	env := c.env
-	if env == nil {
-		env = os.Getenv
-	}
-	if v := strings.TrimSpace(env(c.credential)); v != "" {
-		return v, nil
-	}
-	return "", fmt.Errorf("github: credential %q is unset; the connector is disabled (fail closed)", c.credential)
 }
 
 // repositoryFor resolves the target repository: the call's override, else the

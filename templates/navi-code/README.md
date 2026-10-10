@@ -48,6 +48,16 @@ working on. Two settings, neither compiled into the binary:
 | The token | the environment variable `GITHUB_TOKEN` — a *reference*, resolved at the moment of each call and never stored (ADR 0008) | unset |
 | The repository | `NAVI_CODE_GITHUB_REPO`, else the working directory's `origin` remote | derived from git |
 
+The credential arrives through a `TokenSource` (ADR 0020), not a bare string, so a
+credential that has to be **minted and refreshed** is expressible: a GitHub App
+installation signs a JWT with its private key and exchanges it for an
+installation access token that expires in an hour. That implementation is not
+here yet (NAVI-395) — this template uses the static reference, which is the
+right source for a personal access token and for the `GITHUB_TOKEN` a GitHub
+Actions workflow mints per run. A GitHub App is the production-shaped option for
+a long-lived integration, because its token is short-lived and scoped to one
+installation rather than to a person.
+
 The connector is declared **at build time** regardless of configuration, so the
 capability's presence is a property of `main.go` rather than of the operator's
 environment (ADR 0014 decision 4). What an unset token disables is the

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/connector"
@@ -295,5 +296,100 @@ func TestSendToolsDeclaresAnAttributableShape(t *testing.T) {
 	}
 	if len(def.InputSchema.Raw()) == 0 {
 		t.Fatal("the descriptor must declare an input schema")
+	}
+}
+
+// recordingTokenSource stands in for a credential that is not a static string
+// (a GitHub App installation, which signs a JWT and mints a short-lived token).
+// It records how it was called so the seam can be checked rather than assumed.
+type recordingTokenSource struct {
+	mu    sync.Mutex
+	calls int
+	ctxs  []context.Context
+	value string
+	err   error
+}
+
+func (s *recordingTokenSource) Token(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.ctxs = append(s.ctxs, ctx)
+	return s.value, s.err
+}
+
+func (s *recordingTokenSource) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// TestTokenSourceIsUsedInsteadOfAStaticCredential pins the seam ADR 0020
+// settles: the connector asks a TokenSource for its bearer token, so a
+// credential that must be minted and refreshed is expressible at all. A string
+// resolver could not do this, which is why a GitHub App installation is a
+// source rather than a longer Config field.
+func TestTokenSourceIsUsedInsteadOfAStaticCredential(t *testing.T) {
+	src := &recordingTokenSource{value: testToken(t)}
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, `{"id": 1}`)
+	}))
+	defer srv.Close()
+
+	// No Credential at all: the source is the only credential.
+	c := New(Config{Token: src, Repository: "acme/widgets", BaseURL: srv.URL, HTTPClient: srv.Client()})
+	if err := c.Start(context.Background(), connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	tools, err := c.SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+	if _, err := tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"}); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if gotAuth != "Bearer "+src.value {
+		t.Fatalf("Authorization = %q, want the token the source yielded", gotAuth)
+	}
+
+	// The source is asked at the call site, not once at construction: Start
+	// asks once (to surface a misconfiguration early) and the call asks again,
+	// so a source that refreshes on its own schedule is consulted per request.
+	if src.count() < 2 {
+		t.Fatalf("source was asked %d time(s); it must be consulted per call, not cached by the connector", src.count())
+	}
+	// And it is handed a context, so a minting source can bound its own network
+	// call and honour cancellation.
+	for i, ctx := range src.ctxs {
+		if ctx == nil {
+			t.Fatalf("call %d got a nil context; a minting source needs one to bound its request", i)
+		}
+	}
+}
+
+// TestTokenSourceErrorIsReportedVerbatim guards the failure path: a source that
+// cannot produce a token must surface its own error (which names the reference
+// or the app), and the connector must not invent a different one or leak a
+// value.
+func TestTokenSourceErrorIsReportedVerbatim(t *testing.T) {
+	sentinel := errors.New("github: app installation 42 is not configured")
+	c := New(Config{Token: &recordingTokenSource{err: sentinel}, Repository: "acme/widgets"})
+	if err := c.Start(context.Background(), connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+
+	tools, err := c.SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+	_, err = tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("call = %v, want the source's error preserved", err)
 	}
 }
