@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-09'
 supersedes: []
 amends: ./0014-connectors-are-bidirectional-service-integrations.md
