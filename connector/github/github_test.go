@@ -1,0 +1,271 @@
+package github
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/tool"
+)
+
+// testToken derives the token from the test name so the value is unique per
+// test and cannot be confused with a real credential (ADR 0008: no secret
+// literals in source or fixtures).
+func testToken(t *testing.T) string {
+	t.Helper()
+	return "tkn-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
+}
+
+// envWith returns an Env that resolves only ref, so tests never read the real
+// environment.
+func envWith(ref, value string) func(string) string {
+	return func(name string) string {
+		if name == ref {
+			return value
+		}
+		return ""
+	}
+}
+
+// startedConnector builds, starts, and stops a connector against a test
+// server, returning the tool the author would add to a navi.
+func startedConnector(t *testing.T, srv *httptest.Server, cfg Config) (*Connector, tool.Tool) {
+	t.Helper()
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = srv.URL
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = srv.Client()
+	}
+	c := New(cfg)
+	if err := c.Start(context.Background(), connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Stop() })
+	tools, err := c.SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("SendTools = %d tools, want 1", len(tools))
+	}
+	return c, tools[0]
+}
+
+// TestEgressToolReachesTheLiveClient is the acceptance criterion that the
+// mechanism works end to end: a tool built at authoring time reaches the
+// client the connector published at Start, and posts what it was asked to.
+func TestEgressToolReachesTheLiveClient(t *testing.T) {
+	const ref = "GITHUB_TOKEN"
+	token := testToken(t)
+
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id": 42, "html_url": "https://github.com/acme/widgets/issues/7#issuecomment-42"}`)
+	}))
+	defer srv.Close()
+
+	_, tl := startedConnector(t, srv, Config{Credential: ref, Repository: "acme/widgets", Env: envWith(ref, token)})
+
+	out, err := tl.Handler(context.Background(), map[string]any{"issue": float64(7), "body": "looked into it"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if gotPath != "/repos/acme/widgets/issues/7/comments" {
+		t.Fatalf("path = %q, want the issue-comments endpoint", gotPath)
+	}
+	if gotAuth != "Bearer "+token {
+		t.Fatalf("Authorization = %q, want the bearer token", gotAuth)
+	}
+	var sent map[string]string
+	if err := json.Unmarshal([]byte(gotBody), &sent); err != nil {
+		t.Fatalf("request body %q is not JSON: %v", gotBody, err)
+	}
+	if sent["body"] != "looked into it" {
+		t.Fatalf("posted body = %q", sent["body"])
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("tool output %q is not JSON: %v", out, err)
+	}
+	if result["commented"] != "acme/widgets#7" {
+		t.Fatalf("result = %v, want the commented target", result)
+	}
+	if result["url"] != "https://github.com/acme/widgets/issues/7#issuecomment-42" {
+		t.Fatalf("result url = %v", result["url"])
+	}
+}
+
+// TestEgressToolFailsClosedBeforeStart is ADR 0014's consequence: the tool is
+// bound at authoring time but the client arrives at Start, so a call before
+// the connector serves must fail cleanly rather than dereference nil.
+func TestEgressToolFailsClosedBeforeStart(t *testing.T) {
+	const ref = "GITHUB_TOKEN"
+	c := New(Config{Credential: ref, Repository: "acme/widgets", Env: envWith(ref, testToken(t))})
+	tools, err := c.SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+
+	_, err = tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
+	if !errors.Is(err, connector.ErrNotStarted) {
+		t.Fatalf("call before Start = %v, want ErrNotStarted", err)
+	}
+
+	// And again after Stop, so a released client is not reachable either.
+	if err := c.Start(context.Background(), connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := c.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"}); !errors.Is(err, connector.ErrNotStarted) {
+		t.Fatalf("call after Stop = %v, want ErrNotStarted", err)
+	}
+}
+
+// TestStartFailsClosedWithoutACredential pins ADR 0008: a missing credential
+// disables the connector with an error naming the REFERENCE.
+func TestStartFailsClosedWithoutACredential(t *testing.T) {
+	t.Run("no reference declared", func(t *testing.T) {
+		err := New(Config{}).Start(context.Background(), connector.Deps{})
+		if err == nil || !strings.Contains(err.Error(), "no credential declared") {
+			t.Fatalf("Start = %v, want a missing-credential error", err)
+		}
+	})
+	t.Run("reference is unset", func(t *testing.T) {
+		err := New(Config{Credential: "GITHUB_TOKEN", Env: envWith("OTHER", "x")}).Start(context.Background(), connector.Deps{})
+		if err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+			t.Fatalf("Start = %v, want an error naming the reference", err)
+		}
+	})
+}
+
+// TestTheTokenNeverLeavesTheCallSite is ADR 0014 decision 6 and the issue's
+// acceptance criterion: no credential value can appear in the tool output, in
+// an error, or in anything that would be written to a transcript, the
+// datastore, or a log.
+func TestTheTokenNeverLeavesTheCallSite(t *testing.T) {
+	const ref = "GITHUB_TOKEN"
+	token := testToken(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c, tl := startedConnector(t, srv, Config{Credential: ref, Repository: "acme/widgets", Env: envWith(ref, token)})
+
+	// A failed call: the error carries the status and the response body, never
+	// the token.
+	_, err := tl.Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
+	if err == nil {
+		t.Fatal("want a failure from the 403")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("the token leaked into an error: %v", err)
+	}
+
+	// A successful call: the output is the created comment, not the request.
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id": 1, "html_url": "https://example.test/c/1"}`)
+	}))
+	defer ok.Close()
+	_, tlOK := startedConnector(t, ok, Config{Credential: ref, Repository: "acme/widgets", Env: envWith(ref, token)})
+	out, err := tlOK.Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if strings.Contains(out, token) {
+		t.Fatalf("the token leaked into the tool output: %s", out)
+	}
+
+	// Structurally: the connector and its client hold the REFERENCE only, so a
+	// dump of either — the shape a log line or a debug print produces — cannot
+	// contain the value.
+	for _, dumped := range []string{fmt.Sprintf("%+v", c), fmt.Sprintf("%+v", c.newClient())} {
+		if strings.Contains(dumped, token) {
+			t.Fatalf("the token leaked into a struct dump: %s", dumped)
+		}
+		if !strings.Contains(dumped, ref) {
+			t.Fatalf("the reference should be present (it is not a secret): %s", dumped)
+		}
+	}
+}
+
+// TestRepositoryResolution pins that an egress call cannot silently act on the
+// wrong repository, and that the configured default is overridable.
+func TestRepositoryResolution(t *testing.T) {
+	const ref = "GITHUB_TOKEN"
+	token := testToken(t)
+
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		fmt.Fprint(w, `{"id": 1}`)
+	}))
+	defer srv.Close()
+
+	_, tl := startedConnector(t, srv, Config{Credential: ref, Repository: "acme/widgets", Env: envWith(ref, token)})
+
+	if _, err := tl.Handler(context.Background(), map[string]any{"issue": float64(3), "body": "x", "repository": "other/repo"}); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if path != "/repos/other/repo/issues/3/comments" {
+		t.Fatalf("path = %q, want the per-call override", path)
+	}
+
+	// No configured default and no override is an error, not a guess.
+	_, bare := startedConnector(t, srv, Config{Credential: ref, Env: envWith(ref, token)})
+	if _, err := bare.Handler(context.Background(), map[string]any{"issue": float64(3), "body": "x"}); err == nil {
+		t.Fatal("a call with no repository must fail")
+	}
+	// A repository that is not owner/name is refused before any request.
+	if _, err := tl.Handler(context.Background(), map[string]any{"issue": float64(3), "body": "x", "repository": "widgets"}); err == nil {
+		t.Fatal("a repository without an owner must fail")
+	}
+}
+
+// TestSendToolsDeclaresAnAttributableShape pins the descriptor an egress tool
+// must carry (ADR 0020 decision 5): a namespaced name, a real access level,
+// and provenance that identifies the connector.
+func TestSendToolsDeclaresAnAttributableShape(t *testing.T) {
+	const ref = "GITHUB_TOKEN"
+	tools, err := New(Config{Credential: ref, Repository: "acme/widgets"}).SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+	def := tools[0].Def
+	if def.Name != ToolIssueComment {
+		t.Fatalf("name = %q, want %q", def.Name, ToolIssueComment)
+	}
+	if def.Namespace() != "github" {
+		t.Fatalf("namespace = %q, want github", def.Namespace())
+	}
+	if def.Access != tool.AccessExecute {
+		t.Fatalf("access = %v, want execute (egress reaches outside the process)", def.Access)
+	}
+	if def.SourceInfo.Origin != tool.OriginAuthor || def.SourceInfo.Path != "github" {
+		t.Fatalf("provenance = %+v, want author/github", def.SourceInfo)
+	}
+	if def.Recovery != "capture_response" {
+		t.Fatalf("recovery = %q, want capture_response: a retried POST would duplicate the comment", def.Recovery)
+	}
+	if len(def.InputSchema.Raw()) == 0 {
+		t.Fatal("the descriptor must declare an input schema")
+	}
+}

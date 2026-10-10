@@ -124,6 +124,10 @@ func SendTool[C any](def tool.Def, live *Live[C], call func(ctx context.Context,
 // does: an unnamed or un-namespaced tool is unattributable, an "any" access
 // level is not a level, and a tool with no argument schema cannot be called
 // correctly by a model.
+//
+// The recovery strategy is required here as well as by the registry, so an
+// egress tool that is not registrable fails at composition time rather than
+// when the navi assembles.
 func validateEgress(def tool.Def) error {
 	name := strings.TrimSpace(def.Name)
 	if name == "" {
@@ -138,6 +142,9 @@ func validateEgress(def tool.Def) error {
 	}
 	if len(def.InputSchema.Raw()) == 0 {
 		return fmt.Errorf("connector: egress tool %q must declare an input schema", name)
+	}
+	if def.Recovery == "" {
+		return fmt.Errorf("connector: egress tool %q must declare a recovery strategy (the registry requires one)", name)
 	}
 	return nil
 }

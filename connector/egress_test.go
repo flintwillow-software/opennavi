@@ -25,6 +25,7 @@ func egressDef(t *testing.T, name string) tool.Def {
 		Description: "test egress tool",
 		InputSchema: schema,
 		Access:      tool.AccessWrite,
+		Recovery:    "capture_response",
 	}
 }
 
@@ -118,6 +119,7 @@ func TestEgressToolRejectsAnUnattributableShape(t *testing.T) {
 		{"un-namespaced", func(d *tool.Def) { d.Name = "send" }, "must be namespaced"},
 		{"no access level", func(d *tool.Def) { d.Access = tool.AccessAny }, "access level"},
 		{"no schema", func(d *tool.Def) { d.InputSchema = tool.Schema{} }, "input schema"},
+		{"no recovery strategy", func(d *tool.Def) { d.Recovery = "" }, "recovery strategy"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
