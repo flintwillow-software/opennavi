@@ -96,6 +96,12 @@ func run() error {
 	// SendTools hands back ordinary tool.Tool values, added explicitly here and
 	// never auto-registered, so this file is the whole story of what
 	// navi-code can say outward.
+	//
+	// This is the STATIC credential shape (a token reference, else the
+	// developer's gh login), which is what a starter should ship. A deployment
+	// that is a long-lived service should use a GitHub App installation
+	// instead — see the "GitHub egress" section of README.md for the two shapes
+	// and how to choose.
 	gh := github.New(github.Config{
 		// An explicit reference wins — that is what CI and a deployment set —
 		// and the developer's own `gh auth login` is the fallback, so a local

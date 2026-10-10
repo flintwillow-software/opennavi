@@ -60,6 +60,20 @@ type TokenSource interface {
 	Token(ctx context.Context) (string, error)
 }
 
+// TokenInvalidator is the optional extension to TokenSource that makes a
+// rejected token recoverable. A source that caches a MINTED token implements
+// it, and the egress path calls Invalidate when GitHub answers 401, because an
+// installation token can be revoked before its hour is up — so a 401 is not
+// necessarily "the credential is wrong", and one retry with a fresh token
+// recovers the call.
+//
+// The token is passed so a 401 on a token that has since been replaced does not
+// discard its replacement. A static source has nothing to discard and does not
+// implement this, so its 401 is reported rather than retried.
+type TokenInvalidator interface {
+	Invalidate(token string)
+}
+
 // StaticToken is a TokenSource over a credential REFERENCE: it reads the value
 // from Env at each call, so a rotated token is picked up without a restart and
 // the value is never stored (ADR 0014 decision 6).
@@ -240,23 +254,46 @@ func (c *client) comment(ctx context.Context, args map[string]any) (string, erro
 		return "", fmt.Errorf("github: encode comment: %w", err)
 	}
 	url := fmt.Sprintf("%s/repos/%s/issues/%d/comments", c.base, repo, issue)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		return "", fmt.Errorf("github: build comment request: %w", err)
-	}
-	// The token is used here and nowhere else. It is sent as a header, never a
-	// query parameter, so it cannot reach a URL that ends up in a log or an
-	// error message.
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "opennavi")
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		// Deliberately not wrapping the request: a transport error must not be
-		// able to echo the Authorization header into the transcript.
-		return "", fmt.Errorf("github: comment on %s#%d: %w", repo, issue, err)
+	// One bounded attempt loop, for exactly one reason: a minted installation
+	// token can be revoked before its hour is up, so a 401 does not necessarily
+	// mean the credential is wrong. A source that caches a minted token can be
+	// told the token it handed out was rejected (TokenInvalidator), and one
+	// retry with a fresh token recovers the call. A static source has nothing to
+	// discard, so its 401 is reported as itself. There is no other retry: the
+	// comment POST is not idempotent.
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			return "", fmt.Errorf("github: build comment request: %w", err)
+		}
+		// The token is used here and nowhere else. It is sent as a header, never a
+		// query parameter, so it cannot reach a URL that ends up in a log or an
+		// error message.
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "opennavi")
+
+		resp, err = c.http.Do(req)
+		if err != nil {
+			// Deliberately not wrapping the request: a transport error must not be
+			// able to echo the Authorization header into the transcript.
+			return "", fmt.Errorf("github: comment on %s#%d: %w", repo, issue, err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized || attempt > 0 {
+			break
+		}
+		inv, ok := c.tokens.(TokenInvalidator)
+		if !ok {
+			break
+		}
+		resp.Body.Close()
+		inv.Invalidate(token)
+		if token, err = c.tokens.Token(ctx); err != nil {
+			return "", err
+		}
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))

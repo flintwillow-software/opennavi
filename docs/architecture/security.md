@@ -151,6 +151,14 @@ Outbound capability is a capability, and is bounded the same way inbound work is
   *person's* GitHub identity rather than a scoped service one. A deployment
   should prefer an explicit credential reference, or a GitHub App installation
   whose token is short-lived and scoped to one installation.
+- **A minted credential's key is the secret that outlives it.** A GitHub App
+  installation holds a private key and mints an installation token from it, so
+  the key — not the token — is the long-lived secret: it is reference-resolved
+  at the point of use (ADR 0008), never stored, and never written to an error,
+  a log, or a struct dump. Only the short-lived token is cached, in memory, and
+  it is dropped the moment GitHub rejects it (a 401 re-mints once rather than
+  failing the call). The exchange is single-flighted, so concurrent egress calls
+  do not each mint.
 - **Secrets are read at the call site only** — resolved inside the request that
   needs them, from a runtime reference (ADR 0008), and never written to the
   thought transcript, the datastore, or logs. A secret never appears in history
