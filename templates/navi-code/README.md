@@ -64,15 +64,41 @@ Treat the `gh` fallback as a development convenience: it acts as **your**
 GitHub identity rather than a scoped service one. Prefer an explicit reference
 in a deployment.
 
-The credential arrives through a `TokenSource` (ADR 0020), not a bare string, so a
-credential that has to be **minted and refreshed** is expressible: a GitHub App
-installation signs a JWT with its private key and exchanges it for an
-installation access token that expires in an hour. That implementation is not
-here yet (NAVI-395) — this template uses the static reference, which is the
-right source for a personal access token and for the `GITHUB_TOKEN` a GitHub
-Actions workflow mints per run. A GitHub App is the production-shaped option for
-a long-lived integration, because its token is short-lived and scoped to one
-installation rather than to a person.
+The credential arrives through a `TokenSource` (ADR 0020), not a bare string, so
+a credential that has to be **minted and refreshed** is expressible. There are
+two shapes, and which to choose is a deployment decision:
+
+| Shape | Source | Choose it when |
+|---|---|---|
+| A static token | `StaticToken{Ref: "GITHUB_TOKEN"}`, with `GHCLIToken` as the local fallback — this template's default | CI mints a token per run, or a person runs it locally. The token is long-lived and broad, and acts as whoever minted it. |
+| A GitHub App installation | `&AppInstallation{...}` | The navi is a **long-lived service**. The token is minted on demand, expires in an hour, and is scoped to one installation rather than to a person. |
+
+This template ships the static shape, because a starter should run with the
+credential a developer already has. For a deployment, the App is the
+production-shaped option — GitHub's own guidance is to use an App rather than a
+personal access token for "long-lived integrations". Swapping it in is one
+field:
+
+```go
+gh := github.New(github.Config{
+    Token: &github.AppInstallation{
+        AppID:          123456,                     // the app's "App ID"
+        InstallationID: 987654,                     // the installation to act as
+        KeyRef:         "/etc/navi/github-app.pem", // the PEM, or an env var name
+    },
+    Repository: githubRepository(),
+})
+```
+
+The app's **private key is the real secret** and outlives every token it mints,
+so it is a reference (ADR 0008) — an environment variable holding the PEM, else
+a file path — and never a value in `main.go`. The source mints on first use,
+re-mints before the hour is up and again if GitHub answers 401 (an installation
+token can be revoked early), and single-flights the mint so concurrent calls do
+not each exchange. The installation ID is **declared rather than discovered**:
+an app may be installed on several accounts, so `GET /app/installations` would
+only move the choice into a config rule and make "the first one" a silent
+wrong-target bug.
 
 The connector is declared **at build time** regardless of configuration, so the
 capability's presence is a property of `main.go` rather than of the operator's

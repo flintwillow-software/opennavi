@@ -185,6 +185,9 @@ func TestSourcesSatisfyTokenSource(t *testing.T) {
 	var _ TokenSource = ChainToken()
 	var _ TokenSource = &GHCLIToken{}
 	var _ TokenSource = StaticToken{}
+	var _ TokenSource = &AppInstallation{}
+	// The optional extension that makes a rejected minted token recoverable.
+	var _ TokenInvalidator = &AppInstallation{}
 }
 
 func countLines(t *testing.T, path string) int {
