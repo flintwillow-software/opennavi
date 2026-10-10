@@ -96,6 +96,19 @@ client.
    4–6 (build-time declaration, no generic payload, call-site secrets) and this
    ADR adds the gating rule to it.
 
+7. **An unset credential disables the capability, not the navi.** A connector
+   whose `Start` fails aborts the whole run (`navi.serve`: *"a half-serving navi
+   is not a state worth having"*), so making a missing token a `Start` error
+   would let one unconfigured integration take down every other capability — a
+   coding agent that cannot read a file because its GitHub token is absent.
+   Instead `Start` succeeds, warns once naming the reference, and each egress
+   call refuses at the call site, naming the reference and never a value. The
+   service stays declared at build time (decision 4 of ADR 0014 is untouched),
+   and ADR 0008's requirement is met where it matters — the failure is loud and
+   actionable, never a silent degradation. This is also the egress precedent
+   `tool/http` already set: without an `AuthResolver` its tool refuses the
+   call rather than refusing to load.
+
 ## Consequences
 
 - **The egress seam is contract-pure and testable out of repo.** A third-party
@@ -118,6 +131,10 @@ client.
   the seam is the whole component.
 - **Gating costs a mutex read per call.** Negligible next to a network request,
   and it removes a whole class of nil-client panics.
+- **A misconfigured integration is visible but not fatal.** The capability is
+  inert until the operator supplies the credential; the rest of the navi is
+  unaffected. The cost is that a missing credential is discovered from a warning
+  or a refused call rather than from a startup failure.
 
 ## Alternatives considered
 
@@ -134,6 +151,13 @@ client.
 - **No mechanism — each connector gates its own client.** Rejected: it is the
   rule ADR 0014 already stated as a consequence and left unenforced, and the
   failure mode is a panic in production rather than a clean error.
+- **Fail `Start` when the credential is unset.** Rejected: it makes one
+  unconfigured integration abort the navi, and it turns a deployment gap into a
+  total outage. See decision 7.
+- **Declare the connector only when the credential is configured.** Rejected:
+  it is a runtime widening of which services exist, which ADR 0014 decision 4
+  forbids — and it would mean the composed binary's capability surface depends
+  on the operator's environment rather than on `main.go`.
 - **A connector-owned delivery queue.** Deferred, not rejected: see decision 4.
 
 ## Open questions

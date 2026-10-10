@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/connector/github"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/navi"
 	"github.com/flintwillow-software/opennavi/portal/tui"
@@ -88,6 +90,33 @@ func run() error {
 		return err
 	}
 
+	// GitHub egress (ADR 0014, ADR 0020): the connector is declared at build
+	// time, so the capability exists whether or not the operator configured a
+	// token — a missing credential makes the calls refuse, not the navi.
+	// SendTools hands back ordinary tool.Tool values, added explicitly here and
+	// never auto-registered, so this file is the whole story of what
+	// navi-code can say outward.
+	gh := github.New(github.Config{
+		// A credential REFERENCE, never a value (ADR 0008): the token is read
+		// from this environment variable at the moment of each call.
+		Credential: githubCredentialRef,
+		// The repository egress tools act on by default. A tool call may
+		// override it, so an unset value is not an error.
+		Repository: githubRepository(),
+	})
+	if err := n.Connectors.Add(gh); err != nil {
+		return err
+	}
+	ghTools, err := gh.SendTools()
+	if err != nil {
+		return err
+	}
+	for _, t := range ghTools {
+		if err := n.Tools.Add(t); err != nil {
+			return err
+		}
+	}
+
 	// One model, marked default (ADR 0009). Runtime config may retarget
 	// the provider/model; the declared set is what model_list reports.
 	if err := n.Models.Add(model.Ollama("qwen3.8:27b", model.Default())); err != nil {
@@ -100,6 +129,51 @@ func run() error {
 	}
 
 	return n.Run(ctx)
+}
+
+// githubCredentialRef is the environment variable navi-code reads its GitHub
+// token from. It is compiled in as a default reference the operator can see;
+// the value is resolved at the call site and never stored (ADR 0008).
+const githubCredentialRef = "GITHUB_TOKEN"
+
+// githubRepository resolves the repository egress tools act on: an explicit
+// override, else the working directory's git remote, else empty (the model may
+// pass repository per call). This is deployment config, not a secret, so it is
+// read at start rather than compiled in.
+func githubRepository() string {
+	if v := strings.TrimSpace(os.Getenv("NAVI_CODE_GITHUB_REPO")); v != "" {
+		return v
+	}
+	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return parseGitRemote(strings.TrimSpace(string(out)))
+}
+
+// parseGitRemote turns a git remote URL into owner/name, or "" when it is not
+// a GitHub remote. Both the ssh and https spellings are accepted:
+//
+//	git@github.com:acme/widgets.git   -> acme/widgets
+//	https://github.com/acme/widgets   -> acme/widgets
+func parseGitRemote(remote string) string {
+	s := remote
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+		if j := strings.IndexByte(s, '/'); j >= 0 {
+			s = s[j+1:] // drop the host
+		}
+	} else if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[i+1:] // scp-like: git@host:owner/name
+	} else {
+		return ""
+	}
+	s = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(s), ".git"), "/")
+	parts := strings.Split(s, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return s
 }
 
 // repoStatsTool declares repo_stats as a public component tool.

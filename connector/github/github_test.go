@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,21 +139,48 @@ func TestEgressToolFailsClosedBeforeStart(t *testing.T) {
 	}
 }
 
-// TestStartFailsClosedWithoutACredential pins ADR 0008: a missing credential
-// disables the connector with an error naming the REFERENCE.
-func TestStartFailsClosedWithoutACredential(t *testing.T) {
-	t.Run("no reference declared", func(t *testing.T) {
-		err := New(Config{}).Start(context.Background(), connector.Deps{})
-		if err == nil || !strings.Contains(err.Error(), "no credential declared") {
-			t.Fatalf("Start = %v, want a missing-credential error", err)
-		}
-	})
-	t.Run("reference is unset", func(t *testing.T) {
-		err := New(Config{Credential: "GITHUB_TOKEN", Env: envWith("OTHER", "x")}).Start(context.Background(), connector.Deps{})
-		if err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
-			t.Fatalf("Start = %v, want an error naming the reference", err)
-		}
-	})
+// TestMissingCredentialDisablesTheCapabilityNotTheNavi pins ADR 0020: an
+// unconfigured integration must not abort the run (navi.serve fails the whole
+// navi when a connector Start fails), so Start succeeds, warns once, and each
+// egress call refuses — naming the REFERENCE, never a value (ADR 0008).
+func TestMissingCredentialDisablesTheCapabilityNotTheNavi(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"no reference declared", Config{}, "no credential declared"},
+		{"reference is unset", Config{Credential: "GITHUB_TOKEN", Env: envWith("OTHER", "x")}, "GITHUB_TOKEN"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(tc.cfg)
+			var logged strings.Builder
+			deps := connector.Deps{Log: slog.New(slog.NewTextHandler(&logged, nil))}
+			if err := c.Start(context.Background(), deps); err != nil {
+				t.Fatalf("Start = %v, want it to succeed so the navi still runs", err)
+			}
+			defer func() { _ = c.Stop() }()
+
+			// The operator is warned early, and the warning names the reference.
+			if !strings.Contains(logged.String(), tc.want) {
+				t.Fatalf("Start did not warn about the credential: %q", logged.String())
+			}
+
+			// The capability itself refuses, at the call site.
+			tools, err := c.SendTools()
+			if err != nil {
+				t.Fatalf("SendTools: %v", err)
+			}
+			_, err = tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("call = %v, want a refusal naming %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "not started") {
+				t.Fatalf("the connector IS serving; the refusal must be about the credential: %v", err)
+			}
+		})
+	}
 }
 
 // TestTheTokenNeverLeavesTheCallSite is ADR 0014 decision 6 and the issue's

@@ -70,16 +70,20 @@ func New(cfg Config) *Connector {
 	return &Connector{cfg: cfg, live: connector.NewLive[*client]()}
 }
 
-// Start validates the credential reference and publishes a client, so an
-// egress tool bound at authoring time can reach it. It starts no inbound loop:
-// this is the egress half only.
+// Start publishes a client so an egress tool bound at authoring time can
+// reach it. It starts no inbound loop: this is the egress half only.
 //
-// A missing credential fails Start with a clear error naming the REFERENCE
-// (ADR 0008: credential resolution is fail-closed, and a value is never
-// printed).
-func (c *Connector) Start(_ context.Context, _ connector.Deps) error {
-	if _, err := c.token(); err != nil {
-		return err
+// A missing credential does NOT fail Start. The connector is declared at build
+// time (ADR 0014 decision 4), so the service exists whether or not the operator
+// configured a token; what an unset credential disables is the *capability*, not
+// the navi — a navi whose connector Start fails aborts the whole run
+// (navi.serve), which would make one unconfigured integration take down every
+// other capability. Each egress call refuses at the call site, naming the
+// reference (ADR 0008: fail closed, never silently degrade), and Start warns
+// once so the operator sees it without waiting for a failed call.
+func (c *Connector) Start(_ context.Context, deps connector.Deps) error {
+	if _, err := c.token(); err != nil && deps.Log != nil {
+		deps.Log.Warn("github connector has no usable credential; its egress tools will refuse", "err", err)
 	}
 	c.live.Set(c.newClient())
 	return nil
@@ -163,6 +167,13 @@ type client struct {
 // comment posts a comment on an issue (or pull request — GitHub treats them
 // alike).
 func (c *client) comment(ctx context.Context, args map[string]any) (string, error) {
+	// The credential is checked first: without one no call can succeed, so a
+	// missing credential is reported as itself rather than masked by whatever
+	// else is wrong with the arguments.
+	token, err := c.token()
+	if err != nil {
+		return "", err
+	}
 	repo, err := c.repositoryFor(args)
 	if err != nil {
 		return "", err
@@ -174,10 +185,6 @@ func (c *client) comment(ctx context.Context, args map[string]any) (string, erro
 	body, _ := args["body"].(string)
 	if strings.TrimSpace(body) == "" {
 		return "", errors.New("github: issue comment needs a non-empty body")
-	}
-	token, err := c.token()
-	if err != nil {
-		return "", err
 	}
 
 	payload, err := json.Marshal(map[string]string{"body": body})

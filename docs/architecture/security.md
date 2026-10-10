@@ -118,7 +118,11 @@ supply-chain record; artifact signing is deferred (see below).
   (`defaults → file → env → flags`).
 - Endpoint defaults may be compiled in; the operator may override them.
 - Credential resolution is **fail-closed**: a missing credential disables the
-  component with a clear error rather than silently degrading.
+  component's capability with a clear error rather than silently degrading. For
+  a connector's egress tools that means the *capability* is disabled, not the
+  navi: the connector stays declared (ADR 0014 decision 4) and each call refuses
+  at the call site naming the reference, so one unconfigured integration cannot
+  abort a run whose other capabilities are fine (ADR 0020 decision 7).
 
 ```go
 model.OpenRouter("anthropic/claude-sonnet-4", model.WithCredential("OPENROUTER_API_KEY"))
