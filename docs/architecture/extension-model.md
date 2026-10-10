@@ -111,8 +111,34 @@ func IssueRead(c Config) tool.Tool {
 | Tool | `func Foo(cfg) tool.Tool` | Full metadata descriptor |
 | Skill | `//go:embed *.md` + accessor | Content travels with the module, compiles in |
 | Model | `func Foo(...) model.Provider` | Provider descriptor; the credential is a reference resolved at runtime |
-| Connector | implements `connector.Connector` | Receives thought/model handles via `Deps` |
+| Connector | implements `connector.Connector` | Receives thought/model handles via `Deps`; exposes egress tools via `SendTools()` |
 | Portal | implements `portal.Portal` | List/schedule/steer thoughts via `Deps` |
+
+A connector's **outbound** half is egress tools: ordinary `tool.Tool` values
+built with `connector.SendTool`, added explicitly by the navi author and never
+auto-registered (ADR 0014, ADR 0020). The tool is bound at authoring time while
+the service client arrives at `Start`, so the connector publishes it into a
+`connector.Live[C]` handle and the gate is built into the handler:
+
+```go
+type Connector struct{ live *connector.Live[*client] }
+
+func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
+    if _, err := c.token(); err != nil { return err }  // fail closed (ADR 0008)
+    c.live.Set(c.newClient())
+    return nil
+}
+func (c *Connector) Stop() error { c.live.Clear(); return nil }
+
+func (c *Connector) SendTools() ([]tool.Tool, error) {
+    return []tool.Tool{connector.SendTool(def, c.live, c.reach)}, nil
+}
+```
+
+A call before `Start` (or after `Stop`) returns `connector.ErrNotStarted` — a
+clean error, never a nil dereference. `connector` references only the `tool`
+package, so this stays contract-pure and an out-of-repo connector inherits no
+implementation dependency.
 
 A shared internal kit (`acme/navi-kit`) can expose common skills, tools,
 connectors, and even a base navi constructor for a team, so many navis compose

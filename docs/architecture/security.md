@@ -147,7 +147,16 @@ Outbound capability is a capability, and is bounded the same way inbound work is
   because history is written where the secret is not read.
 - **An egress tool must tolerate an unstarted connector**: tools are bound at
   authoring time but the client arrives at `Start`, so a call before the
-  connector serves fails cleanly rather than dereferencing a nil client.
+  connector serves fails cleanly rather than dereferencing a nil client. This is
+  enforced by the mechanism rather than trusted to each author: the connector
+  publishes its client into a `connector.Live[C]` handle in `Start`, clears it
+  in `Stop`, and `connector.SendTool` builds the gate into the handler, so the
+  call returns `connector.ErrNotStarted` (ADR 0020).
+- **An egress tool cannot hide what it does.** `SendTool` refuses a descriptor
+  with no name, no namespace, no access level, no input schema, or no recovery
+  strategy, and stamps the tool's provenance from its namespace — so "what can
+  this navi reach, and through which component?" is answerable from the catalog
+  rather than by reading every handler.
 
 ## Trust boundary
 
