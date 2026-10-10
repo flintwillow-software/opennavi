@@ -99,6 +99,18 @@ compiled definition.
 
 ## Build & run
 
+From the SDK checkout, one command builds this template into `var/bin/navi-code`:
+
+```
+just build-navi-code
+```
+
+It creates the workspace described below if it is missing, so it works from a
+clean tree. `just templates` builds, vets, and tests all three starter
+templates.
+
+### Building it yourself
+
 ```
 go build ./cmd/navi-code
 ```
