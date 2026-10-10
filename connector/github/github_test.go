@@ -9,9 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/tool"
@@ -391,5 +394,78 @@ func TestTokenSourceErrorIsReportedVerbatim(t *testing.T) {
 	_, err = tools[0].Handler(context.Background(), map[string]any{"issue": float64(1), "body": "hi"})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("call = %v, want the source's error preserved", err)
+	}
+}
+
+// TestLiveGitHubIssueComment is the opt-in end-to-end check: it posts a REAL
+// comment to a real issue through the connector, so the parts a test double
+// cannot vouch for — the endpoint, the auth header GitHub actually accepts, the
+// request shape — are exercised once against the live API.
+//
+// It is gated three ways so it can never fire by accident (CI environments
+// frequently have GITHUB_TOKEN in the environment):
+//
+//	NAVI_LIVE_GITHUB=1                        # explicit opt-in
+//	NAVI_TEST_GITHUB_REPO=owner/name          # where to post
+//	NAVI_TEST_GITHUB_ISSUE=123                # which issue
+//	GITHUB_TOKEN=<token with issues:write>    # the credential reference
+//
+// Run it with:
+//
+//	NAVI_LIVE_GITHUB=1 NAVI_TEST_GITHUB_REPO=acme/widgets NAVI_TEST_GITHUB_ISSUE=7 \
+//	  GITHUB_TOKEN=... go test -v -run TestLiveGitHubIssueComment ./connector/github/
+//
+// It POSTS — it does not read a comment and delete it — so point it at a test
+// issue you do not mind a comment on.
+func TestLiveGitHubIssueComment(t *testing.T) {
+	if os.Getenv("NAVI_LIVE_GITHUB") != "1" {
+		t.Skip("live GitHub check is opt-in: set NAVI_LIVE_GITHUB=1 with NAVI_TEST_GITHUB_REPO, NAVI_TEST_GITHUB_ISSUE, and GITHUB_TOKEN")
+	}
+	repo := strings.TrimSpace(os.Getenv("NAVI_TEST_GITHUB_REPO"))
+	rawIssue := strings.TrimSpace(os.Getenv("NAVI_TEST_GITHUB_ISSUE"))
+	if repo == "" || rawIssue == "" {
+		t.Fatal("NAVI_TEST_GITHUB_REPO and NAVI_TEST_GITHUB_ISSUE are required when NAVI_LIVE_GITHUB=1")
+	}
+	issue, err := strconv.Atoi(rawIssue)
+	if err != nil || issue < 1 {
+		t.Fatalf("NAVI_TEST_GITHUB_ISSUE = %q, want an issue number", rawIssue)
+	}
+	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) == "" {
+		t.Fatal("GITHUB_TOKEN is unset; the connector will refuse (fail closed)")
+	}
+
+	// Exactly the composition the template uses: a static reference, the tool
+	// added explicitly.
+	gh := New(Config{Credential: "GITHUB_TOKEN", Repository: repo})
+	if err := gh.Start(context.Background(), connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = gh.Stop() }()
+
+	tools, err := gh.SendTools()
+	if err != nil {
+		t.Fatalf("SendTools: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := tools[0].Handler(ctx, map[string]any{
+		"issue": float64(issue),
+		"body":  "navi connector egress smoke test — safe to delete.",
+	})
+	if err != nil {
+		t.Fatalf("posting a real comment failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("tool output %q is not JSON: %v", out, err)
+	}
+	if want := fmt.Sprintf("%s#%d", repo, issue); result["commented"] != want {
+		t.Fatalf("result = %v, want %q", result["commented"], want)
+	}
+	t.Logf("posted: %v", result["url"])
+	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) != "" && strings.Contains(out, os.Getenv("GITHUB_TOKEN")) {
+		t.Fatal("the token appeared in the tool output")
 	}
 }
