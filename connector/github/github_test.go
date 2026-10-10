@@ -402,24 +402,24 @@ func TestTokenSourceErrorIsReportedVerbatim(t *testing.T) {
 // cannot vouch for — the endpoint, the auth header GitHub actually accepts, the
 // request shape — are exercised once against the live API.
 //
-// It is gated three ways so it can never fire by accident (CI environments
+// It is gated two ways so it can never fire by accident (CI environments
 // frequently have GITHUB_TOKEN in the environment):
 //
 //	NAVI_LIVE_GITHUB=1                        # explicit opt-in
 //	NAVI_TEST_GITHUB_REPO=owner/name          # where to post
 //	NAVI_TEST_GITHUB_ISSUE=123                # which issue
-//	GITHUB_TOKEN=<token with issues:write>    # the credential reference
 //
-// Run it with:
+// The credential is the same chain the template uses: GITHUB_TOKEN if it is
+// exported, else the developer's `gh auth login`. Run it with:
 //
 //	NAVI_LIVE_GITHUB=1 NAVI_TEST_GITHUB_REPO=acme/widgets NAVI_TEST_GITHUB_ISSUE=7 \
-//	  GITHUB_TOKEN=... go test -v -run TestLiveGitHubIssueComment ./connector/github/
+//	  go test -v -run TestLiveGitHubIssueComment ./connector/github/
 //
-// It POSTS — it does not read a comment and delete it — so point it at a test
-// issue you do not mind a comment on.
+// It POSTS — it does not read a comment and delete it — so point it at an issue
+// you do not mind a comment on.
 func TestLiveGitHubIssueComment(t *testing.T) {
 	if os.Getenv("NAVI_LIVE_GITHUB") != "1" {
-		t.Skip("live GitHub check is opt-in: set NAVI_LIVE_GITHUB=1 with NAVI_TEST_GITHUB_REPO, NAVI_TEST_GITHUB_ISSUE, and GITHUB_TOKEN")
+		t.Skip("live GitHub check is opt-in: set NAVI_LIVE_GITHUB=1 with NAVI_TEST_GITHUB_REPO and NAVI_TEST_GITHUB_ISSUE")
 	}
 	repo := strings.TrimSpace(os.Getenv("NAVI_TEST_GITHUB_REPO"))
 	rawIssue := strings.TrimSpace(os.Getenv("NAVI_TEST_GITHUB_ISSUE"))
@@ -430,14 +430,22 @@ func TestLiveGitHubIssueComment(t *testing.T) {
 	if err != nil || issue < 1 {
 		t.Fatalf("NAVI_TEST_GITHUB_ISSUE = %q, want an issue number", rawIssue)
 	}
-	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) == "" {
-		t.Fatal("GITHUB_TOKEN is unset; the connector will refuse (fail closed)")
+
+	// The credential chain the navi-code template uses: an explicit reference,
+	// else the developer's gh login. Requiring GITHUB_TOKEN here would make the
+	// test stricter than the connector it is testing — and stricter than the
+	// template, which is the composition being exercised.
+	chain := ChainToken(StaticToken{Ref: "GITHUB_TOKEN"}, &GHCLIToken{})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	token, err := chain.Token(ctx)
+	if err != nil {
+		t.Fatalf("no GitHub credential available (%v); export GITHUB_TOKEN or run `gh auth login`", err)
 	}
 
-	// Exactly the composition the template uses: a static reference, the tool
-	// added explicitly.
-	gh := New(Config{Credential: "GITHUB_TOKEN", Repository: repo})
-	if err := gh.Start(context.Background(), connector.Deps{}); err != nil {
+	gh := New(Config{Token: chain, Repository: repo})
+	if err := gh.Start(ctx, connector.Deps{}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer func() { _ = gh.Stop() }()
@@ -446,8 +454,6 @@ func TestLiveGitHubIssueComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTools: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	out, err := tools[0].Handler(ctx, map[string]any{
 		"issue": float64(issue),
@@ -465,7 +471,11 @@ func TestLiveGitHubIssueComment(t *testing.T) {
 		t.Fatalf("result = %v, want %q", result["commented"], want)
 	}
 	t.Logf("posted: %v", result["url"])
-	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) != "" && strings.Contains(out, os.Getenv("GITHUB_TOKEN")) {
+
+	// The assertion has to use the token that was actually sent, not whatever
+	// GITHUB_TOKEN happens to hold — otherwise it silently checks nothing on the
+	// gh path.
+	if strings.Contains(out, token) {
 		t.Fatal("the token appeared in the tool output")
 	}
 }

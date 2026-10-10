@@ -85,13 +85,22 @@ entirely — that is the point of adding it explicitly.
 To try it, run navi-code in a repository with an `origin` remote:
 
 ```
-export GITHUB_TOKEN=<a token with repo scope>
-go build ./cmd/navi-code && ./navi-code
+just build-navi-code && ../../var/bin/navi-code
 ```
 
-then ask it to comment on an issue. A call before the connector is serving (or
-after it stops) fails with `connector: not started` rather than panicking — the
-gate is built into the tool, not left to the handler.
+No credential setup is needed if you have run `gh auth login` — that is the
+fallback. Export `GITHUB_TOKEN` instead (with `repo` scope, or fine-grained
+`issues:write`) to use an explicit token, which takes precedence:
+
+```
+export GITHUB_TOKEN=<a token with repo scope>
+```
+
+then ask it to comment on an issue. **It cannot read or search issues** — only
+post comments — so give it the issue number and repository explicitly. A call
+before the connector is serving (or after it stops) fails with `connector: not
+started` rather than panicking: the gate is built into the tool, not left to
+the handler.
 
 Deployment-time settings (provider endpoints, credential references) come from
 the runtime config file named by `NAVI_CONFIG`, if set — never from the
