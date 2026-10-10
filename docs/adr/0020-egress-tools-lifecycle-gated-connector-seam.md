@@ -119,7 +119,10 @@ client.
    cannot express that, and resolving per request would mint a token per call,
    so the source owns its own caching and refresh and is asked only for a
    usable token. This is what makes the App case an *addition* rather than a
-   refactor of the static path.
+   refactor of the static path, and it is not only about the App: a source may
+   be a *subprocess* — `gh auth token`, so a developer already logged in needs
+   no exported variable — and such a source caches precisely because asking per
+   request would spawn a process per egress call.
 
 ## Consequences
 

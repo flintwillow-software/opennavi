@@ -45,8 +45,24 @@ working on. Two settings, neither compiled into the binary:
 
 | Setting | Where | Default |
 |---|---|---|
-| The token | the environment variable `GITHUB_TOKEN` — a *reference*, resolved at the moment of each call and never stored (ADR 0008) | unset |
+| The token | the environment variable `GITHUB_TOKEN` — a *reference*, resolved at the moment of each call and never stored (ADR 0008) — else the developer's own **`gh auth login`** | unset, then `gh` |
 | The repository | `NAVI_CODE_GITHUB_REPO`, else the working directory's `origin` remote | derived from git |
+
+That order is deliberate: an exported token is the more explicit configuration,
+and `gh` is the convenience so a local run needs no export. It also matches
+`gh`'s own precedence, where `GH_TOKEN`/`GITHUB_TOKEN` win over stored
+credentials.
+
+**The `gh` fallback shells out to `gh auth token` rather than reading
+`~/.config/gh/hosts.yml`.** Since gh 2.26 the token is kept in the system
+keyring by default (Keychain, wincred, Secret Service) and `hosts.yml` retains
+only host information, so parsing that file would silently find nothing for
+most users. The source caches what it reads for five minutes, so a re-login or
+a revoked token recovers without restarting navi-code.
+
+Treat the `gh` fallback as a development convenience: it acts as **your**
+GitHub identity rather than a scoped service one. Prefer an explicit reference
+in a deployment.
 
 The credential arrives through a `TokenSource` (ADR 0020), not a bare string, so a
 credential that has to be **minted and refreshed** is expressible: a GitHub App

@@ -97,9 +97,14 @@ func run() error {
 	// never auto-registered, so this file is the whole story of what
 	// navi-code can say outward.
 	gh := github.New(github.Config{
-		// A credential REFERENCE, never a value (ADR 0008): the token is read
-		// from this environment variable at the moment of each call.
-		Credential: githubCredentialRef,
+		// An explicit reference wins — that is what CI and a deployment set —
+		// and the developer's own `gh auth login` is the fallback, so a local
+		// run needs no exported variable. A credential REFERENCE, never a
+		// value (ADR 0008): the token is read at the moment of each call.
+		Token: github.ChainToken(
+			github.StaticToken{Ref: githubCredentialRef},
+			&github.GHCLIToken{},
+		),
 		// The repository egress tools act on by default. A tool call may
 		// override it, so an unset value is not an error.
 		Repository: githubRepository(),
@@ -133,7 +138,9 @@ func run() error {
 
 // githubCredentialRef is the environment variable navi-code reads its GitHub
 // token from. It is compiled in as a default reference the operator can see;
-// the value is resolved at the call site and never stored (ADR 0008).
+// the value is resolved at the call site and never stored (ADR 0008). When it
+// is unset, the connector falls back to the developer's own `gh auth login`
+// (see GHCLIToken).
 const githubCredentialRef = "GITHUB_TOKEN"
 
 // githubRepository resolves the repository egress tools act on: an explicit

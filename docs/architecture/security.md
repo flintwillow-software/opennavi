@@ -145,6 +145,12 @@ Outbound capability is a capability, and is bounded the same way inbound work is
 - **There is no generic egress payload schema.** Payloads are service-specific
   (a message, a reply, a reaction), so there is no shared envelope to
   accidentally over-share through.
+- **A developer's local login is a development convenience, not a deployment
+  credential.** A source may read the GitHub CLI's stored token (`gh auth
+  token`) so a local run needs no exported variable, but that acts as the
+  *person's* GitHub identity rather than a scoped service one. A deployment
+  should prefer an explicit credential reference, or a GitHub App installation
+  whose token is short-lived and scoped to one installation.
 - **Secrets are read at the call site only** — resolved inside the request that
   needs them, from a runtime reference (ADR 0008), and never written to the
   thought transcript, the datastore, or logs. A secret never appears in history
