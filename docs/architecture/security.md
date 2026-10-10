@@ -118,7 +118,11 @@ supply-chain record; artifact signing is deferred (see below).
   (`defaults → file → env → flags`).
 - Endpoint defaults may be compiled in; the operator may override them.
 - Credential resolution is **fail-closed**: a missing credential disables the
-  component with a clear error rather than silently degrading.
+  component's capability with a clear error rather than silently degrading. For
+  a connector's egress tools that means the *capability* is disabled, not the
+  navi: the connector stays declared (ADR 0014 decision 4) and each call refuses
+  at the call site naming the reference, so one unconfigured integration cannot
+  abort a run whose other capabilities are fine (ADR 0020 decision 7).
 
 ```go
 model.OpenRouter("anthropic/claude-sonnet-4", model.WithCredential("OPENROUTER_API_KEY"))
@@ -141,13 +145,28 @@ Outbound capability is a capability, and is bounded the same way inbound work is
 - **There is no generic egress payload schema.** Payloads are service-specific
   (a message, a reply, a reaction), so there is no shared envelope to
   accidentally over-share through.
+- **A developer's local login is a development convenience, not a deployment
+  credential.** A source may read the GitHub CLI's stored token (`gh auth
+  token`) so a local run needs no exported variable, but that acts as the
+  *person's* GitHub identity rather than a scoped service one. A deployment
+  should prefer an explicit credential reference, or a GitHub App installation
+  whose token is short-lived and scoped to one installation.
 - **Secrets are read at the call site only** — resolved inside the request that
   needs them, from a runtime reference (ADR 0008), and never written to the
   thought transcript, the datastore, or logs. A secret never appears in history
   because history is written where the secret is not read.
 - **An egress tool must tolerate an unstarted connector**: tools are bound at
   authoring time but the client arrives at `Start`, so a call before the
-  connector serves fails cleanly rather than dereferencing a nil client.
+  connector serves fails cleanly rather than dereferencing a nil client. This is
+  enforced by the mechanism rather than trusted to each author: the connector
+  publishes its client into a `connector.Live[C]` handle in `Start`, clears it
+  in `Stop`, and `connector.SendTool` builds the gate into the handler, so the
+  call returns `connector.ErrNotStarted` (ADR 0020).
+- **An egress tool cannot hide what it does.** `SendTool` refuses a descriptor
+  with no name, no namespace, no access level, no input schema, or no recovery
+  strategy, and stamps the tool's provenance from its namespace — so "what can
+  this navi reach, and through which component?" is answerable from the catalog
+  rather than by reading every handler.
 
 ## Trust boundary
 

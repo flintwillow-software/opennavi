@@ -18,7 +18,35 @@ default:
 build:
     go build -o var/bin/navi ./cmd/navi
 
-# Build, vet, gofmt-check, and race-test — same gates as CI
+# Create the go.work the starter templates need
+workspace:
+    #!/usr/bin/env bash
+    # The templates are nested modules pinned to a release that does not exist
+    # yet — this repository has no version tags — so `use` alone is not enough:
+    # without the replace, Go still resolves the requirement, tries to fetch
+    # v0.1.0, and fails with "unknown revision v0.1.0". go.work is gitignored,
+    # so this is safe to run repeatedly and never commits anything.
+    set -euo pipefail
+    go work init . 2>/dev/null || true
+    go work use ./templates/navi-code ./templates/navi-daemon ./templates/navi-sqlite
+    go work edit -replace=github.com/flintwillow-software/opennavi@v0.1.0=.
+
+# Build the navi-code starter template into bin/
+build-navi-code: workspace
+    cd templates/navi-code && go build -o ../../var/bin/navi-code ./cmd/navi-code
+
+# Build, vet, and test every starter template (what CI's template job runs)
+templates: workspace
+    #!/usr/bin/env bash
+    # Separate from `ci`: the templates are nested modules, so they need the
+    # workspace above and are not part of the root module's ./...
+    set -euo pipefail
+    for t in navi-code navi-daemon navi-sqlite; do
+        echo "--- $t"
+        (cd "templates/$t" && go build ./... && go vet ./... && go test ./...)
+    done
+
+# Build, vet, gofmt-check, and race-test the root module
 ci: build vet fmt-check test-race
 
 # --- checks ---------------------------------------------------------------
