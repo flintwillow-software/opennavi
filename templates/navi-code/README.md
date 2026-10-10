@@ -103,11 +103,36 @@ compiled definition.
 go build ./cmd/navi-code
 ```
 
-The template's `go.mod` requires the published module. When developing against
-a local checkout, use a `go.work` file — never add a `replace` directive to
-this `go.mod`:
+That works once `github.com/flintwillow-software/opennavi` is published. It is
+not yet — **the repository has no version tags**, so `v0.1.0` cannot be fetched
+and a bare build fails with `missing go.sum entry`. Building against a checkout
+needs a workspace, and the workspace needs **both** halves: `use` alone still
+tries to fetch `v0.1.0` and fails with `unknown revision v0.1.0`.
+
+From the SDK checkout (this is what CI does):
 
 ```
-go work init . ../..
-# replace github.com/flintwillow-software/opennavi v0.1.0 => ../..
+cd /path/to/opennavi
+cat > go.work <<'EOF'
+go 1.26
+
+use (
+	.
+	./templates/navi-code
+)
+
+replace github.com/flintwillow-software/opennavi v0.1.0 => .
+EOF
+
+cd templates/navi-code
+go build ./cmd/navi-code && ./navi-code
 ```
+
+Never add a `replace` directive to this template's `go.mod`: a template that
+ships one does not build for anyone else. The workspace is the place for it, and
+`go.work` is gitignored in the SDK repo so it is never committed from there.
+
+If you have the template checked out on its own, put the workspace beside it
+instead — `use (. ../..)` with `replace ... => ../..`. One caveat: `go work init`
+refuses when a `go.work` already exists in a parent directory, so a workspace at
+the SDK root and one in the template are alternatives, not both.
