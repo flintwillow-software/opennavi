@@ -123,6 +123,23 @@ func (t thoughts) TranscriptInfo(thoughtID string) (datastore.TranscriptInfo, er
 	}, nil
 }
 
+// TranscriptInfos enumerates every transcript's metadata projection. Nothing
+// is cloned and no body read is counted: the point of the counter is that
+// enumeration never touches conversations (ADR 0011 decision 5).
+func (t thoughts) TranscriptInfos() ([]datastore.TranscriptInfo, error) {
+	t.b.mu.RLock()
+	defer t.b.mu.RUnlock()
+	out := make([]datastore.TranscriptInfo, 0, len(t.b.transcripts))
+	for id, entries := range t.b.transcripts {
+		out = append(out, datastore.TranscriptInfo{
+			ThoughtID:    id,
+			MessageCount: len(entries),
+			UpdatedAt:    latestEntryTime(entries),
+		})
+	}
+	return out, nil
+}
+
 func (t thoughts) DeleteTranscript(thoughtID string) error {
 	t.b.mu.Lock()
 	defer t.b.mu.Unlock()

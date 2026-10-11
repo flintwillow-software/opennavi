@@ -118,6 +118,22 @@ func (t thoughts) LoadTranscript(thoughtID string) ([]datastore.Entry, error) {
 	return cloneEntries(entries), nil
 }
 
+func (t thoughts) TranscriptInfos() ([]datastore.TranscriptInfo, error) {
+	t.b.mu.RLock()
+	defer t.b.mu.RUnlock()
+	out := make([]datastore.TranscriptInfo, 0, len(t.b.transcripts))
+	for id, entries := range t.b.transcripts {
+		info := datastore.TranscriptInfo{ThoughtID: id, MessageCount: len(entries)}
+		for _, e := range entries {
+			if e.Time.After(info.UpdatedAt) {
+				info.UpdatedAt = e.Time
+			}
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
 func (t thoughts) TranscriptInfo(thoughtID string) (datastore.TranscriptInfo, error) {
 	t.b.mu.RLock()
 	defer t.b.mu.RUnlock()

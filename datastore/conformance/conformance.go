@@ -317,6 +317,58 @@ func Thoughts(t *testing.T, open OpenFunc) {
 			t.Error("LoadTranscript reported no body read: the ReadReporter instrumentation is not wired")
 		}
 	})
+
+	t.Run("TranscriptInfosEnumeratesMetadata", func(t *testing.T) {
+		backend := mustOpen(t, open)
+		v := backend.Thoughts()
+
+		// Three transcripts with bodies, one thought row without a
+		// transcript: the enumeration answers for transcripts only, without
+		// loading any of them.
+		base := time.Now().UTC().Add(-time.Minute)
+		for i, id := range []string{"t-bulk-a", "t-bulk-b", "t-bulk-c"} {
+			entries := []datastore.Entry{
+				{ID: id + "-e1", Time: base, Role: datastore.RoleUser, Message: strings.Repeat("body ", 100)},
+				{ID: id + "-e2", Time: base.Add(time.Duration(i) * time.Second), Role: datastore.RoleAssistant, Message: "reply"},
+			}
+			if err := v.SaveTranscript(id, entries); err != nil {
+				t.Fatalf("SaveTranscript(%s): %v", id, err)
+			}
+		}
+		if err := v.SaveThought(&thought.Thought{ID: "t-bulk-row", Prompt: "p", Status: thought.ThoughtPending}); err != nil {
+			t.Fatalf("SaveThought: %v", err)
+		}
+
+		reporter, instrumented := backend.(ReadReporter)
+		if instrumented {
+			reporter.ResetReads()
+		}
+		infos, err := v.TranscriptInfos()
+		if err != nil {
+			t.Fatalf("TranscriptInfos: %v", err)
+		}
+		if instrumented && reporter.BodyReads() != 0 {
+			t.Errorf("TranscriptInfos loaded %d transcript body/bodies: cold-start enumeration must be metadata-only (ADR 0011 decision 5)", reporter.BodyReads())
+		}
+
+		got := map[string]datastore.TranscriptInfo{}
+		for _, info := range infos {
+			got[info.ThoughtID] = info
+		}
+		for _, id := range []string{"t-bulk-a", "t-bulk-b", "t-bulk-c"} {
+			info, ok := got[id]
+			if !ok {
+				t.Errorf("TranscriptInfos is missing %q", id)
+				continue
+			}
+			if info.MessageCount != 2 {
+				t.Errorf("%s: MessageCount = %d, want 2", id, info.MessageCount)
+			}
+		}
+		if _, ok := got["t-bulk-row"]; ok {
+			t.Error("TranscriptInfos reported a thought with no transcript")
+		}
+	})
 }
 
 // diffThought lists the durable fields whose round-trip was lost. Runtime

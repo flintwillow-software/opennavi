@@ -118,6 +118,11 @@ type Thoughts interface {
 	// TranscriptInfo returns the metadata projection for thoughtID, or
 	// ErrTranscriptNotFound when the thought has none.
 	TranscriptInfo(thoughtID string) (TranscriptInfo, error)
+	// TranscriptInfos returns the metadata projection for every persisted
+	// transcript in one pass (ADR 0011 decision 5): cold start answers
+	// "what transcripts exist, how long, how fresh" without reading a
+	// single conversation body. It never loads detail.
+	TranscriptInfos() ([]TranscriptInfo, error)
 	// DeleteTranscript removes a thought's transcript.
 	DeleteTranscript(thoughtID string) error
 }
