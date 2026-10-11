@@ -41,11 +41,11 @@ func (d *Datastore) Bind(b Backend) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.backend = b
-	d.thoughts = b.Thoughts()
-	d.memory = b.Memory()
 	w := NewWriter(d.writerCfg)
 	w.SetBackend(b)
 	d.writer = w
+	d.thoughts = newThoughtsRAM(b.Thoughts(), w.Submit)
+	d.memory = b.Memory()
 	d.toolState = newToolStateRAM(b.ToolState(), w.Submit)
 }
 
@@ -81,18 +81,19 @@ func (d *Datastore) SubmitSync(op Write) error {
 	return w.SubmitSync(op)
 }
 
-// SubmitTranscript queues a thought's transcript for asynchronous
-// persistence. Transcripts get no synchronous exception (ADR 0011 decision
-// 6): a hard kill may lose the unflushed tail.
+// SubmitTranscript stages a thought's transcript for asynchronous
+// persistence through the lazy-transcript layer (NAVI-377): the written
+// body is materialized in RAM immediately — readers see it before the
+// writer drains — and the write is queued on the ordered writer. Transcripts
+// get no synchronous exception (ADR 0011 decision 6): a hard kill may lose
+// the unflushed tail.
 func (d *Datastore) SubmitTranscript(thoughtID string, entries []Entry) {
-	copied := cloneEntries(entries)
-	d.Submit(Write{
-		Aggregate: AggregateThoughts,
-		Key:       "transcript/" + thoughtID,
-		Apply: func(b Backend) error {
-			return b.Thoughts().SaveTranscript(thoughtID, copied)
-		},
-	})
+	d.mu.RLock()
+	th := d.thoughts
+	d.mu.RUnlock()
+	if th != nil {
+		th.SaveTranscript(thoughtID, entries)
+	}
 }
 
 // StartWriter launches the ordered writer's drain goroutine, returning a
@@ -156,6 +157,22 @@ func (d *Datastore) Stateful() ToolState {
 func (d *Datastore) Memory() Memory {
 	d.claim()
 	return memoryHandle{d}
+}
+
+// ResidentTranscripts reports how many transcript bodies the lazy-transcript
+// layer currently holds: dirty writes awaiting the ordered writer, plus
+// hydrated bodies still referenced by a reader. Detail nothing is touching
+// is collectable (NAVI-377), so this stays near zero on an idle navi and
+// never grows with the number of transcripts never accessed.
+func (d *Datastore) ResidentTranscripts() int {
+	d.mu.RLock()
+	th := d.thoughts
+	d.mu.RUnlock()
+	ram, ok := th.(*thoughtsRAM)
+	if !ok {
+		return 0
+	}
+	return ram.ResidentTranscripts()
 }
 
 func (d *Datastore) claim() {
@@ -312,6 +329,14 @@ func (h thoughtsHandle) TranscriptInfo(thoughtID string) (TranscriptInfo, error)
 		return TranscriptInfo{}, err
 	}
 	return v.TranscriptInfo(thoughtID)
+}
+
+func (h thoughtsHandle) TranscriptInfos() ([]TranscriptInfo, error) {
+	v, err := h.d.thoughtsView()
+	if err != nil {
+		return nil, err
+	}
+	return v.TranscriptInfos()
 }
 
 func (h thoughtsHandle) DeleteTranscript(thoughtID string) error {

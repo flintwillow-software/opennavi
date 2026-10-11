@@ -245,6 +245,36 @@ func (ts *ThoughtStore) LoadTranscript(thoughtID string) ([]datastore.Entry, err
 	return out, nil
 }
 
+// TranscriptInfos enumerates every persisted transcript's metadata in one
+// query over the metadata projection: no message body is selected, so cold
+// start is one pass independent of transcript size (ADR 0011 decision 5).
+func (ts *ThoughtStore) TranscriptInfos() ([]datastore.TranscriptInfo, error) {
+	rows, err := ts.store.db.Query(`SELECT thought_id, message_count, updated_at FROM thought_transcript_meta`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: read transcript metadata: %w", err)
+	}
+	defer rows.Close()
+
+	out := []datastore.TranscriptInfo{}
+	for rows.Next() {
+		var info datastore.TranscriptInfo
+		var updated sql.NullString
+		if err := rows.Scan(&info.ThoughtID, &info.MessageCount, &updated); err != nil {
+			return nil, fmt.Errorf("sqlite: scan transcript metadata: %w", err)
+		}
+		if updated.Valid && updated.String != "" {
+			if info.UpdatedAt, err = parseTime(updated.String); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: enumerate transcript metadata: %w", err)
+	}
+	return out, nil
+}
+
 // TranscriptInfo answers from the metadata projection alone: no message body
 // is selected, so enumerating transcripts is independent of transcript size.
 func (ts *ThoughtStore) TranscriptInfo(thoughtID string) (datastore.TranscriptInfo, error) {

@@ -251,6 +251,51 @@ func (t thoughts) LoadTranscript(thoughtID string) ([]datastore.Entry, error) {
 	return parseTranscript(body)
 }
 
+// TranscriptInfos enumerates every persisted transcript's metadata in one
+// pass: one frontmatter read per thought directory, never a body parse
+// (ADR 0011 decision 5).
+func (t thoughts) TranscriptInfos() ([]datastore.TranscriptInfo, error) {
+	dir := filepath.Join(t.b.root, dirThoughts)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []datastore.TranscriptInfo{}, nil
+		}
+		return nil, fmt.Errorf("fs: read %s: %w", dir, err)
+	}
+	out := []datastore.TranscriptInfo{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := t.path(entry.Name())
+		meta, exists, hasMeta, err := readFrontmatter(path)
+		if err != nil {
+			return nil, err
+		}
+		if !exists || !hasMeta {
+			continue
+		}
+		var doc thoughtDoc
+		if err := decodeFrontmatter(path, meta, &doc); err != nil {
+			return nil, err
+		}
+		if !doc.HasTranscript {
+			continue
+		}
+		updated, err := parseTime(doc.TranscriptUpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, datastore.TranscriptInfo{
+			ThoughtID:    entry.Name(),
+			MessageCount: doc.Messages,
+			UpdatedAt:    updated,
+		})
+	}
+	return out, nil
+}
+
 // TranscriptInfo answers from frontmatter alone: the message count and update
 // time are maintained on every transcript write.
 func (t thoughts) TranscriptInfo(thoughtID string) (datastore.TranscriptInfo, error) {
