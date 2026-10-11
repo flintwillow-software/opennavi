@@ -111,7 +111,7 @@ func IssueRead(c Config) tool.Tool {
 | Tool | `func Foo(cfg) tool.Tool` | Full metadata descriptor |
 | Skill | `//go:embed *.md` + accessor | Content travels with the module, compiles in |
 | Model | `func Foo(...) model.Provider` | Provider descriptor; the credential is a reference resolved at runtime |
-| Connector | implements `connector.Connector` | Receives thought/model handles via `Deps`; exposes egress tools via `SendTools()` |
+| Connector | implements `connector.Connector` | Receives thought/model handles via `Deps`; exposes egress tools via `SendTools()` and turns declared inbound events into thoughts |
 | Portal | implements `portal.Portal` | List/schedule/steer thoughts via `Deps` |
 
 A connector's **outbound** half is egress tools: ordinary `tool.Tool` values
