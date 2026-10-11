@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-10'
 supersedes: []
 amends: ./0013-the-thought-queue-is-the-context-mechanism.md

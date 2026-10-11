@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-10'
 supersedes: []
 amends: ./0006-compile-time-omission-plus-runtime-ceiling.md
