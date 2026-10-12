@@ -82,12 +82,17 @@ func (f AuthenticatorFunc) Authenticate(ctx context.Context, cred Credential) (p
 }
 
 // AllowAllAuthenticator accepts every credential — including none — and
-// resolves it to who. It is a DEVELOPMENT DEFAULT: the reference navi and a
-// trusted local console use it so a local run needs no key material, and it
-// MUST NOT be wired on an untrusted network surface. It authenticates nobody
-// and distinguishes nobody; pair it with AllowAll only where every connection
-// is already trusted (ADR 0021 decision 9 — the in-process console is the
-// binary, with no transport).
+// resolves it to who. It is a DEVELOPMENT DEFAULT: a local run uses it so it
+// needs no key material, and it MUST NOT be wired on an untrusted surface.
+//
+// What makes a connection trusted is its INPUT CHANNEL, not whether the portal
+// happens to be in-process. ADR 0021 decision 9 makes the console root because
+// it is the binary the operator is sitting at, with no transport — the
+// terminal carries the operator's intent. A portal whose input is ambient (a
+// room microphone, a camera, a sensor) is untrusted input however it is
+// embedded, and must authenticate as a real principal so its capabilities can
+// be scoped and its actions attributed. Wiring this for such a portal would
+// hand root-equivalent capability to whoever is in the room.
 func AllowAllAuthenticator(who principal.Ref) Authenticator {
 	return AuthenticatorFunc(func(context.Context, Credential) (principal.Ref, error) {
 		if err := who.Validate(); err != nil {

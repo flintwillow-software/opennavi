@@ -65,7 +65,6 @@ func newAuthGateway(t *testing.T, authorizer portal.Authorizer, auth portal.Auth
 	if err := gw.Start(context.Background(), portal.Deps{
 		Observation:   broker,
 		Authenticator: auth,
-		Console:       principal.MustParse("service:test"),
 	}); err != nil {
 		t.Fatal(err)
 	}

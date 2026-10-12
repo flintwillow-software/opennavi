@@ -25,6 +25,17 @@ import (
 // DefaultSignatureWindow bounds how far a signed request's timestamp may be
 // from the verifier's clock. It is the replay window: a captured signature is
 // useless after it, and a skewed client clock is tolerated within it.
+//
+// It also makes a signed request depend on CLOCK AGREEMENT, and that is a
+// transport requirement rather than a credential one. A client whose clock is
+// more than the window from the verifier's cannot authenticate at all: an
+// off-grid deployment with no NTP source, a device that boots at the epoch
+// with no RTC, or an RTC that has drifted past the window over a long
+// deployment, each fail every request. Widening the window does not fix that —
+// it trades replay protection for a horizon, and an epoch clock is decades
+// out regardless. The fix is a time-agreement story on the link (an
+// occasional internet window, or peer time sync), which is where the
+// requirement belongs.
 const DefaultSignatureWindow = 5 * time.Minute
 
 // maxRequestBytes bounds a request body the gateway buffers so a signed

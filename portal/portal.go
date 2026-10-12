@@ -52,11 +52,6 @@ type Deps struct {
 	// decision 8). Nil means no connection can be authenticated — a portal
 	// that serves a transport then refuses every attachment (fail closed).
 	Authenticator Authenticator
-	// Console is the reference the in-process console acts as. The console is
-	// the binary, with no transport (ADR 0021 decision 9): it presents no
-	// credential and is trusted structurally, but its actions still need a
-	// recordable actor. The navi supplies its own service principal here.
-	Console principal.Ref
 }
 
 // Addressed is an OPTIONAL capability a portal may implement: a portal
