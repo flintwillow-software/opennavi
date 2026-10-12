@@ -1,11 +1,9 @@
-// Package github is the GitHub connector's **egress** half (ADR 0014,
-// ADR 0020): the tools through which a navi acts on GitHub. It is the worked
-// example for the egress seam, and deliberately minimal.
-//
-// The inbound half — which events the connector watches, and how a stimulus
-// becomes a thought — is NOT here. ADR 0014 open question 3 owns that
-// decision, and this package should be read as a partial connector until it
-// lands rather than as the whole component.
+// Package github is the GitHub connector (ADR 0014): the integration through
+// which a navi acts on GitHub and hears from it. The **egress** half (ADR 0020)
+// is the tools through which a navi acts; the **inbound** half (ADR 0023) is the
+// build-time subscription declaration and the poll loop that turns a declared
+// event into a thought. Both halves share one client, one configuration, and one
+// credential.
 //
 // Egress tools are built with connector.SendTool and are added explicitly by
 // the navi author; nothing auto-registers them (ADR 0006/0014). The credential
@@ -18,6 +16,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
@@ -124,6 +124,12 @@ type Config struct {
 	HTTPClient *http.Client
 	// Env resolves Credential. Nil = os.Getenv.
 	Env func(string) string
+	// Subscriptions are the build-time inbound declarations (ADR 0023). Empty
+	// = the connector has no inbound half and Start launches no poll loop.
+	Subscriptions []Subscription
+	// PollInterval is how often the inbound loop polls. Zero =
+	// DefaultPollInterval.
+	PollInterval time.Duration
 }
 
 // Connector is the GitHub integration. It implements connector.Connector for
@@ -131,16 +137,50 @@ type Config struct {
 type Connector struct {
 	cfg  Config
 	live *connector.Live[*client]
+
+	// stateDB persists the inbound seen-set (ADR 0023 decision 5). Nil =
+	// in-memory dedupe only.
+	stateDB *sql.DB
+	// now overrides the poll clock (tests). Nil = time.Now.
+	now func() time.Time
+
+	// pollCancel / pollWG control the inbound poll loop.
+	pollCancel context.CancelFunc
+	pollWG     sync.WaitGroup
+}
+
+// Option configures the connector.
+type Option func(*Connector)
+
+// WithStateStore persists the inbound dedupe set in the shared SQLite
+// connection, so a redelivered event is suppressed across a restart (ADR 0023
+// decision 5). Without it the seen-set is in memory only, and a restart may
+// replay a redelivery.
+func WithStateStore(db *sql.DB) Option {
+	return func(c *Connector) { c.stateDB = db }
 }
 
 // New builds the connector. It performs no I/O and resolves no credential:
 // the client arrives at Start.
-func New(cfg Config) *Connector {
-	return &Connector{cfg: cfg, live: connector.NewLive[*client]()}
+func New(cfg Config, opts ...Option) *Connector {
+	c := &Connector{cfg: cfg, live: connector.NewLive[*client]()}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
-// Start publishes a client so an egress tool bound at authoring time can
-// reach it. It starts no inbound loop: this is the egress half only.
+// clock is the poll clock, overridable in tests.
+func (c *Connector) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// Start publishes a client so an egress tool bound at authoring time can reach
+// it, and — when inbound subscriptions are declared — launches the poll loop
+// (ADR 0023). Both halves consume the same client.
 //
 // A missing credential does NOT fail Start. The connector is declared at build
 // time (ADR 0014 decision 4), so the service exists whether or not the operator
@@ -158,12 +198,19 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 		deps.Log.Warn("github connector has no usable credential; its egress tools will refuse", "err", err)
 	}
 	c.live.Set(c.newClient())
-	return nil
+	// The inbound half (ADR 0023) reuses this same client; it starts no second
+	// connection and resolves no second credential.
+	return c.startInbound(ctx, deps)
 }
 
 // Stop releases the client, so a call after Stop fails the same way a call
 // before Start does.
 func (c *Connector) Stop() error {
+	if c.pollCancel != nil {
+		c.pollCancel()
+		c.pollCancel = nil
+		c.pollWG.Wait()
+	}
 	c.live.Clear()
 	return nil
 }

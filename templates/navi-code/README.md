@@ -30,11 +30,12 @@ Everything in `cmd/navi-code/main.go` is the compiled-in definition:
   directory, plus one author tool (`repo_stats`). `shell_exec` is compiled in
   but denied by the permission ceiling (`navi.WithPermissions`), so it is never
   bound into a thought's surface.
-- **Connector** — GitHub, whose **egress** half supplies `github_issue_comment`
-  (ADR 0014, ADR 0020). This is the worked example of connector-owned egress:
-  the tool is an ordinary `tool.Tool` handed over by `gh.SendTools()` and added
-  explicitly, so this file is the whole story of what navi-code can say
-  outward. The connector's inbound half is not implemented yet (NAVI-394).
+- **Connector** — GitHub, **both halves**. *Egress* supplies
+  `github_issue_comment` (ADR 0014, ADR 0020): an ordinary `tool.Tool` handed
+  over by `gh.SendTools()` and added explicitly, so this file is the whole story
+  of what navi-code can say outward. *Ingress* (ADR 0023) is an opt-in poll
+  subscription that turns a comment mentioning you into a thought; set
+  `NAVI_GITHUB_USERNAME` to enable it (see [GitHub ingress](#github-ingress)).
 - **Model** — one Ollama provider marked default (ADR 0009).
 - **Portal** — the TUI.
 
@@ -127,6 +128,43 @@ post comments — so give it the issue number and repository explicitly. A call
 before the connector is serving (or after it stops) fails with `connector: not
 started` rather than panicking: the gate is built into the tool, not left to
 the handler.
+
+## GitHub ingress
+
+Set `NAVI_GITHUB_USERNAME` to your GitHub login (without the `@`) and navi-code
+polls the repository this navi is checked out in for comments that mention you,
+turning each into a thought on the queue. It is **off by default** — unset the
+variable and no poll loop runs, so the starter does nothing surprising.
+
+| Setting | Where | Default |
+|---|---|---|
+| The login to watch for | `NAVI_GITHUB_USERNAME` | unset — ingress disabled |
+| The repository to poll | `NAVI_CODE_GITHUB_REPO`, else the working directory's `origin` remote | derived from git |
+| The poll interval | compiled in | 30s |
+
+```
+export NAVI_GITHUB_USERNAME=<your-github-login>
+just build-navi-code && ../../var/bin/navi-code
+```
+
+Comment `@<your-github-login> take a look` on an issue in that repository.
+Within the poll interval a thought appears on the queue with metadata
+`connector=github`, `event=issue_mention`, `event_id=comment-<id>`, and
+`principal=navi:navi-code`. Ingress uses the same client and credential as
+egress, so a `gh auth login` or an exported `GITHUB_TOKEN` covers both.
+
+Two properties worth knowing (ADR 0023): the subscription is a **build-time
+declaration** — runtime config cannot add one, and the login is the only runtime
+input — and a **redelivered event does not spawn a second thought**, deduped on
+the comment id. This template keeps the dedupe set in memory, so a restart may
+replay a redelivery; a deployment wires `github.WithStateStore(db)` for a
+durable one.
+
+Ingress is **model-independent**: the thought is enqueued whether or not a
+provider is reachable, though the worker needs one to run it. `principal` is the
+service principal the thought acts as (ADR 0021 decision 10); it is a recorded
+string until the principal model lands, at which point it becomes a real
+principal.
 
 Deployment-time settings (provider endpoints, credential references) come from
 the runtime config file named by `NAVI_CONFIG`, if set — never from the
