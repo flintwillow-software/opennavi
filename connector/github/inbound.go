@@ -80,8 +80,15 @@ type Subscription struct {
 	Intent Intent
 	// Principal is the service principal the resulting thought acts as
 	// (ADR 0023 decision 2, ADR 0021 decision 10). A validated principal
-	// reference; the zero Ref selects the connector's own principal,
-	// connector:github.
+	// reference. The zero Ref selects the connector's own principal,
+	// connector:github: a connector may act as its own principal (ADR 0023
+	// decision 2), which attributes inbound work to the connector rather
+	// than laundering it into the navi's service principal. Declare
+	// navi:<name> for work that must act as the navi itself (ADR 0021
+	// decision 10); the runtime's own machinery (cron, the plan-closing
+	// check) does not come through a subscription and acts as navi:<name>
+	// regardless. A refused enqueue is logged and retried, never dropped
+	// silently (see the poll loop).
 	Principal principal.Ref
 	// Prompt is the thought prompt for an event. Empty = a generated prompt.
 	Prompt string
