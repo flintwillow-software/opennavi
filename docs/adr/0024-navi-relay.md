@@ -75,11 +75,13 @@ resolves ADR 0023 open question 4.
    store-and-forward, presence, and group addressing belong to a companion
    record (tracked as NAVI-412), not to the webhook path.
 
-9. **The architecture is recorded here; the deployment is internal-tools'.**
-   The terraform module (ingress, image, replicas) lives in
-   `infra/internal-tools`; the navi-facing contract — addressing,
-   authentication, envelope — is this record, and the navi side implements the
-   client.
+9. **The relay lives in the opennavi repo; the deployment lives in internal-tools.**
+   The relay is a first-class command in this repository (`cmd/navi-relay`,
+   with its supporting package), so the navi-facing contract — addressing,
+   authentication, envelope — and its server implementation stay together under
+   one repo and one CI regime. `infra/internal-tools` owns only the deployment:
+   the terraform module, ingress, certificate, image reference, and replicas,
+   following the `remote-pi-relay` pattern.
 
 ## Consequences
 
@@ -88,6 +90,9 @@ resolves ADR 0023 open question 4.
 - The relay is a **trust boundary** — it sees routing metadata and, for
   webhooks, the raw body and signature — but **not a trust authority**; navis
   authorize what they receive.
+- The relay's contract and implementation live in one repository, so a change
+  to the envelope or addressing is a single PR with its tests rather than a
+  cross-repo coordination.
 - The relay is a single point of failure unless replicated (open question).
 - The navi side needs a client: a transport binding, or a connector (a
   navi-to-navi link is a connector, ADR 0014).
