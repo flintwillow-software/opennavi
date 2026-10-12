@@ -399,8 +399,11 @@ presents a credential (`Authorization: Bearer <oidc-token>` for a human, or a
 declared trust sources, and the portal acts on the verified principal or a
 refusal — a portal never decides whether a credential is valid and never
 evaluates policy (ADR 0021 decisions 6–8, ADR 0022 decision 8). The in-process
-console is the exception by construction: it is the binary, with no transport,
-so it presents no credential and acts as the navi's own service principal. The
+console is the exception by construction: it is the binary the operator is
+sitting at, with no transport, so it presents no credential and does not come
+through the seam at all. That is a statement about its **input channel**, not
+about being in-process — a portal whose input is ambient (a room microphone, a
+sensor) must authenticate as a real principal like any other. The
 portal path is the unified stream (ADR 0019): one stream per portal carrying
 the opening snapshot, observation events, object deltas, and control results,
 with SSE + POST as the first remote binding and a socket only when a named

@@ -40,7 +40,7 @@ func newGateway(t *testing.T, auth pubportal.Authorizer) (*Gateway, *pubportal.B
 		t.Fatal(err)
 	}
 	gw := New("127.0.0.1:0", hub)
-	if err := gw.Start(context.Background(), pubportal.Deps{Observation: broker, Authenticator: pubportal.AllowAllAuthenticator(principal.MustParse("service:test")), Console: principal.MustParse("service:test")}); err != nil {
+	if err := gw.Start(context.Background(), pubportal.Deps{Observation: broker, Authenticator: pubportal.AllowAllAuthenticator(principal.MustParse("service:test"))}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { gw.Stop() })

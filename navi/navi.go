@@ -656,15 +656,15 @@ func (n *Navi) Serving() bool {
 // that fails to start aborts the run and everything already started is
 // stopped — a half-serving navi is not a state worth having.
 func (n *Navi) serve(ctx context.Context) error {
-	console, err := principal.New(principal.KindNavi, n.name)
-	if err != nil {
-		return fmt.Errorf("navi: console principal: %w", err)
-	}
 	// The navi resolves trust for its portals (ADR 0022 decision 8): the
-	// authenticator is the seam (the compiled trust sources unless an author
-	// overrode it), and Console is the principal the in-process console acts
-	// as — it presents no credential because it is the binary, with no
-	// transport (ADR 0021 decision 9).
+	// authenticator is the seam — the compiled trust sources, unless an author
+	// overrode them. A portal that serves a transport presents a credential
+	// and acts on the answer. The in-process console does not come through
+	// this seam at all: it drives the thought system directly and is trusted
+	// by construction, because it is the terminal the operator is sitting at
+	// (ADR 0021 decision 9). That is a statement about its INPUT CHANNEL, not
+	// about being in-process — a portal whose input is a room microphone is
+	// not the console and must authenticate like any other.
 	auth := n.portalAuth
 	if auth == nil {
 		auth = NewPortalAuthenticator(n.trust)
@@ -676,7 +676,6 @@ func (n *Navi) serve(ctx context.Context) error {
 		Log:           n.log,
 		Observation:   n.observation,
 		Authenticator: auth,
-		Console:       console,
 	}
 	if n.objects != nil {
 		pdeps.Objects = n.objects

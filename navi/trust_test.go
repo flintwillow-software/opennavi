@@ -687,10 +687,10 @@ func (p *depsPortal) Start(ctx context.Context, deps portal.Deps) error {
 	return p.fakePortal.Start(ctx, deps)
 }
 
-// TestNaviWiresPortalAuthenticatorAndConsole pins the seam NAVI-402 consumes:
-// the composition root hands every portal an authenticator backed by the
-// declared trust sources, and the principal the in-process console acts as.
-func TestNaviWiresPortalAuthenticatorAndConsole(t *testing.T) {
+// TestNaviWiresPortalAuthenticator pins the seam NAVI-402 consumes: the
+// composition root hands every portal an authenticator backed by the declared
+// trust sources.
+func TestNaviWiresPortalAuthenticator(t *testing.T) {
 	ref := principal.MustParse("service:relay")
 	who, err := NewPrincipal(ref)
 	if err != nil {
@@ -722,9 +722,6 @@ func TestNaviWiresPortalAuthenticatorAndConsole(t *testing.T) {
 
 	if p.deps.Authenticator == nil {
 		t.Fatal("the navi wired no portal authenticator")
-	}
-	if want := principal.MustParse("navi:auth-wired"); p.deps.Console != want {
-		t.Errorf("console principal = %s, want %s", p.deps.Console, want)
 	}
 
 	// The wired authenticator resolves through the declared trust source: no

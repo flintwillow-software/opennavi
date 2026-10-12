@@ -86,11 +86,15 @@ compiled, identity is resolved at runtime** (ADR 0021).
 - **The provider supplies identity and claims; the navi supplies policy.** An
   identity provider that could supply policy would be runtime-granted
   capability, which compile-time omission forbids.
-- **Credentials are typed by principal kind.** Humans authenticate through an
-  OIDC session; services and peer navis present an Ed25519 keypair. Every
-  credential has a validity period and can be revoked; expiry and revocation
-  are runtime narrowing, so trust can be rotated without a rebuild while
-  capability cannot change without one.
+- **Credentials are typed by principal kind — and a key belongs to any kind.**
+  Humans normally authenticate through an OIDC session, and services and peer
+  navis present an Ed25519 keypair; but the *scheme* is orthogonal to the
+  *kind*. A physical device's Ed25519 key attaches to its **user's** principal,
+  so the device authenticates as `user:alice` and its work is attributed to the
+  person rather than to a service (ADR 0022 decision 2). Every credential has a
+  validity period and can be revoked; expiry and revocation are runtime
+  narrowing, so trust can be rotated without a rebuild while capability cannot
+  change without one.
 - **Trust resolution fails closed, and the compiled principals break the
   glass.** An unknown or unauthenticated principal is refused, never defaulted
   open; and because sources resolve in order, an unreachable identity provider
@@ -102,8 +106,12 @@ compiled, identity is resolved at runtime** (ADR 0021).
   `portal.Authenticator`; the navi answers with a verified principal reference
   or a refusal, and the portal acts on that answer (ADR 0022 decision 8). A
   gateway with no authenticator authenticates nobody. The in-process console is
-  the exception by construction: it is the binary, with no transport, so it is
-  trusted structurally and acts as the navi's own service principal.
+  the exception by construction: it is the binary the operator is sitting at,
+  with no transport, so it is trusted structurally and does not come through the
+  seam at all. That is a statement about its **input channel** — a terminal
+  carries the operator's intent — and not about being in-process: a portal whose
+  input is ambient (a room microphone, a sensor) must authenticate as a real
+  principal, or whoever is in the room holds root-equivalent capability.
 - **The development default is explicit and named.** `portal.AllowAllAuthenticator`
   trusts every connection, credential or none; the reference navi wires it only
   behind `--dev-allow-all`. It is never the shipped model.
