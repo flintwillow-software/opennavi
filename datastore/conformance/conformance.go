@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -603,7 +604,7 @@ func Memory(t *testing.T, open OpenFunc) {
 		v := mustOpen(t, open).Memory()
 
 		rec, err := v.Remember(datastore.MemoryRecord{
-			Scope: datastore.ScopeUser, Subject: "flintwillow", Content: "prefers terse output",
+			Scope: datastore.ScopeUser, Subject: principal.MustParse("user:flintwillow"), Content: "prefers terse output",
 			Tags: []string{"style"}, Importance: 0.4,
 		})
 		if err != nil {
@@ -616,7 +617,7 @@ func Memory(t *testing.T, open OpenFunc) {
 			t.Error("Remember did not set timestamps")
 		}
 		if _, err := v.Remember(datastore.MemoryRecord{
-			Scope: datastore.ScopeNavi, Subject: "other", Content: "deploys on fridays",
+			Scope: datastore.ScopeNavi, Subject: principal.MustParse("navi:other"), Content: "deploys on fridays",
 			Tags: []string{"ops"}, Importance: 0.9,
 		}); err != nil {
 			t.Fatalf("Remember: %v", err)
@@ -625,7 +626,7 @@ func Memory(t *testing.T, open OpenFunc) {
 		if got, err := v.Recall(datastore.RecallQuery{Scope: datastore.ScopeUser}); err != nil || len(got) != 1 || got[0].ID != rec.ID {
 			t.Fatalf("recall by scope = %+v (%v), want the user record", got, err)
 		}
-		if got, err := v.Recall(datastore.RecallQuery{Subject: "other"}); err != nil || len(got) != 1 {
+		if got, err := v.Recall(datastore.RecallQuery{Subject: principal.MustParse("navi:other")}); err != nil || len(got) != 1 {
 			t.Fatalf("recall by subject = %d records (%v), want 1", len(got), err)
 		}
 		if got, err := v.Recall(datastore.RecallQuery{Tags: []string{"ops"}}); err != nil || len(got) != 1 {

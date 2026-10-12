@@ -30,14 +30,15 @@ jobs:
       - name: Gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
-      # The component packages and `datastore` are the public surface (ADR 0004);
-      # none may import runtime internals. Added in NAVI-356; the last
-      # exception (connector/cron -> internal/cron) was removed in NAVI-359,
-      # so this now covers every public package with no exceptions.
+      # The component packages, `datastore`, and `principal` are the public
+      # surface (ADR 0004); none may import runtime internals. Added in
+      # NAVI-356; the last exception (connector/cron -> internal/cron) was
+      # removed in NAVI-359, so this now covers every public package with no
+      # exceptions. NAVI-403 adds `principal` to the contract layer.
       - name: Public packages import no runtime internals
         run: |
           violations="$(grep -rn '"github.com/flintwillow-software/opennavi/internal/' \
-            --include='*.go' tool thought connector portal model skill datastore \
+            --include='*.go' tool thought connector portal model skill datastore principal \
             | grep -v '_test.go' || true)"
           if [ -n "$violations" ]; then
             echo "public packages import runtime internals:"
@@ -111,7 +112,7 @@ jobs:
         run: |
           bad="$(go list -f '{{join .Imports "\n"}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object|principal)$' || true)"
           if [ -n "$bad" ]; then
             echo "external component imports non-contract packages:"
             echo "$bad"
@@ -130,10 +131,11 @@ jobs:
           # package must not transitively pull an implementation package
           # (datastore/sqlite, tool/registry, ...) — the contract layer is
           # stdlib-only, and that is the invariant an out-of-repo author
-          # relies on. NAVI-375 adds `datastore` to that contract layer.
+          # relies on. NAVI-375 adds `datastore` to that contract layer, and
+          # NAVI-403 adds `principal` (the identity reference) to it.
           impure="$(go list -deps -f '{{.ImportPath}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(tool|thought|connector|portal|model|skill|datastore|object|principal)$' || true)"
           if [ -n "$impure" ]; then
             echo "external component's contract closure is not contract-pure:"
             echo "$impure"
@@ -171,7 +173,7 @@ jobs:
           # only read {{join .Imports}} would not see it.
           bad="$(go list -f '{{join .Imports "\n"}}{{join .TestImports "\n"}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance|principal)$' || true)"
           if [ -n "$bad" ]; then
             echo "external backend imports non-contract packages:"
             echo "$bad"
@@ -190,7 +192,7 @@ jobs:
 
           impure="$(go list -test -deps -f '{{.ImportPath}}' ./... \
             | grep '^github.com/flintwillow-software/opennavi/' \
-            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance)$' || true)"
+            | grep -vE '^github.com/flintwillow-software/opennavi/(thought|datastore|datastore/conformance|principal)$' || true)"
           if [ -n "$impure" ]; then
             echo "external backend's contract closure is not contract-pure:"
             echo "$impure"

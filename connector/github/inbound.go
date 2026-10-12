@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -78,9 +79,10 @@ type Subscription struct {
 	// Intent is what an event does to the queue. Empty = IntentSpawn.
 	Intent Intent
 	// Principal is the service principal the resulting thought acts as
-	// (ADR 0023 decision 2, ADR 0021 decision 10). Until the principal model
-	// lands this is the recorded identity string; empty = "connector:github".
-	Principal string
+	// (ADR 0023 decision 2, ADR 0021 decision 10). A validated principal
+	// reference; the zero Ref selects the connector's own principal,
+	// connector:github.
+	Principal principal.Ref
 	// Prompt is the thought prompt for an event. Empty = a generated prompt.
 	Prompt string
 	// Priority is the enqueued thought's priority (1-10; 0 = 3).
@@ -311,9 +313,13 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 			prompt = fmt.Sprintf("GitHub %s in %s", kind, ev.Repo)
 		}
 	}
-	principal := strings.TrimSpace(sub.Principal)
-	if principal == "" {
-		principal = "connector:github"
+	actor := sub.Principal
+	if actor.IsZero() {
+		ref, err := principal.New(principal.KindConnector, "github")
+		if err != nil {
+			return fmt.Errorf("github: default service principal: %w", err)
+		}
+		actor = ref
 	}
 	t := &thought.Thought{
 		ID:        fmt.Sprintf("github-%s-%s", sub.Name, ev.ID),
@@ -329,7 +335,7 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 			"event":        string(kind),
 			"repo":         ev.Repo,
 			"event_id":     ev.ID,
-			"principal":    principal,
+			"principal":    actor.String(),
 		},
 	}
 	if ev.URL != "" {

@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/conformance"
 	"github.com/flintwillow-software/opennavi/datastore/fs"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -164,7 +165,7 @@ func TestRestartReadsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := first.Memory().Remember(datastore.MemoryRecord{
-		Scope: datastore.ScopeUser, Subject: "flintwillow", Content: "prefers terse output",
+		Scope: datastore.ScopeUser, Subject: principal.MustParse("user:flintwillow"), Content: "prefers terse output",
 		Tags: []string{"style"}, Importance: 0.7,
 	}); err != nil {
 		t.Fatal(err)
@@ -198,6 +199,55 @@ func TestRestartReadsBack(t *testing.T) {
 	}
 	if mem, err := second.Memory().Recall(datastore.RecallQuery{Scope: datastore.ScopeUser}); err != nil || len(mem) != 1 || mem[0].Content != "prefers terse output" {
 		t.Fatalf("memory after restart: %+v (%v)", mem, err)
+	}
+}
+
+// TestLegacyBareSubjectReadsAsNavi: a memory file written before the principal
+// reference carries the navi's bare name; the backend reads it back as
+// navi:<name> so the qualified query still finds it (ADR 0021 decision 4).
+func TestLegacyBareSubjectReadsAsNavi(t *testing.T) {
+	root := t.TempDir()
+
+	first, err := fs.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := first.Memory().Remember(datastore.MemoryRecord{
+		Scope: datastore.ScopeUser, Subject: principal.MustParse("navi:legacy-navi"), Content: "prefers terse output",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite the stored subject to the pre-principal bare form.
+	path := filepath.Join(root, "memory", "user", rec.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.ReplaceAll(string(data), "navi:legacy-navi", "legacy-navi")
+	if legacy == string(data) {
+		t.Fatalf("fixture did not carry the qualified subject: %s", data)
+	}
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := fs.New(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+
+	got, err := second.Memory().Recall(datastore.RecallQuery{Subject: principal.MustParse("navi:legacy-navi")})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(got) != 1 || got[0].Subject != principal.MustParse("navi:legacy-navi") {
+		t.Fatalf("legacy row = %+v, want one record keyed navi:legacy-navi", got)
 	}
 }
 

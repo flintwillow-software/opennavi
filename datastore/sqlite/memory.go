@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // MemoryStore is the memory aggregate view on SQLite (migration 4's memories
@@ -63,7 +64,7 @@ func (m *MemoryStore) Remember(rec datastore.MemoryRecord) (datastore.MemoryReco
 			scope=excluded.scope, subject=excluded.subject, content=excluded.content,
 			source=excluded.source, tags=excluded.tags, importance=excluded.importance,
 			expires_at=excluded.expires_at, updated_at=excluded.updated_at`,
-		rec.ID, string(rec.Scope), rec.Subject, rec.Content, source, tags, rec.Importance,
+		rec.ID, string(rec.Scope), rec.Subject.String(), rec.Content, source, tags, rec.Importance,
 		expires, formatTime(rec.CreatedAt), formatTime(rec.UpdatedAt))
 	if err != nil {
 		return datastore.MemoryRecord{}, fmt.Errorf("sqlite: upsert memory %s: %w", rec.ID, err)
@@ -83,9 +84,16 @@ func (m *MemoryStore) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord,
 		query += ` AND scope = ?`
 		args = append(args, string(q.Scope))
 	}
-	if q.Subject != "" {
-		query += ` AND subject = ?`
-		args = append(args, q.Subject)
+	if !q.Subject.IsZero() {
+		// Migration: a pre-principal row carries the navi's bare name, so a
+		// navi-kind subject also matches its unqualified legacy form.
+		if q.Subject.Kind() == principal.KindNavi {
+			query += ` AND (subject = ? OR subject = ?)`
+			args = append(args, q.Subject.String(), q.Subject.Name())
+		} else {
+			query += ` AND subject = ?`
+			args = append(args, q.Subject.String())
+		}
 	}
 	query += ` ORDER BY importance DESC, updated_at DESC`
 
@@ -144,7 +152,14 @@ func scanMemory(row rowScanner) (datastore.MemoryRecord, error) {
 		return datastore.MemoryRecord{}, fmt.Errorf("sqlite: scan memory: %w", err)
 	}
 	rec.Scope = datastore.Scope(scope)
-	rec.Subject = subject
+	if strings.TrimSpace(subject) != "" {
+		// Migration: read a bare legacy subject as navi:<name>.
+		ref, err := principal.ParseLegacy(subject)
+		if err != nil {
+			return datastore.MemoryRecord{}, fmt.Errorf("sqlite: scan memory subject: %w", err)
+		}
+		rec.Subject = ref
+	}
 	rec.Content = content
 	rec.Source = source.String
 	if tags.Valid && tags.String != "" {

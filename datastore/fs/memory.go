@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // memoryDoc is the frontmatter of memory/<scope>/<id>.md; the body is the
@@ -63,7 +64,7 @@ func (m memory) Remember(rec datastore.MemoryRecord) (datastore.MemoryRecord, er
 	doc := memoryDoc{
 		ID:         rec.ID,
 		Scope:      string(rec.Scope),
-		Subject:    rec.Subject,
+		Subject:    rec.Subject.String(),
 		Tags:       rec.Tags,
 		Importance: rec.Importance,
 		ExpiresAt:  formatTime(rec.ExpiresAt),
@@ -122,7 +123,7 @@ func (m memory) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord, error
 			if q.Scope != "" && rec.Scope != q.Scope {
 				continue
 			}
-			if q.Subject != "" && rec.Subject != q.Subject {
+			if !q.Subject.IsZero() && rec.Subject != q.Subject {
 				continue
 			}
 			if q.Query != "" && !strings.Contains(strings.ToLower(rec.Content), strings.ToLower(q.Query)) {
@@ -219,10 +220,19 @@ func (m memory) readFile(path string) (datastore.MemoryRecord, bool, error) {
 	if err != nil {
 		return datastore.MemoryRecord{}, false, err
 	}
+	// Migration: a record written before the principal reference carries the
+	// navi's bare name; ParseLegacy reads it as navi:<name> so it stays
+	// visible under the qualified query.
+	var subject principal.Ref
+	if strings.TrimSpace(doc.Subject) != "" {
+		if subject, err = principal.ParseLegacy(doc.Subject); err != nil {
+			return datastore.MemoryRecord{}, false, err
+		}
+	}
 	return datastore.MemoryRecord{
 		ID:         doc.ID,
 		Scope:      datastore.Scope(doc.Scope),
-		Subject:    doc.Subject,
+		Subject:    subject,
 		Content:    string(body),
 		Tags:       doc.Tags,
 		Importance: doc.Importance,

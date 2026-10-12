@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/conformance"
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -31,6 +32,33 @@ func openFresh(t *testing.T) conformance.OpenFunc {
 // conformance.ReadReporter, which this backend implements.
 func TestConformance(t *testing.T) {
 	conformance.Run(t, openFresh(t))
+}
+
+// TestLegacyBareSubjectMatchesQualifiedQuery: a memories row written before
+// the principal reference carries the navi's bare name; the qualified query
+// still finds it (ADR 0021 decision 4).
+func TestLegacyBareSubjectMatchesQualifiedQuery(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "navi.db"), sqlite.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.DB().Exec(`INSERT INTO memories
+		(id, scope, subject, content, tags, importance, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy", "user", "legacy-navi", "prefers terse output", "[]", 0.5, now, now); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	got, err := store.Memory().Recall(datastore.RecallQuery{Subject: principal.MustParse("navi:legacy-navi")})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(got) != 1 || got[0].Subject != principal.MustParse("navi:legacy-navi") {
+		t.Fatalf("legacy row = %+v, want one record keyed navi:legacy-navi", got)
+	}
 }
 
 // TestCandidateIsNotTheDefault: `fs` is the compiled default (ADR 0011), and

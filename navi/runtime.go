@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -177,10 +178,14 @@ func (n *Navi) assembleMemory() error {
 		return fmt.Errorf("%w: short-term memory requires a datastore, but no candidate is bound", ErrInvalid)
 	}
 
+	subject, err := principal.New(principal.KindNavi, n.name)
+	if err != nil {
+		return fmt.Errorf("navi: short-term memory subject: %w", err)
+	}
 	svc, err := memory.New(memory.Config{
 		Memory:  n.Datastores.handle.Memory(),
 		Submit:  n.Datastores.handle.Submit,
-		Subject: n.name,
+		Subject: subject,
 		// Live view (ADR 0017 decision 6): a persisted memory mutation is a
 		// create/update/delete delta on the object surface.
 		OnChange: n.memoryChanged,

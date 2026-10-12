@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite" // the repo's pure-Go SQLite driver, for the persisted seen-set test
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -89,7 +90,7 @@ func TestInboundMentionEnqueuesThought(t *testing.T) {
 			Repository: "acme/widgets",
 			Events:     []EventKind{EventIssueMention},
 			Mention:    "navi",
-			Principal:  "navi:opennavi",
+			Principal:  principal.MustParse("navi:opennavi"),
 		}},
 	})
 	if err := c.Start(context.Background(), connector.Deps{ThoughtSystem: q}); err != nil {

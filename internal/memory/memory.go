@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // alwaysLoaded is the tier in front of the navi at every thought: notes
@@ -49,9 +50,10 @@ type Config struct {
 	Memory datastore.Memory
 	// Submit stages a write on the datastore's ordered writer.
 	Submit func(datastore.Write)
-	// Subject keys the records (the navi's identity for the MVP's
-	// single-user deployment).
-	Subject string
+	// Subject keys the records: the principal that owns them. The navi's
+	// own service principal, navi:<name>, keys the always-loaded scopes for
+	// the MVP's single-user deployment (ADR 0021 decision 10).
+	Subject principal.Ref
 	// OnChange, when set, observes a memory mutation AFTER it has been
 	// persisted, so a live view (the typed-object surface, ADR 0017) never
 	// reports a record its own reads cannot yet see. It runs on the ordered
@@ -64,7 +66,7 @@ type Config struct {
 type Service struct {
 	memory   datastore.Memory
 	submit   func(datastore.Write)
-	subject  string
+	subject  principal.Ref
 	onChange func(datastore.MemoryRecord, Change)
 
 	mu      sync.RWMutex
@@ -80,7 +82,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Submit == nil {
 		return nil, fmt.Errorf("memory: a write submitter is required")
 	}
-	if cfg.Subject == "" {
+	if cfg.Subject.IsZero() {
 		return nil, fmt.Errorf("memory: a subject is required")
 	}
 	s := &Service{
