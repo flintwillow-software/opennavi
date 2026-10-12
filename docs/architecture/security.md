@@ -67,6 +67,35 @@ compiled policy  ── ceiling ──▶  runtime policy  ── effective ─�
                                  (restrict only)
 ```
 
+## Identity and trust
+
+Authorization answers "may this principal do this?"; identity answers "who is
+this?". They are separate mechanisms with separate records: **capability is
+compiled, identity is resolved at runtime** (ADR 0021).
+
+- A **principal** is an identity with authenticators attached. Kinds are open
+  (`user`, `service`, `connector`, `navi`, `group`), and a principal holds a set
+  of keys, so rotating or revoking a key never changes who the principal is. A
+  **role** is a compiled capability set and is not a principal; a **group** is a
+  named collection of principals, optionally authenticatable itself.
+- **Trust sources are declared at build time and resolved at runtime**, exactly
+  as a credential reference is (ADR 0008). A navi declares its sources in
+  `main.go`: principals inline (`navi.NewPrincipals`), an OIDC identity provider
+  (`navi.NewOIDC`), a keyed trust store (`navi.NewFileTrustStore`), or a
+  combination in one ordered `navi.TrustSources` set.
+- **The provider supplies identity and claims; the navi supplies policy.** An
+  identity provider that could supply policy would be runtime-granted
+  capability, which compile-time omission forbids.
+- **Credentials are typed by principal kind.** Humans authenticate through an
+  OIDC session; services and peer navis present an Ed25519 keypair. Every
+  credential has a validity period and can be revoked; expiry and revocation
+  are runtime narrowing, so trust can be rotated without a rebuild while
+  capability cannot change without one.
+- **Trust resolution fails closed, and the compiled principals break the
+  glass.** An unknown or unauthenticated principal is refused, never defaulted
+  open; and because sources resolve in order, an unreachable identity provider
+  cannot disable the principals compiled into the binary.
+
 ## Thought modes
 
 Modes (ADR 0007) narrow capability per thought — e.g. `plan` is read-only.

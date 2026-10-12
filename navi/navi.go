@@ -137,6 +137,12 @@ type Navi struct {
 	// authorizer refuses every action — fail closed.
 	objectAuth     portal.Authorizer
 	objectIdentity string
+	// trustSources are the declared trust sources (WithTrustSource) and trust
+	// is the compiled set built from them at New (ADR 0021 decision 6). An
+	// empty set means the navi cannot authenticate a network portal, which
+	// refuses every connection rather than defaulting open.
+	trustSources []TrustSource
+	trust        *TrustSources
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
@@ -220,6 +226,22 @@ func WithProviderFallback(providerName string) Option {
 		}
 	}
 }
+
+// WithTrustSource declares where identity comes from (ADR 0021 decision 6):
+// principals inline in the navi definition, an OIDC identity provider, or a
+// keyed trust store. It is repeatable, and sources resolve in declaration
+// order, so a compiled inline principal survives an unreachable identity
+// provider (the accepted break-glass). Declaring none leaves the navi with no
+// way to authenticate a network portal — every connection is then refused
+// rather than defaulted open.
+func WithTrustSource(source TrustSource) Option {
+	return func(n *Navi) { n.trustSources = append(n.trustSources, source) }
+}
+
+// Trust returns the compiled trust-source set, or nil before New's assembly
+// ran. Portals never see it: the navi resolves trust for them (ADR 0022
+// decision 8).
+func (n *Navi) Trust() *TrustSources { return n.trust }
 
 // WithObjectAuthorizer declares who may perform actions through the typed
 // object surface (ADR 0017 decision 4): auth is the same portal.Authorizer a
@@ -382,6 +404,16 @@ func New(name string, opts ...Option) *Navi {
 	// against the descriptor, actions are authorized and dispatched, and the
 	// live path translates the observation fanout into deltas (ADR 0017).
 	n.objects = newObjectSurface(n.Types, n.objectAuth, n.objectIdentity)
+
+	// Trust sources are compiled declarations (ADR 0021 decision 6): the set is
+	// built here and its contents resolved at runtime. A nil declaration is a
+	// configuration error, reported by Run like every other assembly failure.
+	trust, err := NewTrustSources(n.trustSources...)
+	if err != nil {
+		n.initErr = fmt.Errorf("navi: trust sources: %w", err)
+	} else {
+		n.trust = trust
+	}
 	if n.Thoughts != nil {
 		n.Thoughts.OnEvent(func(ev thought.Event) { n.objects.observeQueue(ev) })
 	}
