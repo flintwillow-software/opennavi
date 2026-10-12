@@ -238,8 +238,8 @@ type Connector interface {
 type Portal interface {
     Start(ctx context.Context, deps Deps) error
     Stop() error
-    Attach(identity string) error
-    Steer(identity, thoughtID, message string) error
+    Attach(who principal.Ref) error
+    Steer(who principal.Ref, thoughtID, message string) error
     // ... Pause / Resume / Cancel / Enqueue
 }
 
@@ -339,9 +339,11 @@ then delegates to the type's registered handler, which mutates through the view
 the type was bound to. Authorization is **fail-closed**: no authorizer wired
 refuses every action, and the authorizer is the same `portal.Authorizer` a
 control portal uses (`navi.WithObjectAuthorizer`), so a navi has one
-authorization story rather than two. Until IAM lands (ADR 0012), the surface
-acts as one navi-declared identity; per-client scope is that ADR's open
-question.
+authorization story rather than two. The authorizer is asked about a
+**verified** principal reference — never a value a client asserted — and the
+surface still acts as one declared principal for every connection; threading a
+connection's verified principal into the object path is the
+delegated-authorization slice (ADR 0022; NAVI-404).
 
 **Deltas.** `Watch` is the live path: the surface translates the existing
 observation fanout — it does not add a second one — into `object.Delta`. A
@@ -390,7 +392,15 @@ surface replaced the old remote-only snapshot entirely.
 
 **Transport is a separate axis.** Where a portal's state lives (in-process, a
 streaming HTTP binding, a socket) is chosen once at the navi level; the CLI role
-(`host` / `connect`) and the connection's identity are different questions. The
+(`host` / `connect`) and the connection's identity are different questions. A
+remote connection is **authenticated before it reaches any surface**: the client
+presents a credential (`Authorization: Bearer <oidc-token>` for a human, or a
+`Navi-Ed25519` signed request for a service), the navi resolves it through its
+declared trust sources, and the portal acts on the verified principal or a
+refusal — a portal never decides whether a credential is valid and never
+evaluates policy (ADR 0021 decisions 6–8, ADR 0022 decision 8). The in-process
+console is the exception by construction: it is the binary, with no transport,
+so it presents no credential and acts as the navi's own service principal. The
 portal path is the unified stream (ADR 0019): one stream per portal carrying
 the opening snapshot, observation events, object deltas, and control results,
 with SSE + POST as the first remote binding and a socket only when a named

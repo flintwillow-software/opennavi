@@ -12,6 +12,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -19,7 +20,7 @@ import (
 // seam (production wires nil and fails closed until IAM).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action portal.Action, identity string) error {
+func (a allowAllAuth) Authorize(portal.Action, principal.Ref) error {
 	return nil
 }
 
@@ -56,7 +57,7 @@ func servePortal(t *testing.T, allow bool) (string, *thought.Queue) {
 	if slerr != nil {
 		t.Fatal(slerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: gateway.Handler(control, broker, nil), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(control, broker, nil, portal.AllowAllAuthenticator(principal.MustParse("service:test"))), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(sln) }()
 	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(func() { cancel(); _ = srv.Shutdown(shutdown) })

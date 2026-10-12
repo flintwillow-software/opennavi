@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -14,7 +15,9 @@ import (
 // applies them through the thought-system handle, binding both at Start
 // from Deps. The gateway frames it over HTTP; the in-process TUI controls
 // the thought system directly. Authorization fails closed with no
-// authorizer wired: IAM lands later.
+// authorizer wired, and it is asked about a verified principal only — the
+// value comes from the navi's authenticator, never from the client (ADR 0021
+// decisions 6-8, ADR 0022 decision 8).
 
 // Action enumerates portal control operations for authorization.
 type Action string
@@ -31,25 +34,31 @@ const (
 )
 
 // Authorizer governs attach + control. A nil authorizer refuses every
-// action (fail closed).
+// action (fail closed). It is asked about a VERIFIED principal — the one the
+// navi resolved from the connection's credential (ADR 0021 decisions 6-8) —
+// never a value the client asserted, and it is the seam the compiled policy
+// engine replaces (ADR 0022 decision 8; NAVI-399).
 type Authorizer interface {
-	// Authorize returns nil when identity may perform action, or a
-	// refusal error naming the action.
-	Authorize(action Action, identity string) error
+	// Authorize returns nil when who may perform action, or a refusal error
+	// naming the action.
+	Authorize(action Action, who principal.Ref) error
 }
 
 // AuthorizerFunc adapts a function to Authorizer.
-type AuthorizerFunc func(action Action, identity string) error
+type AuthorizerFunc func(action Action, who principal.Ref) error
 
 // Authorize implements Authorizer.
-func (f AuthorizerFunc) Authorize(action Action, identity string) error {
-	return f(action, identity)
+func (f AuthorizerFunc) Authorize(action Action, who principal.Ref) error {
+	return f(action, who)
 }
 
-// AllowAll trusts every identity for every action — the pre-IAM local-trust
-// stand-in for a console or otherwise trusted front-end. NEVER wire it on
-// an untrusted network surface without a real authorizer.
-func AllowAll() Authorizer { return AuthorizerFunc(func(Action, string) error { return nil }) }
+// AllowAll trusts every verified principal for every action — a DEVELOPMENT
+// DEFAULT for a console or otherwise trusted front-end, not the shipped
+// model. It is a real improvement over the pre-IAM stand-in only when paired
+// with a real authenticator: the principal it is asked about is now verified
+// rather than asserted. NEVER wire it on an untrusted network surface without
+// a real authorizer (the compiled policy of NAVI-399).
+func AllowAll() Authorizer { return AuthorizerFunc(func(Action, principal.Ref) error { return nil }) }
 
 // Control is the shared portal control service: it authorizes attach and
 // control actions and applies them through the thought system it receives
@@ -112,11 +121,11 @@ func (c *Control) Subscribe(capacity int) Subscription {
 	return obs.Subscribe(capacity)
 }
 
-func (c *Control) authorize(action Action, identity string) error {
+func (c *Control) authorize(action Action, who principal.Ref) error {
 	if c.auth == nil {
 		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", ErrUnauthorized, action)
 	}
-	return c.auth.Authorize(action, identity)
+	return c.auth.Authorize(action, who)
 }
 
 func (c *Control) thoughtSystem() (thought.ThoughtSystem, error) {
@@ -128,14 +137,14 @@ func (c *Control) thoughtSystem() (thought.ThoughtSystem, error) {
 	return c.ts, nil
 }
 
-// Attach authorizes a client identity for the portal attachment.
-func (c *Control) Attach(identity string) error {
-	return c.authorize(ActionAttach, identity)
+// Attach authorizes a verified principal for the portal attachment.
+func (c *Control) Attach(who principal.Ref) error {
+	return c.authorize(ActionAttach, who)
 }
 
 // Steer routes a steering message to a thought.
-func (c *Control) Steer(identity, thoughtID, message string) error {
-	if err := c.authorize(ActionSteer, identity); err != nil {
+func (c *Control) Steer(who principal.Ref, thoughtID, message string) error {
+	if err := c.authorize(ActionSteer, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -146,8 +155,8 @@ func (c *Control) Steer(identity, thoughtID, message string) error {
 }
 
 // Pause parks a running thought.
-func (c *Control) Pause(identity, thoughtID string) error {
-	if err := c.authorize(ActionPause, identity); err != nil {
+func (c *Control) Pause(who principal.Ref, thoughtID string) error {
+	if err := c.authorize(ActionPause, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -158,8 +167,8 @@ func (c *Control) Pause(identity, thoughtID string) error {
 }
 
 // Resume re-queues a paused thought.
-func (c *Control) Resume(identity, thoughtID string) error {
-	if err := c.authorize(ActionResume, identity); err != nil {
+func (c *Control) Resume(who principal.Ref, thoughtID string) error {
+	if err := c.authorize(ActionResume, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -170,8 +179,8 @@ func (c *Control) Resume(identity, thoughtID string) error {
 }
 
 // Cancel removes queued/paused work.
-func (c *Control) Cancel(identity, thoughtID string) error {
-	if err := c.authorize(ActionCancel, identity); err != nil {
+func (c *Control) Cancel(who principal.Ref, thoughtID string) error {
+	if err := c.authorize(ActionCancel, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -182,8 +191,8 @@ func (c *Control) Cancel(identity, thoughtID string) error {
 }
 
 // BumpPriority changes a queued thought's priority.
-func (c *Control) BumpPriority(identity, thoughtID string, prio int) error {
-	if err := c.authorize(ActionBump, identity); err != nil {
+func (c *Control) BumpPriority(who principal.Ref, thoughtID string, prio int) error {
+	if err := c.authorize(ActionBump, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -194,8 +203,8 @@ func (c *Control) BumpPriority(identity, thoughtID string, prio int) error {
 }
 
 // Retry re-queues a failed thought.
-func (c *Control) Retry(identity, thoughtID string) error {
-	if err := c.authorize(ActionRetry, identity); err != nil {
+func (c *Control) Retry(who principal.Ref, thoughtID string) error {
+	if err := c.authorize(ActionRetry, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()
@@ -205,9 +214,9 @@ func (c *Control) Retry(identity, thoughtID string) error {
 	return ts.Retry(thoughtID)
 }
 
-// Enqueue schedules a thought on behalf of identity.
-func (c *Control) Enqueue(identity string, t *thought.Thought) error {
-	if err := c.authorize(ActionEnqueue, identity); err != nil {
+// Enqueue schedules a thought on behalf of who.
+func (c *Control) Enqueue(who principal.Ref, t *thought.Thought) error {
+	if err := c.authorize(ActionEnqueue, who); err != nil {
 		return err
 	}
 	ts, err := c.thoughtSystem()

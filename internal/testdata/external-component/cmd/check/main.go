@@ -10,6 +10,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 
 	component "example.com/external-component"
 )
@@ -34,7 +35,7 @@ func main() {
 	var _ = component.TodoCount
 
 	// The portal must fail closed for an identity that never attached.
-	if err := p.Steer("anon", "t1", "hi"); !errors.Is(err, portal.ErrUnauthorized) {
+	if err := p.Steer(principal.MustParse("service:anon"), "t1", "hi"); !errors.Is(err, portal.ErrUnauthorized) {
 		panic(fmt.Sprintf("dashboard must fail closed, got %v", err))
 	}
 	fmt.Printf("external component satisfies connector.Connector (%T) and portal.Portal (%T); fail-closed ok\n", c, p)

@@ -12,6 +12,7 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -21,7 +22,7 @@ import (
 func gatewayParity(t *testing.T) (*Navi, *objectSurface, object.Surface) {
 	t.Helper()
 	n := New("gateway-parity", WithPlanCloseCheck(false),
-		WithObjectAuthorizer(portal.AllowAll(), "test"))
+		WithObjectAuthorizer(portal.AllowAll(), principal.MustParse("service:test")))
 	n.Datastores.Handle().Bind(inmem.New())
 	n.transcripts = n.Datastores.Handle().Thoughts()
 
@@ -45,10 +46,10 @@ func gatewayParity(t *testing.T) (*Navi, *objectSurface, object.Surface) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(gateway.Handler(control, n.observation, n.objects))
+	srv := httptest.NewServer(gateway.Handler(control, n.observation, n.objects, portal.AllowAllAuthenticator(principal.MustParse("service:test"))))
 	t.Cleanup(srv.Close)
 
-	c := gateway.NewClient(srv.URL, "test")
+	c := gateway.NewClient(srv.URL, nil)
 	if err := c.OpenStream(context.Background()); err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}

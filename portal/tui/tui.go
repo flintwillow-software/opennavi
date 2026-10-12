@@ -31,9 +31,6 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// LocalIdentity is the identity the in-process front door presents.
-const LocalIdentity = "local"
-
 // DefaultFeedCap bounds the TUI's subscription mailbox (bounded
 // drop-oldest; ReadAfter reports gaps as a UI notice).
 const DefaultFeedCap = 1024
@@ -121,16 +118,18 @@ func (t *inProcessTransport) Enqueue(prompt string, prio int, deferUntil time.Ti
 // ── remote transport (gateway stream attachment) ─────────────────────────
 
 // NewRemote opens the unified stream at base (http://host:port of a gateway
-// portal) for identity and returns the stream client. The client IS the
-// transport: it implements portal.Stream (Feed/Objects/Enqueue/Close) and
-// object.Surface, so a remote front-end is handed the same contract an
-// in-process one is (ADR 0017/0019). OpenStream returns once the opening
-// snapshot has arrived, so descriptors are ready before the model renders.
-func NewRemote(base, identity string) (*gateway.Client, error) {
-	if base == "" || identity == "" {
-		return nil, fmt.Errorf("tui: remote transport requires base and identity")
+// portal) presenting the credential creds produces, and returns the stream
+// client. The client IS the transport: it implements portal.Stream
+// (Feed/Objects/Enqueue/Close) and object.Surface, so a remote front-end is
+// handed the same contract an in-process one is (ADR 0017/0019). OpenStream
+// returns once the opening snapshot has arrived, so descriptors are ready
+// before the model renders. A nil source presents no credential — which a
+// development gateway accepts and a real one refuses (fail closed).
+func NewRemote(base string, creds portal.CredentialSource) (*gateway.Client, error) {
+	if base == "" {
+		return nil, fmt.Errorf("tui: remote transport requires a base URL")
 	}
-	c := gateway.NewClient(base, identity)
+	c := gateway.NewClient(base, creds)
 	// Background, not a timeout: the stream must outlive this call (OpenStream
 	// bounds only the opening snapshot).
 	if err := c.OpenStream(context.Background()); err != nil {

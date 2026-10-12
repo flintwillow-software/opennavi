@@ -30,10 +30,10 @@ import (
 // failure is reported, never hidden: Types and Watch return it, so a caller
 // never mistakes a broken stream for "nothing changed" (ADR 0019 decision 8).
 type Client struct {
-	base     string
-	identity string
-	http     *http.Client // per-call requests (bounded by Timeout)
-	stream   *http.Client // the SSE stream (no global timeout; ctx-bounded)
+	base   string
+	creds  portal.CredentialSource
+	http   *http.Client // per-call requests (bounded by Timeout)
+	stream *http.Client // the SSE stream (no global timeout; ctx-bounded)
 
 	mu         sync.Mutex
 	types      []object.Type
@@ -50,17 +50,40 @@ type Client struct {
 }
 
 // NewClient builds a remote stream client at base (the gateway's
-// http://host:port) presenting identity. It performs no I/O: the stream is
-// opened with OpenStream, and Surface calls connect lazily.
-func NewClient(base, identity string) *Client {
+// http://host:port) presenting the credential creds produces. It performs no
+// I/O: the stream is opened with OpenStream, and Surface calls connect
+// lazily. A nil source presents no credential — which a development gateway
+// accepts and a gateway with a real authenticator refuses (fail closed).
+func NewClient(base string, creds portal.CredentialSource) *Client {
 	return &Client{
-		base:     strings.TrimRight(base, "/"),
-		identity: identity,
-		http:     &http.Client{Timeout: 10 * time.Second},
-		stream:   newStreamClient(),
-		deltas:   object.NewDeltaWindow(DefaultSubscriptionCap),
-		feed:     portal.NewMailbox(DefaultSubscriptionCap),
+		base:   strings.TrimRight(base, "/"),
+		creds:  creds,
+		http:   &http.Client{Timeout: 10 * time.Second},
+		stream: newStreamClient(),
+		deltas: object.NewDeltaWindow(DefaultSubscriptionCap),
+		feed:   portal.NewMailbox(DefaultSubscriptionCap),
 	}
+}
+
+// authorize attaches the client's credential to a request. The credential is
+// built per request, so a signed request binds the method, the path, and the
+// body it actually sends.
+func (c *Client) authorize(req *http.Request, body []byte) error {
+	if c.creds == nil {
+		return nil
+	}
+	cred, err := c.creds.Credential(req.Method, req.URL.Path, body, time.Now())
+	if err != nil {
+		return fmt.Errorf("gateway: credential: %w", err)
+	}
+	header, err := credentialHeader(cred)
+	if err != nil {
+		return err
+	}
+	if header != "" {
+		req.Header.Set("Authorization", header)
+	}
+	return nil
 }
 
 var (
@@ -193,20 +216,24 @@ var errNeedSnapshot = fmt.Errorf("gateway: stream gap — re-snapshot")
 // connect opens one SSE connection and returns its scanner and body.
 func (c *Client) connect(ctx context.Context, from, events int) (*bufio.Scanner, io.ReadCloser, error) {
 	q := url.Values{}
-	if c.identity != "" {
-		q.Set("identity", c.identity)
-	}
 	if from > 0 {
 		q.Set("from", strconv.Itoa(from))
 	}
 	if events > 0 {
 		q.Set("events", strconv.Itoa(events))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/portal/stream?"+q.Encode(), nil)
+	target := c.base + "/portal/stream"
+	if enc := q.Encode(); enc != "" {
+		target += "?" + enc
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("gateway: build stream request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if err := c.authorize(req, nil); err != nil {
+		return nil, nil, err
+	}
 	resp, err := c.stream.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("gateway: open stream: %w", err)
@@ -433,9 +460,6 @@ func (c *Client) call(call portal.Call) (portal.Result, error) {
 		return portal.Result{}, fmt.Errorf("gateway: encode call: %w", err)
 	}
 	q := url.Values{}
-	if c.identity != "" {
-		q.Set("identity", c.identity)
-	}
 	path := "/portal/stream"
 	target := c.base + path
 	if enc := q.Encode(); enc != "" {
@@ -446,6 +470,9 @@ func (c *Client) call(call portal.Call) (portal.Result, error) {
 		return portal.Result{}, fmt.Errorf("gateway: build call: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := c.authorize(req, blob); err != nil {
+		return portal.Result{}, err
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return portal.Result{}, fmt.Errorf("gateway: %s: %w", call.Method, err)

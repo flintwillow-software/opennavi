@@ -17,6 +17,7 @@ import (
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -24,7 +25,7 @@ import (
 // seam (production wires nil and fails closed).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(action portal.Action, identity string) error {
+func (a allowAllAuth) Authorize(portal.Action, principal.Ref) error {
 	return nil
 }
 
@@ -640,7 +641,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if lerr != nil {
 		t.Fatal(lerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface, portal.AllowAllAuthenticator(principal.MustParse("service:test"))), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	shutdown, cancelSrv := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv()
@@ -648,7 +649,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 
 	base := "http://" + addr
 	time.Sleep(250 * time.Millisecond)
-	rport, terr := NewRemote(base, "tui-client")
+	rport, terr := NewRemote(base, nil)
 	if terr != nil {
 		t.Fatal(terr)
 	}
@@ -742,7 +743,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	if lerr2 != nil {
 		t.Fatal(lerr2)
 	}
-	srv2 := &http.Server{Addr: addr2, Handler: gateway.Handler(rt2.Control, rt2.Observation, rt2.Surface), ReadHeaderTimeout: 5 * time.Second}
+	srv2 := &http.Server{Addr: addr2, Handler: gateway.Handler(rt2.Control, rt2.Observation, rt2.Surface, portal.AllowAllAuthenticator(principal.MustParse("service:test"))), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv2.Serve(ln2) }()
 	shutdown2, cancelSrv2 := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelSrv2()
@@ -750,7 +751,7 @@ func TestRemoteTransportControlAndEvents(t *testing.T) {
 	time.Sleep(250 * time.Millisecond)
 	// The stream refuses (403), so open the client without the stream: the
 	// point here is that its calls fail closed, not that it attached.
-	failport := gateway.NewClient("http://"+addr2, "intruder")
+	failport := gateway.NewClient("http://"+addr2, nil)
 	if gerr := failport.Objects().Act("thought", "x", "steer", map[string]any{"message": "hi"}); gerr == nil || !strings.Contains(gerr.Error(), "unauthorized") {
 		t.Errorf("remote control without authorizer: %v, want fail-closed", gerr)
 	}
@@ -1491,7 +1492,7 @@ func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
 	if lerr != nil {
 		t.Fatal(lerr)
 	}
-	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: gateway.Handler(rt.Control, rt.Observation, rt.Surface, portal.AllowAllAuthenticator(principal.MustParse("service:test"))), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() { _ = srv.Close() }()
 	time.Sleep(200 * time.Millisecond)
@@ -1499,7 +1500,7 @@ func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
 	if err := rt.Queue.Enqueue(th("remote-q", 4)); err != nil {
 		t.Fatal(err)
 	}
-	rport, err := NewRemote("http://"+addr, "tui-client")
+	rport, err := NewRemote("http://"+addr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1530,19 +1531,19 @@ func TestPortalControlGoesThroughTheSurface(t *testing.T) {
 	p := &Portal{done: make(chan error, 1)}
 	p.tr = tport // same package: the transport Start would have built
 
-	if err := p.Steer("u", "pc1", "steered via portal"); err != nil {
+	if err := p.Steer(principal.MustParse("service:test"), "pc1", "steered via portal"); err != nil {
 		t.Fatalf("Steer: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); !strings.Contains(got.Context, "steered via portal") {
 		t.Fatalf("steer did not land: %q", got.Context)
 	}
-	if err := p.BumpPriority("u", "pc1", 2); err != nil {
+	if err := p.BumpPriority(principal.MustParse("service:test"), "pc1", 2); err != nil {
 		t.Fatalf("BumpPriority: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); got.Priority != 2 {
 		t.Fatalf("priority = %d, want 2", got.Priority)
 	}
-	if err := p.Cancel("u", "pc1"); err != nil {
+	if err := p.Cancel(principal.MustParse("service:test"), "pc1"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); got.Status != thought.ThoughtCancelled {
@@ -1555,7 +1556,7 @@ func TestPortalControlGoesThroughTheSurface(t *testing.T) {
 	}
 	// A missing surface is an error, not a silent no-op.
 	empty := &Portal{done: make(chan error, 1)}
-	if err := empty.Steer("u", "pc1", "hi"); err == nil {
+	if err := empty.Steer(principal.MustParse("service:test"), "pc1", "hi"); err == nil {
 		t.Fatal("control without a transport must fail")
 	}
 }

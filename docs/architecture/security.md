@@ -95,6 +95,18 @@ compiled, identity is resolved at runtime** (ADR 0021).
   glass.** An unknown or unauthenticated principal is refused, never defaulted
   open; and because sources resolve in order, an unreachable identity provider
   cannot disable the principals compiled into the binary.
+- **A remote portal presents a credential; the navi resolves it.** The client
+  never asserts an identity. The gateway frames what the client sent
+  (`Authorization: Bearer <oidc-token>`, or a `Navi-Ed25519` signed request that
+  binds the method, path, body digest, and time) and hands it to
+  `portal.Authenticator`; the navi answers with a verified principal reference
+  or a refusal, and the portal acts on that answer (ADR 0022 decision 8). A
+  gateway with no authenticator authenticates nobody. The in-process console is
+  the exception by construction: it is the binary, with no transport, so it is
+  trusted structurally and acts as the navi's own service principal.
+- **The development default is explicit and named.** `portal.AllowAllAuthenticator`
+  trusts every connection, credential or none; the reference navi wires it only
+  behind `--dev-allow-all`. It is never the shipped model.
 
 ## Thought modes
 
