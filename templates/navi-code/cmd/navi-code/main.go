@@ -102,7 +102,7 @@ func run() error {
 	// that is a long-lived service should use a GitHub App installation
 	// instead — see the "GitHub egress" section of README.md for the two shapes
 	// and how to choose.
-	gh := github.New(github.Config{
+	ghCfg := github.Config{
 		// An explicit reference wins — that is what CI and a deployment set —
 		// and the developer's own `gh auth login` is the fallback, so a local
 		// run needs no exported variable. A credential REFERENCE, never a
@@ -114,7 +114,20 @@ func run() error {
 		// The repository egress tools act on by default. A tool call may
 		// override it, so an unset value is not an error.
 		Repository: githubRepository(),
-	})
+	}
+	// GitHub ingress (ADR 0023): opt-in and off by default, so the starter does
+	// nothing surprising. Set NAVI_GITHUB_USERNAME to your GitHub login and the
+	// connector polls the repository this navi is checked out in for comments
+	// that mention you, turning each into a thought. Polling is the first
+	// binding because it needs no public reachability.
+	if subs := githubIngress(ghCfg.Repository, os.Getenv("NAVI_GITHUB_USERNAME")); len(subs) > 0 {
+		ghCfg.PollInterval = 30 * time.Second
+		ghCfg.Subscriptions = subs
+	} else if strings.TrimSpace(os.Getenv("NAVI_GITHUB_USERNAME")) != "" {
+		fmt.Fprintln(os.Stderr, "navi-code: NAVI_GITHUB_USERNAME is set but no GitHub repository could be "+
+			"resolved (set NAVI_CODE_GITHUB_REPO or run inside a GitHub checkout); ingress is disabled")
+	}
+	gh := github.New(ghCfg)
 	if err := n.Connectors.Add(gh); err != nil {
 		return err
 	}
@@ -162,6 +175,26 @@ func githubRepository() string {
 		return ""
 	}
 	return parseGitRemote(strings.TrimSpace(string(out)))
+}
+
+// githubIngress builds the opt-in GitHub ingress declaration (ADR 0023).
+// Ingress is off unless NAVI_GITHUB_USERNAME names a login to watch for, and it
+// needs a repository to poll, so an unset login — or an unresolvable repository
+// — yields no subscription and no poll loop. The login is the only runtime
+// input; the event kind, intent, and service principal are declared here, and
+// runtime config cannot add an inbound path (ADR 0023 decision 1).
+func githubIngress(repo, mention string) []github.Subscription {
+	mention = strings.TrimSpace(mention)
+	if mention == "" || strings.TrimSpace(repo) == "" {
+		return nil
+	}
+	return []github.Subscription{{
+		Name:       "mentions",
+		Repository: repo,
+		Events:     []github.EventKind{github.EventIssueMention},
+		Mention:    mention,
+		Principal:  "navi:navi-code",
+	}}
 }
 
 // parseGitRemote turns a git remote URL into owner/name, or "" when it is not
