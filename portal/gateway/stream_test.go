@@ -14,6 +14,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	pubportal "github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -30,7 +31,7 @@ func newStreamServer(t *testing.T, auth pubportal.Authorizer) (*httptest.Server,
 	if err := hub.Start(context.Background(), pubportal.Deps{ThoughtSystem: q, Observation: broker}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(Handler(hub, broker, fake))
+	srv := httptest.NewServer(Handler(hub, broker, fake, pubportal.AllowAllAuthenticator(principal.MustParse("service:test"))))
 	t.Cleanup(srv.Close)
 	return srv, q, fake
 }
@@ -92,7 +93,7 @@ func waitFrame(t *testing.T, frames <-chan pubportal.Frame, pred func(pubportal.
 // snapshot, live observation events, and live object deltas.
 func TestGatewayStreamServesSnapshotEventsAndDeltas(t *testing.T) {
 	srv, q, fake := newStreamServer(t, allowAll{})
-	resp, frames := openSSE(t, srv.URL+"/portal/stream?identity=u")
+	resp, frames := openSSE(t, srv.URL+"/portal/stream")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
@@ -153,13 +154,13 @@ func TestGatewayStreamResumesFromObservationCursor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	resp, frames := openSSE(t, srv.URL+"/portal/stream?identity=u")
+	resp, frames := openSSE(t, srv.URL+"/portal/stream")
 	first := waitFrame(t, frames, func(f pubportal.Frame) bool {
 		return f.Kind == pubportal.FrameEvent && f.Event != nil && f.Event.ThoughtID == "r1"
 	})
 	resp.Body.Close()
 
-	resp2, frames2 := openSSE(t, fmt.Sprintf("%s/portal/stream?identity=u&events=%d", srv.URL, first.Event.Seq+1))
+	resp2, frames2 := openSSE(t, fmt.Sprintf("%s/portal/stream?events=%d", srv.URL, first.Event.Seq+1))
 	defer resp2.Body.Close()
 	if err := q.Enqueue(&thought.Thought{
 		ID: "r2", Prompt: "new", Priority: 4, Status: thought.ThoughtPending,
@@ -185,7 +186,7 @@ func TestGatewayStreamReportsDeltaGap(t *testing.T) {
 	for i := 0; i < 600; i++ {
 		fake.pushDelta(object.Delta{Type: "thought", ID: "t1", Op: object.OpUpdate})
 	}
-	resp, frames := openSSE(t, srv.URL+"/portal/stream?identity=u&from=1")
+	resp, frames := openSSE(t, srv.URL+"/portal/stream?from=1")
 	defer resp.Body.Close()
 	lost := waitFrame(t, frames, func(f pubportal.Frame) bool {
 		return f.Result != nil && f.Result.Lost
@@ -200,7 +201,7 @@ func TestGatewayStreamReportsDeltaGap(t *testing.T) {
 // snapshot (ADR 0019 decision 6).
 func TestGatewayStreamResumeSkipsTheSnapshot(t *testing.T) {
 	srv, _, _ := newStreamServer(t, allowAll{})
-	resp, frames := openSSE(t, srv.URL+"/portal/stream?identity=u&from=1&events=1")
+	resp, frames := openSSE(t, srv.URL+"/portal/stream?from=1&events=1")
 	defer resp.Body.Close()
 
 	select {
@@ -218,7 +219,7 @@ func TestGatewayStreamResumeSkipsTheSnapshot(t *testing.T) {
 func TestGatewayStreamCallRoundTrip(t *testing.T) {
 	srv, _, _ := newStreamServer(t, allowAll{})
 	body := `{"kind":"call","call":{"method":"types"}}`
-	resp, err := http.Post(srv.URL+"/portal/stream?identity=u", "application/json", strings.NewReader(body))
+	resp, err := http.Post(srv.URL+"/portal/stream", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +237,7 @@ func TestGatewayStreamCallRoundTrip(t *testing.T) {
 
 	// A refused call keeps its typed status: no authorizer, fail closed.
 	closed, _, _ := newStreamServer(t, nil)
-	resp2, err := http.Post(closed.URL+"/portal/stream?identity=u", "application/json", strings.NewReader(body))
+	resp2, err := http.Post(closed.URL+"/portal/stream", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestGatewayStreamCallRoundTrip(t *testing.T) {
 // control channel and the object routes.
 func TestGatewayStreamFailsClosedWithoutAuthorizer(t *testing.T) {
 	srv, _, _ := newStreamServer(t, nil)
-	resp, err := http.Get(srv.URL + "/portal/stream?identity=u")
+	resp, err := http.Get(srv.URL + "/portal/stream")
 	if err != nil {
 		t.Fatal(err)
 	}

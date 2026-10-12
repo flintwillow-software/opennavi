@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/skill"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
@@ -66,16 +67,16 @@ func (p *fakePortal) events() []thought.Event {
 	return append([]thought.Event(nil), p.seen...)
 }
 
-func (p *fakePortal) Stop() error                            { close(p.stopped); return nil }
-func (p *fakePortal) Addr() string                           { return p.addr }
-func (p *fakePortal) Attach(string) error                    { return nil }
-func (p *fakePortal) Steer(a, b, c string) error             { return nil }
-func (p *fakePortal) Pause(a, b string) error                { return nil }
-func (p *fakePortal) Resume(a, b string) error               { return nil }
-func (p *fakePortal) Cancel(a, b string) error               { return nil }
-func (p *fakePortal) BumpPriority(a, b string, c int) error  { return nil }
-func (p *fakePortal) Retry(a, b string) error                { return nil }
-func (p *fakePortal) Enqueue(string, *thought.Thought) error { return nil }
+func (p *fakePortal) Stop() error                                         { close(p.stopped); return nil }
+func (p *fakePortal) Addr() string                                        { return p.addr }
+func (p *fakePortal) Attach(principal.Ref) error                          { return nil }
+func (p *fakePortal) Steer(_ principal.Ref, a, b string) error            { return nil }
+func (p *fakePortal) Pause(_ principal.Ref, a string) error               { return nil }
+func (p *fakePortal) Resume(_ principal.Ref, a string) error              { return nil }
+func (p *fakePortal) Cancel(_ principal.Ref, a string) error              { return nil }
+func (p *fakePortal) BumpPriority(_ principal.Ref, a string, c int) error { return nil }
+func (p *fakePortal) Retry(_ principal.Ref, a string) error               { return nil }
+func (p *fakePortal) Enqueue(principal.Ref, *thought.Thought) error       { return nil }
 
 func newFakeConnector() *fakeConnector {
 	return &fakeConnector{started: make(chan struct{}), stopped: make(chan struct{})}

@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -83,14 +84,14 @@ func (p *observingPortal) Stop() error {
 	return nil
 }
 
-func (p *observingPortal) Attach(string) error                    { return nil }
-func (p *observingPortal) Steer(string, string, string) error     { return nil }
-func (p *observingPortal) Pause(string, string) error             { return nil }
-func (p *observingPortal) Resume(string, string) error            { return nil }
-func (p *observingPortal) Cancel(string, string) error            { return nil }
-func (p *observingPortal) BumpPriority(string, string, int) error { return nil }
-func (p *observingPortal) Retry(string, string) error             { return nil }
-func (p *observingPortal) Enqueue(string, *thought.Thought) error { return nil }
+func (p *observingPortal) Attach(principal.Ref) error                    { return nil }
+func (p *observingPortal) Steer(principal.Ref, string, string) error     { return nil }
+func (p *observingPortal) Pause(principal.Ref, string) error             { return nil }
+func (p *observingPortal) Resume(principal.Ref, string) error            { return nil }
+func (p *observingPortal) Cancel(principal.Ref, string) error            { return nil }
+func (p *observingPortal) BumpPriority(principal.Ref, string, int) error { return nil }
+func (p *observingPortal) Retry(principal.Ref, string) error             { return nil }
+func (p *observingPortal) Enqueue(principal.Ref, *thought.Thought) error { return nil }
 
 func (p *observingPortal) saw(want string) bool {
 	p.mu.Lock()

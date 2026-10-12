@@ -18,7 +18,7 @@ import (
 // permissive test operator.
 func liveNavi(t *testing.T) *Navi {
 	t.Helper()
-	return New("deltas", WithPlanCloseCheck(false), WithObjectAuthorizer(portal.AllowAll(), "test"))
+	return New("deltas", WithPlanCloseCheck(false), WithObjectAuthorizer(portal.AllowAll(), principal.MustParse("service:test")))
 }
 
 func TestDeltaWindowCursorAndGap(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -39,17 +40,17 @@ func (p *stubPortal) Start(ctx context.Context, deps Deps) error {
 	return nil
 }
 
-func (p *stubPortal) Stop() error                                     { return nil }
-func (p *stubPortal) Attach(identity string) error                    { return nil }
-func (p *stubPortal) Steer(identity, thoughtID, message string) error { return nil }
-func (p *stubPortal) Pause(identity, thoughtID string) error          { return nil }
-func (p *stubPortal) Resume(identity, thoughtID string) error         { return nil }
-func (p *stubPortal) Cancel(identity, thoughtID string) error         { return nil }
-func (p *stubPortal) BumpPriority(identity, thoughtID string, prio int) error {
+func (p *stubPortal) Stop() error                                            { return nil }
+func (p *stubPortal) Attach(principal.Ref) error                             { return nil }
+func (p *stubPortal) Steer(_ principal.Ref, thoughtID, message string) error { return nil }
+func (p *stubPortal) Pause(_ principal.Ref, thoughtID string) error          { return nil }
+func (p *stubPortal) Resume(_ principal.Ref, thoughtID string) error         { return nil }
+func (p *stubPortal) Cancel(_ principal.Ref, thoughtID string) error         { return nil }
+func (p *stubPortal) BumpPriority(_ principal.Ref, thoughtID string, prio int) error {
 	return nil
 }
-func (p *stubPortal) Retry(identity, thoughtID string) error            { return nil }
-func (p *stubPortal) Enqueue(identity string, t *thought.Thought) error { return nil }
+func (p *stubPortal) Retry(_ principal.Ref, thoughtID string) error     { return nil }
+func (p *stubPortal) Enqueue(_ principal.Ref, t *thought.Thought) error { return nil }
 
 func TestPortalDepsAtStartAndConformance(t *testing.T) {
 	ts := &stubTS{}
@@ -77,7 +78,7 @@ func TestPortalDepsAtStartAndConformance(t *testing.T) {
 	if err := p.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Steer("u", "t1", "hi"); err != nil {
+	if err := p.Steer(principal.MustParse("service:test"), "t1", "hi"); err != nil {
 		t.Fatal(err)
 	}
 }

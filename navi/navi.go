@@ -31,6 +31,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/provider"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/skill"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
@@ -132,17 +133,20 @@ type Navi struct {
 	// path plus the action dispatch and live-delta paths (ADR 0017 decisions
 	// 4 and 6).
 	objects *objectSurface
-	// objectAuth and objectIdentity are the declared authorization for
-	// actions through the object surface (WithObjectAuthorizer). A nil
-	// authorizer refuses every action — fail closed.
-	objectAuth     portal.Authorizer
-	objectIdentity string
+	// objectAuth and objectWho are the declared authorization for actions
+	// through the object surface (WithObjectAuthorizer). A nil authorizer
+	// refuses every action — fail closed.
+	objectAuth portal.Authorizer
+	objectWho  principal.Ref
 	// trustSources are the declared trust sources (WithTrustSource) and trust
 	// is the compiled set built from them at New (ADR 0021 decision 6). An
 	// empty set means the navi cannot authenticate a network portal, which
 	// refuses every connection rather than defaulting open.
 	trustSources []TrustSource
 	trust        *TrustSources
+	// portalAuth overrides how a portal connection is authenticated
+	// (WithPortalAuthenticator). Nil means the compiled trust sources decide.
+	portalAuth portal.Authenticator
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
@@ -243,16 +247,27 @@ func WithTrustSource(source TrustSource) Option {
 // decision 8).
 func (n *Navi) Trust() *TrustSources { return n.trust }
 
+// WithPortalAuthenticator overrides how the navi authenticates a portal
+// connection (ADR 0022 decision 8). The default resolves the credential a
+// portal presents through the compiled trust sources (WithTrustSource). A
+// DEVELOPMENT navi may override it with portal.AllowAllAuthenticator so a
+// local run needs no key material; a shipped navi should not — it would
+// authenticate nobody.
+func WithPortalAuthenticator(a portal.Authenticator) Option {
+	return func(n *Navi) { n.portalAuth = a }
+}
+
 // WithObjectAuthorizer declares who may perform actions through the typed
 // object surface (ADR 0017 decision 4): auth is the same portal.Authorizer a
-// control portal uses, and identity is the identity the surface acts as.
-// Absent, every action is refused — fail closed. Per-client identity is part
-// of the IAM work ADR 0012 anticipates (its open question 3); until then the
-// surface acts as one navi-declared identity.
-func WithObjectAuthorizer(auth portal.Authorizer, identity string) Option {
+// control portal uses, and who is the principal the surface acts as — a
+// validated principal reference, not a free string. Absent, every action is
+// refused — fail closed. The surface still acts as ONE declared principal for
+// every connection; threading a connection's verified principal into the
+// object path is the delegated-authorization slice (ADR 0022; NAVI-404).
+func WithObjectAuthorizer(auth portal.Authorizer, who principal.Ref) Option {
 	return func(n *Navi) {
 		n.objectAuth = auth
-		n.objectIdentity = identity
+		n.objectWho = who
 	}
 }
 
@@ -403,7 +418,7 @@ func New(name string, opts ...Option) *Navi {
 	// The object surface serves the registered types: reads are projected
 	// against the descriptor, actions are authorized and dispatched, and the
 	// live path translates the observation fanout into deltas (ADR 0017).
-	n.objects = newObjectSurface(n.Types, n.objectAuth, n.objectIdentity)
+	n.objects = newObjectSurface(n.Types, n.objectAuth, n.objectWho)
 
 	// Trust sources are compiled declarations (ADR 0021 decision 6): the set is
 	// built here and its contents resolved at runtime. A nil declaration is a
@@ -641,8 +656,28 @@ func (n *Navi) Serving() bool {
 // that fails to start aborts the run and everything already started is
 // stopped — a half-serving navi is not a state worth having.
 func (n *Navi) serve(ctx context.Context) error {
+	console, err := principal.New(principal.KindNavi, n.name)
+	if err != nil {
+		return fmt.Errorf("navi: console principal: %w", err)
+	}
+	// The navi resolves trust for its portals (ADR 0022 decision 8): the
+	// authenticator is the seam (the compiled trust sources unless an author
+	// overrode it), and Console is the principal the in-process console acts
+	// as — it presents no credential because it is the binary, with no
+	// transport (ADR 0021 decision 9).
+	auth := n.portalAuth
+	if auth == nil {
+		auth = NewPortalAuthenticator(n.trust)
+	}
 	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
-	pdeps := portal.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log, Observation: n.observation}
+	pdeps := portal.Deps{
+		ThoughtSystem: n.Thoughts,
+		Model:         n,
+		Log:           n.log,
+		Observation:   n.observation,
+		Authenticator: auth,
+		Console:       console,
+	}
 	if n.objects != nil {
 		pdeps.Objects = n.objects
 	}

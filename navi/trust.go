@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/principal"
 )
 
@@ -867,11 +868,62 @@ func resolvePathRef(ref string) string {
 	return ref
 }
 
+// ── the portal seam ─────────────────────────────────────────────────────
+
+// PortalAuthenticator adapts the navi's compiled trust sources to the portal
+// seam (ADR 0022 decision 8): the navi resolves the credential a portal
+// presents, and the portal receives a verified principal reference or a
+// refusal — never the vocabulary, roles, or trust sources. It is the only
+// place a credential is interpreted, so no portal can reimplement
+// verification.
+type PortalAuthenticator struct{ trust *TrustSources }
+
+// NewPortalAuthenticator builds the authenticator a portal receives through
+// portal.Deps. A nil trust set authenticates nobody (fail closed).
+func NewPortalAuthenticator(trust *TrustSources) PortalAuthenticator {
+	return PortalAuthenticator{trust: trust}
+}
+
+// Authenticate implements portal.Authenticator. Every failure wraps
+// portal.ErrUnauthenticated: a credential that does not verify is never
+// partially trusted, and an unknown scheme is refused rather than ignored.
+func (a PortalAuthenticator) Authenticate(ctx context.Context, cred portal.Credential) (principal.Ref, error) {
+	now := cred.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if a.trust == nil {
+		return principal.Ref{}, fmt.Errorf("%w: %w: no trust source is declared", portal.ErrUnauthenticated, ErrUnauthenticated)
+	}
+	switch strings.ToLower(strings.TrimSpace(cred.Scheme)) {
+	case portal.SchemeBearer:
+		p, err := a.trust.VerifyToken(ctx, cred.Token, now)
+		if err != nil {
+			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+		}
+		return p.Ref(), nil
+	case portal.SchemeEd25519:
+		p, err := a.trust.Resolve(cred.Principal)
+		if err != nil {
+			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+		}
+		if err := p.Verify(cred.Message, cred.Proof, now); err != nil {
+			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+		}
+		return p.Ref(), nil
+	case "":
+		return principal.Ref{}, fmt.Errorf("%w: %w: no credential presented", portal.ErrUnauthenticated, ErrUnauthenticated)
+	default:
+		return principal.Ref{}, fmt.Errorf("%w: %w: unsupported credential scheme %q", portal.ErrUnauthenticated, ErrUnauthenticated, cred.Scheme)
+	}
+}
+
 // Compile-time checks: the declared sources satisfy the trust seam, and the
 // ordered set is itself a source (a set of sets composes).
 var (
-	_ TrustSource  = (*TrustSources)(nil)
-	_ TrustSource  = (*FileTrustStore)(nil)
-	_ TrustSource  = (*OIDC)(nil)
-	_ BearerSource = (*OIDC)(nil)
+	_ TrustSource          = (*TrustSources)(nil)
+	_ TrustSource          = (*FileTrustStore)(nil)
+	_ TrustSource          = (*OIDC)(nil)
+	_ BearerSource         = (*OIDC)(nil)
+	_ portal.Authenticator = PortalAuthenticator{}
 )

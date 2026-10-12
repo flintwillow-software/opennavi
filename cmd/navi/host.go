@@ -31,6 +31,10 @@ func runHost(args []string) error {
 	workers := fs.Int("workers", 2, "thought worker count")
 	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address (not yet wired on the reference navi)")
 	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
+	trustStore := fs.String("trust-store", "", "path (or env var name holding a path) of a keyed trust store declaring principals and their keys; ADR 0021 decision 6")
+	oidcIssuer := fs.String("oidc-issuer", "", "OIDC identity-provider issuer URL; humans authenticate through it (ADR 0021 decisions 6-8)")
+	oidcAudience := fs.String("oidc-audience", "", "expected OIDC audience (this navi's client id); required with --oidc-issuer")
+	devAllowAll := fs.Bool("dev-allow-all", false, "DEVELOPMENT ONLY: trust every portal connection without a credential (implies AllowAll authentication)")
 	logLevel := fs.String("log-level", "", "log level: debug, info, warn, error (default info; empty = config/default)")
 	logFormat := fs.String("log-format", "", "log format: human | json (default: human on an interactive TTY, json otherwise)")
 	logFile := fs.String("log-file", "", "log file path (default stderr; files log JSON)")
@@ -76,20 +80,24 @@ func runHost(args []string) error {
 	}
 
 	return serveReferenceNavi(runParams{
-		ctx:         ctx,
-		runtimeFile: *runtimeFile,
-		dbPath:      *dbPath,
-		model:       *model,
-		ollamaHost:  *ollamaHost,
-		workDir:     *workDir,
-		naviID:      *naviID,
-		workers:     *workers,
-		portalAddr:  *portalAddr,
-		daemonMode:  *daemonMode,
-		noThinking:  *noThinking,
-		logger:      logger,
-		slogLogger:  slogFrom(lw, human, slogLevel(*logLevel)),
-		cancel:      stop,
+		ctx:          ctx,
+		runtimeFile:  *runtimeFile,
+		dbPath:       *dbPath,
+		model:        *model,
+		ollamaHost:   *ollamaHost,
+		workDir:      *workDir,
+		naviID:       *naviID,
+		workers:      *workers,
+		portalAddr:   *portalAddr,
+		trustStore:   *trustStore,
+		oidcIssuer:   *oidcIssuer,
+		oidcAudience: *oidcAudience,
+		devAllowAll:  *devAllowAll,
+		daemonMode:   *daemonMode,
+		noThinking:   *noThinking,
+		logger:       logger,
+		slogLogger:   slogFrom(lw, human, slogLevel(*logLevel)),
+		cancel:       stop,
 	})
 }
 

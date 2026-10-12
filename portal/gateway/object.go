@@ -162,9 +162,16 @@ func (g *Gateway) objectsOrRefuse(w http.ResponseWriter) (object.Surface, bool) 
 }
 
 // authorizeAttach gates a route on the same fail-closed attachment path the
-// observation stream uses.
+// observation stream uses: the connection's credential is authenticated by the
+// navi and the attachment authorized with the verified principal (ADR 0022
+// decisions 1 and 8).
 func (g *Gateway) authorizeAttach(w http.ResponseWriter, r *http.Request) bool {
-	if err := g.Attach(attachIdentity(r)); err != nil {
+	who, err := g.authenticate(r)
+	if err != nil {
+		g.refusal(w, err)
+		return false
+	}
+	if err := g.Attach(who); err != nil {
 		g.refusal(w, err)
 		return false
 	}
