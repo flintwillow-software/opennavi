@@ -9,6 +9,7 @@ import (
 	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -201,7 +202,7 @@ func TestWatchPostRemoveEmitsDelete(t *testing.T) {
 func TestMemoryChangeProjectsToDeltas(t *testing.T) {
 	n := liveNavi(t)
 	rec := datastore.MemoryRecord{
-		ID: "m1", Scope: datastore.ScopeUser, Subject: "deltas",
+		ID: "m1", Scope: datastore.ScopeUser, Subject: principal.MustParse("user:deltas"),
 		Content: "prefers terse answers", Importance: 3,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}

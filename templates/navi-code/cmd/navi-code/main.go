@@ -27,6 +27,7 @@ import (
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/navi"
 	"github.com/flintwillow-software/opennavi/portal/tui"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/skill"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/builtin"
@@ -193,7 +194,7 @@ func githubIngress(repo, mention string) []github.Subscription {
 		Repository: repo,
 		Events:     []github.EventKind{github.EventIssueMention},
 		Mention:    mention,
-		Principal:  "navi:navi-code",
+		Principal:  principal.MustParse("navi:navi-code"),
 	}}
 }
 

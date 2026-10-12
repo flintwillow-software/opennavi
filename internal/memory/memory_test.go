@@ -8,6 +8,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/tool"
 )
 
@@ -19,7 +20,7 @@ func newService(t *testing.T) (*Service, *inmem.Backend) {
 	svc, err := New(Config{
 		Memory:  backend.Memory(),
 		Submit:  func(w datastore.Write) { _ = w.Apply(backend) },
-		Subject: "navi",
+		Subject: principal.MustParse("navi:navi"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +39,7 @@ func TestHydrateAtConstruction(t *testing.T) {
 	backend := inmem.New()
 	if _, err := backend.Memory().Remember(datastore.MemoryRecord{
 		Scope:   datastore.ScopeUser,
-		Subject: "navi",
+		Subject: principal.MustParse("navi:navi"),
 		Content: "prefers terse answers",
 	}); err != nil {
 		t.Fatal(err)
@@ -47,7 +48,7 @@ func TestHydrateAtConstruction(t *testing.T) {
 	svc, err := New(Config{
 		Memory:  backend.Memory(),
 		Submit:  func(datastore.Write) {},
-		Subject: "navi",
+		Subject: principal.MustParse("navi:navi"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestWriteIsVisibleImmediatelyAndPersisted(t *testing.T) {
 		t.Fatalf("write not visible in injection: %q", block)
 	}
 
-	persisted, err := backend.Memory().Recall(datastore.RecallQuery{Scope: datastore.ScopeSession, Subject: "navi"})
+	persisted, err := backend.Memory().Recall(datastore.RecallQuery{Scope: datastore.ScopeSession, Subject: principal.MustParse("navi:navi")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestOnChangeReportsPersistedMutations(t *testing.T) {
 	svc, err := New(Config{
 		Memory:  backend.Memory(),
 		Submit:  func(w datastore.Write) { _ = w.Apply(backend) },
-		Subject: "navi",
+		Subject: principal.MustParse("navi:navi"),
 		OnChange: func(rec datastore.MemoryRecord, change Change) {
 			// The write must already be visible to a backend read.
 			persisted, err := backend.Memory().Recall(datastore.RecallQuery{})

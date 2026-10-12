@@ -28,7 +28,7 @@ func TestGithubIngressOptIn(t *testing.T) {
 	if s.Name != "mentions" || s.Repository != "acme/widgets" || s.Mention != "alice" {
 		t.Fatalf("unexpected subscription: %+v", s)
 	}
-	if s.Principal != "navi:navi-code" {
+	if s.Principal.String() != "navi:navi-code" {
 		t.Fatalf("principal = %q, want navi:navi-code", s.Principal)
 	}
 	if len(s.Events) != 1 || s.Events[0] != github.EventIssueMention {

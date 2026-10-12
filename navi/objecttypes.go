@@ -316,7 +316,7 @@ func memoryObject(r datastore.MemoryRecord) object.Object {
 		ID:      r.ID,
 		Version: r.UpdatedAt.UnixNano(),
 		Fields: map[string]any{
-			"id": r.ID, "scope": string(r.Scope), "subject": r.Subject, "content": r.Content,
+			"id": r.ID, "scope": string(r.Scope), "subject": r.Subject.String(), "content": r.Content,
 			"source": r.Source, "tags": r.Tags, "importance": r.Importance,
 			"expires_at": r.ExpiresAt, "created_at": r.CreatedAt, "updated_at": r.UpdatedAt,
 		},

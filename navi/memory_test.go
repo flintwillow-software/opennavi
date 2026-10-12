@@ -7,6 +7,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -25,7 +26,7 @@ func TestShortTermMemoryIsInjectedIntoEveryThought(t *testing.T) {
 	backend := inmem.New()
 	if _, err := backend.Memory().Remember(datastore.MemoryRecord{
 		Scope:   datastore.ScopeUser,
-		Subject: "mem-navi",
+		Subject: principal.MustParse("navi:mem-navi"),
 		Content: "prefers plain language",
 	}); err != nil {
 		t.Fatal(err)

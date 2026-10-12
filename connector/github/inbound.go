@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -78,9 +79,17 @@ type Subscription struct {
 	// Intent is what an event does to the queue. Empty = IntentSpawn.
 	Intent Intent
 	// Principal is the service principal the resulting thought acts as
-	// (ADR 0023 decision 2, ADR 0021 decision 10). Until the principal model
-	// lands this is the recorded identity string; empty = "connector:github".
-	Principal string
+	// (ADR 0023 decision 2, ADR 0021 decision 10). A validated principal
+	// reference. The zero Ref selects the connector's own principal,
+	// connector:github: a connector may act as its own principal (ADR 0023
+	// decision 2), which attributes inbound work to the connector rather
+	// than laundering it into the navi's service principal. Declare
+	// navi:<name> for work that must act as the navi itself (ADR 0021
+	// decision 10); the runtime's own machinery (cron, the plan-closing
+	// check) does not come through a subscription and acts as navi:<name>
+	// regardless. A refused enqueue is logged and retried, never dropped
+	// silently (see the poll loop).
+	Principal principal.Ref
 	// Prompt is the thought prompt for an event. Empty = a generated prompt.
 	Prompt string
 	// Priority is the enqueued thought's priority (1-10; 0 = 3).
@@ -311,9 +320,13 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 			prompt = fmt.Sprintf("GitHub %s in %s", kind, ev.Repo)
 		}
 	}
-	principal := strings.TrimSpace(sub.Principal)
-	if principal == "" {
-		principal = "connector:github"
+	actor := sub.Principal
+	if actor.IsZero() {
+		ref, err := principal.New(principal.KindConnector, "github")
+		if err != nil {
+			return fmt.Errorf("github: default service principal: %w", err)
+		}
+		actor = ref
 	}
 	t := &thought.Thought{
 		ID:        fmt.Sprintf("github-%s-%s", sub.Name, ev.ID),
@@ -329,7 +342,7 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 			"event":        string(kind),
 			"repo":         ev.Repo,
 			"event_id":     ev.ID,
-			"principal":    principal,
+			"principal":    actor.String(),
 		},
 	}
 	if ev.URL != "" {

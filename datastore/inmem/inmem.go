@@ -396,7 +396,7 @@ func (m memory) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord, error
 		if q.Scope != "" && rec.Scope != q.Scope {
 			continue
 		}
-		if q.Subject != "" && rec.Subject != q.Subject {
+		if !q.Subject.IsZero() && rec.Subject != q.Subject {
 			continue
 		}
 		if q.Query != "" && !strings.Contains(strings.ToLower(rec.Content), strings.ToLower(q.Query)) {

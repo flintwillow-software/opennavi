@@ -3,6 +3,8 @@ package datastore
 import (
 	"errors"
 	"time"
+
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // ErrMemoryNotFound is returned when a memory id does not exist.
@@ -33,9 +35,11 @@ type MemoryRecord struct {
 	ID string
 	// Scope is the ownership scope.
 	Scope Scope
-	// Subject is the in-scope subject (a user or navi identity, or the
-	// session id). Empty means the scope has no subject.
-	Subject string
+	// Subject is the principal that owns the entry (ADR 0021 decision 4):
+	// a validated principal reference, not a free string. The zero Ref
+	// means the scope has no subject. Pre-principal records keyed by a bare
+	// navi name are read back as navi:<name> (principal.ParseLegacy).
+	Subject principal.Ref
 	// Content is the entry body.
 	Content string
 	// Source records where the entry came from, when known.
@@ -57,8 +61,8 @@ type MemoryRecord struct {
 type RecallQuery struct {
 	// Scope filters by ownership scope.
 	Scope Scope
-	// Subject filters by in-scope subject.
-	Subject string
+	// Subject filters by owning principal; the zero Ref is ignored.
+	Subject principal.Ref
 	// Query is a literal substring match on Content.
 	Query string
 	// Tags require every listed tag.
