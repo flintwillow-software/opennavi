@@ -140,7 +140,33 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 	case classTagCategory:
 		data = f.tagCategories
 	}
-	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": filterDocs(data, query)})
+	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": stripQueryFields(filterDocs(data, query), query)})
+}
+
+// stripQueryFields mimics the live server, which uses find-all's query as an
+// exclusion projection: every top-level scalar field named in the query is
+// absent from the returned documents. The connector compensates in
+// restoreQueryFields, and this makes the fake able to catch a regression.
+// Documents are copied, so the fake's own state is never mutated.
+func stripQueryFields(docs []map[string]any, query map[string]any) []map[string]any {
+	if len(query) == 0 {
+		return docs
+	}
+	out := make([]map[string]any, 0, len(docs))
+	for _, d := range docs {
+		clone := make(map[string]any, len(d))
+		for k, v := range d {
+			clone[k] = v
+		}
+		for k, v := range query {
+			if _, nested := v.(map[string]any); nested {
+				continue
+			}
+			delete(clone, k)
+		}
+		out = append(out, clone)
+	}
+	return out
 }
 
 // serveSearch answers the full-text search route with Huly's `{docs, total}`
@@ -475,8 +501,7 @@ func TestIssueUpdateSetsStatusAssigneeAndPriority(t *testing.T) {
 	if tx["modifiedBy"] != "social-1" {
 		t.Errorf("author = %v, want the account's primary social id", tx["modifiedBy"])
 	}
-	ops, _ := tx["operations"].(map[string]any)
-	set, _ := ops["$set"].(map[string]any)
+	set, _ := tx["operations"].(map[string]any)
 	if set["status"] != "tracker:status:InProgress" {
 		t.Errorf("status = %v, want the resolved reference", set["status"])
 	}
@@ -500,8 +525,7 @@ func TestIssueUpdateClearsAssignee(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	ops, _ := f.txs[0]["operations"].(map[string]any)
-	set, _ := ops["$set"].(map[string]any)
+	set, _ := f.txs[0]["operations"].(map[string]any)
 	if v, present := set["assignee"]; !present || v != nil {
 		t.Errorf("assignee = %v (present %v), want an explicit null", v, present)
 	}

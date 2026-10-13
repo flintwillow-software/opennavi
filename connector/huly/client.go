@@ -238,13 +238,41 @@ func (c *Client) findAll(ctx context.Context, class string, query, options map[s
 		Value []map[string]any `json:"value"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Value != nil {
+		restoreQueryFields(envelope.Value, query)
 		return envelope.Value, nil
 	}
 	var bare []map[string]any
 	if err := json.Unmarshal(body, &bare); err != nil {
 		return nil, fmt.Errorf("huly: decode find-all response: %w", err)
 	}
+	restoreQueryFields(bare, query)
 	return bare, nil
+}
+
+// restoreQueryFields puts back the scalar fields Huly's REST find-all omits
+// from the documents it returns. The server uses the query as an EXCLUSION
+// projection as well as a filter: a document fetched with
+// `{"identifier": "NAVI"}` comes back without `identifier`, and one fetched
+// with `{"_id": id}` comes back without `_id`, so a caller that needs the
+// matched field would read an empty string — which is how the create path lost
+// the project identifier and the label path lost the issue id. A document
+// matched the query, so the queried value is true of it. A nested value
+// (`{"$in": [...]}`) is left alone: the server does not strip it, and the
+// matching element is not known client-side.
+func restoreQueryFields(docs []map[string]any, query map[string]any) {
+	if len(query) == 0 {
+		return
+	}
+	for _, doc := range docs {
+		for key, want := range query {
+			if _, nested := want.(map[string]any); nested {
+				continue
+			}
+			if _, present := doc[key]; !present {
+				doc[key] = want
+			}
+		}
+	}
 }
 
 // tx applies one transaction. Huly's own client posts a single transaction

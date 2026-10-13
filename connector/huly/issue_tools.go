@@ -155,8 +155,9 @@ func (c *Client) issueUpdate(ctx context.Context, args map[string]any) (string, 
 		"objectSpace": stringField(issue, "space"),
 		"modifiedOn":  time.Now().UnixMilli(),
 		"modifiedBy":  s.socialID,
-		"operations":  map[string]any{"$set": set},
-		"retrieve":    false,
+		// Huly has no `$set`: a plain field map IS the assignment form.
+		"operations": set,
+		"retrieve":   false,
 	}
 	if err := c.tx(ctx, transaction); err != nil {
 		return "", err
