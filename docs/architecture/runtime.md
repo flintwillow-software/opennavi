@@ -336,14 +336,16 @@ action, then **authorizes before validating** (a caller who may not act learns
 nothing about the arguments), validates through the tool registry's schema
 checker (an action is checked by the same machinery a tool call is), and only
 then delegates to the type's registered handler, which mutates through the view
-the type was bound to. Authorization is **fail-closed**: no authorizer wired
-refuses every action, and the authorizer is the same `portal.Authorizer` a
-control portal uses (`navi.WithObjectAuthorizer`), so a navi has one
-authorization story rather than two. The authorizer is asked about a
-**verified** principal reference — never a value a client asserted — and the
-surface still acts as one declared principal for every connection; threading a
-connection's verified principal into the object path is the
-delegated-authorization slice (ADR 0022; NAVI-404).
+the type was bound to. Authorization is **fail-closed** and shares the control
+portal's authorizer: reads authorize `read:<type>` (a detail as its own type)
+and actions authorize `act:<type>.<action>` as the surface's **actor** — the
+principal the navi resolved plus the request facts the binding supplied. The
+default actor is the in-process console; `portal.Scoper` lets a network binding
+re-scope the surface to the connection's verified principal before every read
+and action, so the surface no longer acts as one declared principal for every
+connection (ADR 0022 decision 1). `navi.WithObjectAuthorizer` remains as an
+explicit dev/test override. A refusal carries the engine's reason, so it is
+loud at the call site.
 
 **Deltas.** `Watch` is the live path: the surface translates the existing
 observation fanout — it does not add a second one — into `object.Delta`. A
