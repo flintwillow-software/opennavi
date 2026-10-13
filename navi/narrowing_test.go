@@ -160,3 +160,30 @@ func TestOnChannelValidates(t *testing.T) {
 		t.Error("the channel match must trim and fold case")
 	}
 }
+
+// TestChannelLabelsAreNotReusableAcrossTransports pins the hazard OnChannel
+// documents. "Local only" cannot be expressed as the absence of a transport (a
+// transport condition correctly fails when there is none), so locality has to
+// be a channel — which makes the label load-bearing. A label reused across
+// transports widens the grant silently, and naming both facts is the fix.
+func TestChannelLabelsAreNotReusableAcrossTransports(t *testing.T) {
+	// The recommended form: channel AND transport, so "this device's own
+	// microphone" cannot drift into "any audio, anywhere".
+	ownMic := CapabilitySet{Allow: []Grant{
+		When(Call("shell_exec"), OnChannel("microphone"), OnTransport("in-process")),
+	}}
+	relayed := RequestContext{Channel: "microphone", Transport: "lora"}
+	if ownMic.Permits(Call("shell_exec"), relayed) {
+		t.Error("the grant must not reach mesh-relayed audio")
+	}
+	if !ownMic.Permits(Call("shell_exec"), RequestContext{Channel: "microphone", Transport: "in-process"}) {
+		t.Error("the grant must reach this device's own microphone")
+	}
+
+	// The hazard, made explicit: a channel-only grant cannot tell the two
+	// apart, because the label is the only fact it names.
+	labelOnly := CapabilitySet{Allow: []Grant{When(Call("shell_exec"), OnChannel("microphone"))}}
+	if !labelOnly.Permits(Call("shell_exec"), relayed) {
+		t.Fatal("fixture: a reused label is expected to widen — that is the hazard being documented")
+	}
+}

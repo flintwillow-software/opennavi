@@ -112,6 +112,18 @@ compiled, identity is resolved at runtime** (ADR 0021).
   carries the operator's intent — and not about being in-process: a portal whose
   input is ambient (a room microphone, a sensor) must authenticate as a real
   principal, or whoever is in the room holds root-equivalent capability.
+- **The input channel is a policy fact, and it is not authority.**
+  `navi.OnChannel` makes the console-versus-microphone distinction expressible
+  rather than only documented, and it says *where intent arrived*, not *who
+  authored it*: a microphone grant is exercisable by whoever is audible, so
+  scoping it narrowly (no `shell_exec`, confirmation for consequential actions,
+  speaker verification later) is a deployment decision this vocabulary cannot
+  make. Because a transport condition correctly fails when a binding has no
+  transport, "local only" is expressed as a channel — which makes a channel
+  label load-bearing: **a label must not be reused across transports**, or a
+  grant silently widens from "this device's microphone" to "any audio,
+  anywhere". Where locality matters, name both facts
+  (`OnChannel(...)` together with `OnTransport(...)`).
 - **The development default is explicit and named.** `portal.AllowAllAuthenticator`
   trusts every connection, credential or none; the reference navi wires it only
   behind `--dev-allow-all`. It is never the shipped model.

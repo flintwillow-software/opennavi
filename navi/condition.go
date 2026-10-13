@@ -148,6 +148,27 @@ type channelCondition struct{ want string }
 // what makes ADR 0021 decision 9's "the console is root because it is the
 // terminal the operator is sitting at" expressible as policy rather than only
 // as prose.
+//
+// Two things it does NOT settle, both of which fail silently if assumed:
+//
+//   - It expresses WHERE intent arrived, not WHO authored it. The channel is
+//     not authority: OnChannel("microphone") grants to whatever the microphone
+//     transcribes — a guest, a television, a recording. Scoping the microphone
+//     differently from the console is the necessary half; scoping it *narrowly*
+//     (no shell_exec, confirmation for consequential actions, speaker
+//     verification later) is the other half, and it is a deployment decision
+//     this vocabulary cannot make for you.
+//
+//   - It makes the LABEL load-bearing. A transport condition correctly fails
+//     when a binding has no transport, so "local only" cannot be expressed as
+//     the absence of a transport — it has to be a channel. If any binding ever
+//     labels mesh-relayed audio "microphone", OnChannel("microphone") widens
+//     silently from "this device's own microphone" to "any audio, anywhere",
+//     and nothing in evaluation notices. The rule that keeps it sound: a
+//     channel label must not be reused across transports. Where locality
+//     matters, name both facts rather than leaning on the label alone:
+//
+//     When(Call("shell_exec"), OnChannel("microphone"), OnTransport("in-process"))
 func OnChannel(label string) Condition {
 	return channelCondition{want: strings.ToLower(strings.TrimSpace(label))}
 }
