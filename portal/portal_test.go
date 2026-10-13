@@ -40,7 +40,7 @@ func (p *stubPortal) Start(ctx context.Context, deps Deps) error {
 	return nil
 }
 
-func (p *stubPortal) Stop() error                                            { return nil }
+func (p *stubPortal) Stop() error                                    { return nil }
 func (p *stubPortal) Attach(Actor) error                             { return nil }
 func (p *stubPortal) Steer(_ Actor, thoughtID, message string) error { return nil }
 func (p *stubPortal) Pause(_ Actor, thoughtID string) error          { return nil }

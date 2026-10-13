@@ -25,6 +25,21 @@ const DefaultThoughtBudget = 16000
 // 4. Assembly is reproducible: the same declarations and the same memory
 // yield the same block.
 func (n *Navi) assembleThought(t *thought.Thought) error {
+	// A follow-up inherits its originator from the thought it continues (ADR
+	// 0022 decision 3): a thought with no origin that declares a dependency
+	// takes that dependency's principal, request facts, and lineage. This is
+	// the queue-driven inheritance rule — `thoughts_create` chains a plan by
+	// naming the ids it continues, and the runtime's own closing check
+	// depends on the plan's sinks — so "on whose behalf" is carried without
+	// the creating tool having to know it. A thought with neither an origin
+	// nor a dependency is system-originated and acts as navi:<name>
+	// (decision 3, ADR 0021 decision 10).
+	if t.Origin.IsZero() {
+		if parent := n.parentThought(t); parent != nil {
+			t.InheritFrom(parent)
+		}
+	}
+
 	prompt := n.personality
 
 	if t.Mode != "" {
@@ -44,6 +59,21 @@ func (n *Navi) assembleThought(t *thought.Thought) error {
 	}
 
 	t.Assembled = n.truncateContext(prompt)
+	return nil
+}
+
+// parentThought returns the first of a thought's declared dependencies that
+// the queue can resolve, or nil. It runs from the assembler, outside the
+// queue lock, so reading the parent is safe.
+func (n *Navi) parentThought(t *thought.Thought) *thought.Thought {
+	if n.Thoughts == nil {
+		return nil
+	}
+	for _, id := range t.DependsOn {
+		if p, err := n.Thoughts.GetThought(id); err == nil {
+			return p
+		}
+	}
 	return nil
 }
 

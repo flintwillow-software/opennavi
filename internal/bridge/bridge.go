@@ -49,6 +49,13 @@ type Options struct {
 	// level is listed (enforcement seam: IAM grants map onto
 	// these levels; until IAM lands, callers filter directly).
 	Access []registry.ToolAccess
+	// Authorize, when non-nil, is consulted before EVERY dispatched call
+	// (ADR 0022 decision 5): it returns nil to allow or a refusal error. It is
+	// per-call rather than a one-time surface filter, so a revocation takes
+	// effect on the next call and a confused-deputy action is refused as the
+	// originator rather than as the navi. The composition root supplies it;
+	// this package stays free of any policy vocabulary.
+	Authorize func(name string) error
 }
 
 // Bind registers every active registry tool that passes the Options
@@ -105,7 +112,7 @@ func Bind(ex *agent.ToolExecutor, reg *registry.Registry, opts Options) ([]strin
 			timeout = override
 		}
 
-		ex.RegisterTool(agentTool(def), dispatchHandler(reg, def.Name, timeout))
+		ex.RegisterTool(agentTool(def), dispatchHandler(reg, def.Name, timeout, opts.Authorize))
 		bound = append(bound, name)
 	}
 	sort.Strings(bound)
@@ -123,11 +130,19 @@ func agentTool(def registry.ToolDefinition) agent.AgentTool {
 	}
 }
 
-// dispatchHandler wraps reg.Dispatch with the timeout envelope. The
-// handler's signature matches agent.ToolExecutor's (no ctx): the
-// timeout context is built here.
-func dispatchHandler(reg *registry.Registry, name string, timeout time.Duration) func(map[string]any) (string, error) {
+// dispatchHandler wraps reg.Dispatch with the per-call authorization check
+// and the timeout envelope. The handler's signature matches agent.ToolExecutor's
+// (no ctx): the timeout context is built here.
+func dispatchHandler(reg *registry.Registry, name string, timeout time.Duration, authorize func(string) error) func(map[string]any) (string, error) {
 	return func(args map[string]any) (string, error) {
+		// Authorization precedes argument handling: a caller who may not call
+		// the tool learns nothing about what it expects, and no work is done
+		// on its behalf.
+		if authorize != nil {
+			if err := authorize(name); err != nil {
+				return "", err
+			}
+		}
 		raw, err := json.Marshal(args)
 		if err != nil {
 			return "", fmt.Errorf("%s: encode arguments: %w", name, err)

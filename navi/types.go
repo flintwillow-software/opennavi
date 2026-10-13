@@ -58,6 +58,29 @@ func validateTypeRegistration(r TypeRegistration) error {
 
 // ── the surface ─────────────────────────────────────────────────────────
 
+// objectGate decides one object-surface capability for an actor (ADR 0022
+// decisions 1, 5 and 7): a read of a type, or a declared action on it. The
+// navi implements it over the compiled policy, so the object path and the tool
+// path ask the same engine about the same principal; an explicit
+// portal.Authorizer wired with WithObjectAuthorizer is adapted to it. A nil
+// gate refuses every read and action — fail closed.
+type objectGate interface {
+	authorizeCapability(actor portal.Actor, cap Capability) error
+}
+
+// authorizerGate adapts an explicit portal.Authorizer (WithObjectAuthorizer)
+// to the object gate. The capability's canonical string is what the authorizer
+// sees as its action, so an AllowAll dev default and a refusing test
+// authorizer both keep working.
+type authorizerGate struct{ auth portal.Authorizer }
+
+func (g authorizerGate) authorizeCapability(actor portal.Actor, cap Capability) error {
+	if g.auth == nil {
+		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, cap)
+	}
+	return g.auth.Authorize(portal.Action(cap.String()), actor)
+}
+
 // objectSurface is the navi's object.Surface: it resolves a type name to its
 // registered provider and enforces the descriptor's field visibility, so a
 // provider may return every field and the surface still omits what the
@@ -66,13 +89,12 @@ func validateTypeRegistration(r TypeRegistration) error {
 type objectSurface struct {
 	types *TypeCollection
 
-	// auth and actor are the authorization path for actions (ADR 0017
-	// decision 4; ADR 0022 decisions 1 and 5): the same portal.Authorizer a
-	// control portal uses, consulted with the actor the surface acts as. The
-	// default actor is the in-process console (ADR 0021 decision 9); a
-	// network binding re-scopes the surface to its verified actor. A nil
-	// authorizer refuses every action — fail closed.
-	auth  portal.Authorizer
+	// gate is the authorization path for reads and actions (ADR 0017 decision
+	// 4; ADR 0022 decisions 1, 5 and 7): the compiled policy by default, or an
+	// explicit authorizer. actor is who the surface acts as — the in-process
+	// console by default (ADR 0021 decision 9); a network binding re-scopes the
+	// surface to its verified actor before a read or action.
+	gate  objectGate
 	actor portal.Actor
 
 	// deltas is the bounded, cursor-ed live-change window Watch reads
@@ -84,20 +106,37 @@ type objectSurface struct {
 
 var _ object.Surface = (*objectSurface)(nil)
 var _ object.Notifier = (*objectSurface)(nil)
+var _ portal.Scoper = (*objectSurface)(nil)
 
-func newObjectSurface(types *TypeCollection, auth portal.Authorizer, who principal.Ref) *objectSurface {
+func newObjectSurface(types *TypeCollection, gate objectGate, actor portal.Actor) *objectSurface {
 	return &objectSurface{
-		types: types,
-		auth:  auth,
-		// The default actor is the in-process console: the terminal the
-		// operator is sitting at (ADR 0021 decision 9). A network binding
-		// re-scopes the surface with its own verified actor.
-		actor: portal.Actor{
-			Who:  who,
-			Info: portal.RequestInfo{Transport: "in-process", Channel: "console"},
-		},
+		types:  types,
+		gate:   gate,
+		actor:  actor,
 		deltas: object.NewDeltaWindow(0),
 	}
+}
+
+// consoleActor is the actor an in-process portal acts as: the console — the
+// terminal the operator is sitting at (ADR 0021 decision 9). Its facts are the
+// in-process transport and the console channel, which is what makes a policy
+// able to distinguish it from an ambient input embedded the same way.
+func consoleActor(who principal.Ref) portal.Actor {
+	return portal.Actor{
+		Who:  who,
+		Info: portal.RequestInfo{Transport: "in-process", Channel: "console"},
+	}
+}
+
+// Scope implements portal.Scoper (ADR 0022 decision 1): a binding that
+// verified an actor re-scopes the surface to it, so the object read and action
+// paths authorize as the connection's principal rather than as one declared
+// principal. The returned surface shares the type registry and the delta
+// window, so the live path is one stream whatever the actor.
+func (s *objectSurface) Scope(actor portal.Actor) object.Surface {
+	scoped := *s
+	scoped.actor = actor
+	return &scoped
 }
 
 // Types returns every exposed type descriptor, in declaration order. The
@@ -112,10 +151,13 @@ func (s *objectSurface) Types() ([]object.Type, error) {
 	return out, nil
 }
 
-// List returns a bounded page of one type's objects.
+// List returns a bounded page of one type's objects, as the surface's actor.
 func (s *objectSurface) List(typeName string, q object.Query) ([]object.Object, string, error) {
 	reg, err := s.registration(typeName)
 	if err != nil {
+		return nil, "", err
+	}
+	if err := s.authorizeCap(Read(typeName)); err != nil {
 		return nil, "", err
 	}
 	objs, next, err := reg.Provider.List(q)
@@ -125,10 +167,13 @@ func (s *objectSurface) List(typeName string, q object.Query) ([]object.Object, 
 	return projectAll(reg.Type, objs), next, nil
 }
 
-// Get returns one object of one type.
+// Get returns one object of one type, as the surface's actor.
 func (s *objectSurface) Get(typeName, id string) (object.Object, error) {
 	reg, err := s.registration(typeName)
 	if err != nil {
+		return object.Object{}, err
+	}
+	if err := s.authorizeCap(Read(typeName)); err != nil {
 		return object.Object{}, err
 	}
 	obj, err := reg.Provider.Get(id)
@@ -148,6 +193,11 @@ func (s *objectSurface) Detail(typeName, id, detail string, q object.Query) ([]o
 	d, ok := reg.Type.Detail(detail)
 	if !ok {
 		return nil, "", fmt.Errorf("%w: %s.%s", object.ErrUnknownDetail, typeName, detail)
+	}
+	// A detail read is a read of the detail's own type, so a grant for the
+	// parent type does not cover it — the referential rule is per target.
+	if err := s.authorizeCap(Read(d.Type)); err != nil {
+		return nil, "", err
 	}
 	objs, next, err := reg.Provider.Detail(id, detail, q)
 	if err != nil {
@@ -175,7 +225,7 @@ func (s *objectSurface) Act(typeName, id, action string, args map[string]any) er
 	}
 	// Authorization precedes validation: an unauthorized caller learns
 	// nothing about the arguments an action expects.
-	if err := s.authorize(action); err != nil {
+	if err := s.authorizeCap(Act(typeName, action)); err != nil {
 		return err
 	}
 	if err := validateActionArgs(a, args); err != nil {
@@ -191,14 +241,18 @@ func (s *objectSurface) Act(typeName, id, action string, args map[string]any) er
 	return nil
 }
 
-// authorize consults the navi's authorizer for one action, as the surface's
-// actor. No authorizer is wired means no action is permitted (fail closed) —
-// the same discipline portal.Control follows.
-func (s *objectSurface) authorize(action string) error {
-	if s.auth == nil {
-		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, action)
+// authorizeCap consults the object gate for one capability, as the surface's
+// actor. A nil gate means nothing is permitted (fail closed) — the same
+// discipline portal.Control follows. A zero actor is refused too: an action
+// with no verified principal never defaults open (ADR 0022 decision 9).
+func (s *objectSurface) authorizeCap(cap Capability) error {
+	if s.gate == nil {
+		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, cap)
 	}
-	return s.auth.Authorize(portal.Action(action), s.actor)
+	if s.actor.IsZero() {
+		return fmt.Errorf("%w: %s (no verified principal — fail closed)", portal.ErrUnauthorized, cap)
+	}
+	return s.gate.authorizeCapability(s.actor, cap)
 }
 
 // Watch returns the object deltas after a cursor, the next cursor to use,

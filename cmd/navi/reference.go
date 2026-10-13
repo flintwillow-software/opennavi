@@ -73,10 +73,11 @@ type runParams struct {
 	cancel     context.CancelFunc
 }
 
-// objectActor is the principal the reference navi's object surface acts as.
-// The surface still acts as ONE declared principal for every connection;
-// threading a connection's verified principal into the object path is the
-// delegated-authorization slice (ADR 0022; NAVI-404).
+// objectActor is the reference navi's own service principal, navi:<name>
+// (ADR 0021 decision 10). It is what --dev-allow-all resolves every
+// connection to and what the in-process console acts as; a network binding
+// re-scopes the object surface to the connection's verified principal
+// (ADR 0022 decision 1).
 var objectActor = principal.MustParse("navi:navi")
 
 // serveReferenceNavi assembles the reference navi and serves it until ctx ends (or,
@@ -105,10 +106,13 @@ func serveReferenceNavi(p runParams) error {
 	// Portals are authenticated by the navi (ADR 0021 decisions 6-8, ADR 0022
 	// decision 8): a connection's credential is resolved through the declared
 	// trust sources, and the principal it yields is what the control surface
-	// authorizes. The authorizer is still AllowAll — the compiled policy engine
-	// is NAVI-399 — but it is asked about a VERIFIED principal, never a value a
-	// client asserted.
-	auth := portal.AllowAll()
+	// authorizes. The authorizer is the navi itself — the compiled policy
+	// (NAVI-399, NAVI-404) — so a control action or object read is decided
+	// against the verified actor and the request facts the binding supplied,
+	// never a value a client asserted. The navi's own service principal
+	// (navi:navi) holds the compiled ceiling by construction, which is what
+	// keeps the in-process console and --dev-allow-all working; a deployment
+	// declares roles for the principals its trust source resolves.
 
 	opts := []navi.Option{
 		navi.WithVersion("0.1.0"),
@@ -120,8 +124,20 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithShortTermMemory(),
-		navi.WithObjectAuthorizer(auth, objectActor),
 	}
+
+	// The compiled policy (ADR 0021 decisions 3-5). connector:github may
+	// enqueue work — its inbound events become thoughts — but call no tools and
+	// read no types directly. The navi's own service principal holds the
+	// compiled ceiling by construction, so this is the one role the reference
+	// navi needs to name; a deployment declares roles for its own principals.
+	githubEnqueue, rerr := navi.NewRole("github-enqueue",
+		navi.TrustPolicy{Principals: []principal.Ref{principal.MustParse("connector:github")}},
+		navi.CapabilitySet{Allow: navi.Allows(navi.Enqueue())})
+	if rerr != nil {
+		return fmt.Errorf("navi: github role: %w", rerr)
+	}
+
 	if p.trustStore != "" {
 		store, terr := navi.NewFileTrustStore(navi.FileTrustStoreConfig{Path: p.trustStore})
 		if terr != nil {
@@ -145,6 +161,10 @@ func serveReferenceNavi(p runParams) error {
 	}
 
 	n := navi.New("navi", opts...)
+
+	if err := n.Roles.Add(githubEnqueue); err != nil {
+		return fmt.Errorf("navi: github role: %w", err)
+	}
 
 	// The reference navi declares all three backends: `fs` is the compiled
 	// default (ADR 0011 — markdown + frontmatter, human-inspectable, durable),
@@ -175,7 +195,7 @@ func serveReferenceNavi(p runParams) error {
 	if err := addCron(n, rc, store.DB()); err != nil {
 		return err
 	}
-	if err := addPortals(n, p, auth); err != nil {
+	if err := addPortals(n, p, n); err != nil {
 		return err
 	}
 

@@ -26,7 +26,7 @@ func toolStateNavi(t *testing.T) (*Navi, *objectSurface, datastore.ToolState) {
 			t.Fatalf("Add(%s): %v", reg.Type.Name, err)
 		}
 	}
-	return n, newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test")), state
+	return n, newObjectSurface(n.Types, authorizerGate{portal.AllowAll()}, consoleActor(principal.MustParse("service:test"))), state
 }
 
 func TestActThoughtLifecycleActions(t *testing.T) {
@@ -113,7 +113,7 @@ func TestActValidatesDeclaredArgs(t *testing.T) {
 func TestActFailsClosedWithoutAnAuthorizer(t *testing.T) {
 	n := New("actions-noauth", WithPlanCloseCheck(false))
 	enqueueThought(t, n, "t1", time.Now().UTC())
-	s := newObjectSurface(n.Types, nil, principal.Ref{})
+	s := newObjectSurface(n.Types, nil, portal.Actor{})
 
 	if err := s.Act(TypeThought, "t1", "pause", nil); !errors.Is(err, portal.ErrUnauthorized) {
 		t.Fatalf("Act without an authorizer = %v, want ErrUnauthorized", err)
@@ -132,7 +132,7 @@ func TestActRefusalFromAuthorizerStopsTheAction(t *testing.T) {
 		}
 		return portal.ErrUnauthorized
 	})
-	s := newObjectSurface(n.Types, deny, principal.MustParse("service:operator"))
+	s := newObjectSurface(n.Types, authorizerGate{deny}, consoleActor(principal.MustParse("service:operator")))
 
 	if err := s.Act(TypeThought, "t1", "pause", nil); !errors.Is(err, portal.ErrUnauthorized) {
 		t.Fatalf("Act with a refusing authorizer = %v, want ErrUnauthorized", err)

@@ -66,8 +66,8 @@ func (p *fakePortal) events() []thought.Event {
 	return append([]thought.Event(nil), p.seen...)
 }
 
-func (p *fakePortal) Stop() error                                         { close(p.stopped); return nil }
-func (p *fakePortal) Addr() string                                        { return p.addr }
+func (p *fakePortal) Stop() error                                        { close(p.stopped); return nil }
+func (p *fakePortal) Addr() string                                       { return p.addr }
 func (p *fakePortal) Attach(portal.Actor) error                          { return nil }
 func (p *fakePortal) Steer(_ portal.Actor, a, b string) error            { return nil }
 func (p *fakePortal) Pause(_ portal.Actor, a string) error               { return nil }

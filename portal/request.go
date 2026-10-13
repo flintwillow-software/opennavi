@@ -3,6 +3,7 @@ package portal
 import (
 	"time"
 
+	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -59,6 +60,18 @@ type Actor struct {
 
 // IsZero reports whether no principal was verified.
 func (a Actor) IsZero() bool { return a.Who.IsZero() }
+
+// Scoper binds an object surface to the actor a binding verified (ADR 0022
+// decision 1). The gateway calls it after authenticating, so the object read
+// and action paths authorize as the connection's principal instead of as one
+// declared principal; the in-process console uses the surface as handed to it.
+// A surface that does not implement it acts as its own declared actor.
+type Scoper interface {
+	// Scope returns the surface as actor sees it: reads are authorized as
+	// actor and actions are authorized as actor. It does not re-authenticate —
+	// the actor is already verified.
+	Scope(actor Actor) object.Surface
+}
 
 // recordOrigin attributes t to actor and records the request facts (ADR 0022
 // decisions 2 and 3). It is the one place a thought's origin is established,

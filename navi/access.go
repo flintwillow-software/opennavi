@@ -157,6 +157,59 @@ func (n *Navi) originActor(t *thought.Thought) portal.Actor {
 	}
 }
 
+// toolAuthorize returns the per-call gate for one thought's tool surface
+// (ADR 0022 decision 5): every call is authorized as the thought's
+// ORIGINATING principal, with the facts its originating request arrived with,
+// so the tool path and the object path share the principal and the engine. A
+// thought with no recorded origin acts as the navi's service principal
+// (decision 3).
+func (n *Navi) toolAuthorize(t *thought.Thought) func(name string) error {
+	actor := n.originActor(t)
+	return func(name string) error {
+		return n.authorizeCapability(actor, Call(name))
+	}
+}
+
+// objectGate returns the object surface's decision seam: the compiled policy
+// by default (the navi itself), or an explicit portal.Authorizer wired with
+// WithObjectAuthorizer.
+func (n *Navi) objectGate() objectGate {
+	if n.objectAuth != nil {
+		return authorizerGate{auth: n.objectAuth}
+	}
+	return n
+}
+
+// objectActor returns the actor the in-process object surface acts as: the
+// explicitly declared principal, else the navi's own service principal. Either
+// way the facts are the console's — the in-process transport and the console
+// input channel — so a policy can scope a grant to the terminal (ADR 0021
+// decision 9).
+func (n *Navi) objectActor() portal.Actor {
+	who := n.objectWho
+	if who.IsZero() {
+		who = n.serviceRef()
+	}
+	return consoleActor(who)
+}
+
+// authorizeCapability implements objectGate over the compiled policy: the
+// object read and action paths ask the same engine as the portal and tool
+// paths, about the same principal (ADR 0022 decisions 1 and 5). A refusal
+// carries the engine's reason.
+func (n *Navi) authorizeCapability(actor portal.Actor, cap Capability) error {
+	if actor.IsZero() {
+		return fmt.Errorf("%w: %s (no verified principal — fail closed)", portal.ErrUnauthorized, cap)
+	}
+	if d := n.decideActor(actor, cap, nil); !d.Allowed {
+		return fmt.Errorf("%w: %s: %s", portal.ErrUnauthorized, cap, d.Reason)
+	}
+	return nil
+}
+
 // Compile-time check: the composition root is the policy authorizer a portal
-// receives (ADR 0022 decision 8).
-var _ portal.Authorizer = (*Navi)(nil)
+// receives (ADR 0022 decision 8), and the object surface's default gate.
+var (
+	_ portal.Authorizer = (*Navi)(nil)
+	_ objectGate        = (*Navi)(nil)
+)

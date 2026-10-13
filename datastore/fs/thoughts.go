@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -30,6 +31,9 @@ type thoughtDoc struct {
 	Mode       string            `yaml:"mode,omitempty"`
 	Skills     []string          `yaml:"skills,omitempty"`
 	DependsOn  []string          `yaml:"depends_on,omitempty"`
+	Origin     string            `yaml:"origin,omitempty"`
+	Lineage    []string          `yaml:"lineage,omitempty"`
+	OriginInfo *originInfoDoc    `yaml:"origin_info,omitempty"`
 	Assembled  string            `yaml:"assembled,omitempty"`
 	DeferUntil string            `yaml:"defer_until,omitempty"`
 	LogPath    string            `yaml:"log_path,omitempty"`
@@ -40,6 +44,16 @@ type thoughtDoc struct {
 	HasTranscript       bool   `yaml:"has_transcript,omitempty"`
 	Messages            int    `yaml:"messages,omitempty"`
 	TranscriptUpdatedAt string `yaml:"transcript_updated_at,omitempty"`
+}
+
+// originInfoDoc is how a thought's originating request facts are written:
+// transport, input channel, source address, and the time it was admitted.
+// They are facts about the request, never an identity (ADR 0021 decision 9).
+type originInfoDoc struct {
+	Transport  string `yaml:"transport,omitempty"`
+	Channel    string `yaml:"channel,omitempty"`
+	RemoteAddr string `yaml:"remote_addr,omitempty"`
+	At         string `yaml:"at,omitempty"`
 }
 
 type thoughts struct{ b *Backend }
@@ -378,6 +392,7 @@ func rowDoc(th *thought.Thought) (thoughtDoc, error) {
 		Skills:     th.Skills,
 		DependsOn:  th.DependsOn,
 		Assembled:  th.Assembled,
+		Lineage:    th.Lineage,
 		DeferUntil: formatTime(th.DeferUntil),
 		LogPath:    th.LogPath,
 		CreatedAt:  formatTime(th.CreatedAt),
@@ -385,6 +400,17 @@ func rowDoc(th *thought.Thought) (thoughtDoc, error) {
 	}
 	if len(th.Checkpoint) > 0 {
 		doc.Checkpoint = base64.StdEncoding.EncodeToString(th.Checkpoint)
+	}
+	if !th.Origin.IsZero() {
+		doc.Origin = th.Origin.String()
+	}
+	if !th.OriginInfo.IsZero() {
+		doc.OriginInfo = &originInfoDoc{
+			Transport:  th.OriginInfo.Transport,
+			Channel:    th.OriginInfo.Channel,
+			RemoteAddr: th.OriginInfo.RemoteAddr,
+			At:         formatTime(th.OriginInfo.At),
+		}
 	}
 	return doc, nil
 }
@@ -404,8 +430,28 @@ func docThought(path string, doc *thoughtDoc) (*thought.Thought, error) {
 		Mode:      doc.Mode,
 		Skills:    doc.Skills,
 		DependsOn: doc.DependsOn,
+		Lineage:   doc.Lineage,
 		Assembled: doc.Assembled,
 		LogPath:   doc.LogPath,
+	}
+	if doc.Origin != "" {
+		ref, perr := principal.Parse(doc.Origin)
+		if perr != nil {
+			return nil, fmt.Errorf("fs: %s: origin: %w", path, perr)
+		}
+		th.Origin = ref
+	}
+	if doc.OriginInfo != nil {
+		at, aerr := parseTime(doc.OriginInfo.At)
+		if aerr != nil {
+			return nil, fmt.Errorf("fs: %s: origin_info.at: %w", path, aerr)
+		}
+		th.OriginInfo = thought.OriginInfo{
+			Transport:  doc.OriginInfo.Transport,
+			Channel:    doc.OriginInfo.Channel,
+			RemoteAddr: doc.OriginInfo.RemoteAddr,
+			At:         at,
+		}
 	}
 	var err error
 	if th.DeferUntil, err = parseTime(doc.DeferUntil); err != nil {
