@@ -32,6 +32,7 @@ func runEnqueue(args []string) error {
 	dbPath := fs.String("db", "", "path to the session SQLite database (the durable mailbox the fallback writes)")
 	provider := fs.String("provider", "", "provider override for this thought (default: runtime primary; unknown names fail at run time)")
 	model := fs.String("model", "", "model override for this thought (default: runtime model)")
+	mode := fs.String("mode", "", "mode (session policy) for this thought: a declared mode the caller may select (default: the navi's)")
 	// Portal channel resolution order (NAVI-337): explicit --portal
 	// wins, then the NAVI_PORTAL env var. With a known portal the
 	// control channel is tried first (2s) and the DB mailbox is the
@@ -55,7 +56,7 @@ func runEnqueue(args []string) error {
 			// Known value-taking flags consume the next token. Go's flag
 			// package accepts both -flag and --flag spellings.
 			switch strings.TrimLeft(arg, "-") {
-			case "priority", "db", "provider", "model", "portal":
+			case "priority", "db", "provider", "model", "mode", "portal":
 				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 					i++
 					flags = append(flags, args[i])
@@ -101,6 +102,7 @@ func runEnqueue(args []string) error {
 		ID:        fmt.Sprintf("cli-%d", now.UnixNano()),
 		Prompt:    prompt,
 		Priority:  *priority,
+		Mode:      strings.TrimSpace(*mode),
 		Status:    thought.ThoughtPending,
 		Provider:  *provider,
 		Model:     *model,
@@ -116,7 +118,7 @@ func runEnqueue(args []string) error {
 	// to the DB mailbox with a visible note.
 	var note string
 	if *portal != "" && *provider == "" && *model == "" {
-		if ok, perr := enqueueViaPortal(*portal, t.ID, t.Prompt, t.EffectivePriority(), time.Time{}); ok {
+		if ok, perr := enqueueViaPortal(*portal, t.ID, t.Prompt, t.EffectivePriority(), time.Time{}, *mode); ok {
 			fmt.Printf("enqueued %s via portal %s (priority %d)\n", t.ID, *portal, *priority)
 			return nil
 		} else {
@@ -141,10 +143,13 @@ func runEnqueue(args []string) error {
 // priority; defer_until is forwarded for forward-compat and ignored
 // until the shim learns it). Returns ok=true on the shim's 200 ack,
 // or the refusal/unreachability reason for the DB fallback.
-func enqueueViaPortal(addr, id, prompt string, prio int, notBefore time.Time) (bool, error) {
+func enqueueViaPortal(addr, id, prompt string, prio int, notBefore time.Time, mode string) (bool, error) {
 	payload := map[string]any{"action": "enqueue", "id": id, "prompt": prompt}
 	if prio > 0 {
 		payload["priority"] = prio
+	}
+	if strings.TrimSpace(mode) != "" {
+		payload["mode"] = strings.TrimSpace(mode)
 	}
 	if !notBefore.IsZero() {
 		payload["defer_until"] = notBefore.UTC().Format(time.RFC3339Nano)

@@ -40,6 +40,17 @@ func (n *Navi) assembleThought(t *thought.Thought) error {
 		}
 	}
 
+	// The mode chosen at enqueue is a session policy (ADR 0022 decision 4, ADR
+	// 0026): a principal may request a mode whose permission policy does not
+	// exceed its own, and a mode broader than the originator's policy is
+	// refused here — at the door, so nothing is scheduled — rather than
+	// silently narrowed when the thought runs.
+	if t.Mode != "" {
+		if err := n.validateModeSelection(t); err != nil {
+			return err
+		}
+	}
+
 	prompt := n.personality
 
 	if t.Mode != "" {

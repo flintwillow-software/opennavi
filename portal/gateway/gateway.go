@@ -342,6 +342,9 @@ type controlRequest struct {
 	ID        string  `json:"id"`
 	Prompt    string  `json:"prompt"`
 	Priority  float64 `json:"priority"`
+	// Mode names the session policy the thought runs under (ADR 0022 decision
+	// 4, ADR 0026). The navi validates it against the verified actor at enqueue.
+	Mode string `json:"mode"`
 }
 
 // serveControl answers POST /portal/control. The connection is authenticated
@@ -399,6 +402,7 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 			ID:        req.ID,
 			Prompt:    req.Prompt,
 			Priority:  4,
+			Mode:      strings.TrimSpace(req.Mode),
 			Status:    thought.ThoughtPending,
 			CreatedAt: now,
 			UpdatedAt: now,

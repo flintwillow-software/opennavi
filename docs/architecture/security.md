@@ -194,9 +194,19 @@ resolved principal is refused. The object surface's default actor is the
 in-process console (trusted structurally); a network binding re-scopes the
 surface to the connection's verified principal before every read and action, so
 the surface no longer acts as one declared principal for every connection.
-- **The mode chosen at enqueue is a session policy** that can only narrow (ADR
-0022 decision 4); the selectable set is derived from what the principal already
-holds. The session layer itself is NAVI-397.
+- **The mode chosen at enqueue is a session policy** (ADR 0022 decision 4, ADR
+0026): it narrows what that thought's calls may do and can never widen, because
+the engine requires every layer — the ceiling, the principal's roles and
+groups, and the session — to permit. The session is expressed as wildcard
+allows plus a deny-list (`Permit` is allow-required, so a set of bare denials
+would deny everything) and denies what the mode's `PermissionPolicy` and tool
+subset exclude, plus `act:*` when the mode is capped at read-only. It is never
+compared with the ceiling, because it grants nothing. The **selectable set** is
+checked against the originator at the door: a mode that permits a tool the
+principal may not call is refused loudly when the thought is enqueued, rather
+than silently narrowed when it runs, while a more restrictive mode is always
+selectable. The choice rides `thought.Thought.Mode` and is enforced per call at
+the same place as every other capability decision.
 - **Read scoping and field sensitivity compose** (ADR 0022 decision 7, ADR
 0025). A field marked `Sensitive` is one a principal may see only with a grant,
 not one the surface removes for everyone: projection is **principal-aware**, and

@@ -163,10 +163,15 @@ func (n *Navi) originActor(t *thought.Thought) portal.Actor {
 // so the tool path and the object path share the principal and the engine. A
 // thought with no recorded origin acts as the navi's service principal
 // (decision 3).
+//
+// The thought's mode rides as a SESSION policy (ADR 0022 decision 4, ADR
+// 0026): it narrows what the call may do and can never widen it, so the same
+// decision that the roles and the ceiling feed is also bounded by the mode.
 func (n *Navi) toolAuthorize(t *thought.Thought) func(name string) error {
 	actor := n.originActor(t)
+	session := n.sessionFor(t)
 	return func(name string) error {
-		return n.authorizeCapability(actor, Call(name))
+		return n.authorizeCapabilitySession(actor, Call(name), session)
 	}
 }
 
@@ -198,10 +203,17 @@ func (n *Navi) objectActor() portal.Actor {
 // paths, about the same principal (ADR 0022 decisions 1 and 5). A refusal
 // carries the engine's reason.
 func (n *Navi) authorizeCapability(actor portal.Actor, cap Capability) error {
+	return n.authorizeCapabilitySession(actor, cap, nil)
+}
+
+// authorizeCapabilitySession is authorizeCapability with a session policy — the
+// mode chosen at enqueue — as a further narrowing layer (ADR 0022 decision 4,
+// ADR 0026). A nil session narrows nothing.
+func (n *Navi) authorizeCapabilitySession(actor portal.Actor, cap Capability, session *CapabilitySet) error {
 	if actor.IsZero() {
 		return fmt.Errorf("%w: %s (no verified principal — fail closed)", portal.ErrUnauthorized, cap)
 	}
-	if d := n.decideActor(actor, cap, nil); !d.Allowed {
+	if d := n.decideActor(actor, cap, session); !d.Allowed {
 		return fmt.Errorf("%w: %s: %s", portal.ErrUnauthorized, cap, d.Reason)
 	}
 	return nil
