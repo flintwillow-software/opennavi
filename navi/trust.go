@@ -65,6 +65,10 @@ type TrustSources struct {
 	// Only VerifyToken populates it; a reference resolved from a store is
 	// cheap and stays uncached, so a revocation there takes effect at once.
 	resolved map[principal.Ref]resolvedPrincipal
+	// ledger records the trust decisions the navi makes (ADR 0021 decision 12,
+	// ADR 0027). It is operator-facing and separate from the interaction
+	// record; the authenticator appends to it.
+	ledger *TrustLedger
 }
 
 // ResolvedCacheTTL bounds how long a principal a bearer token resolved to is
@@ -83,13 +87,22 @@ type resolvedPrincipal struct {
 // NewTrustSources builds the ordered set. A nil source is refused rather than
 // skipped, so a misconfigured declaration fails loudly at assembly.
 func NewTrustSources(sources ...TrustSource) (*TrustSources, error) {
-	ts := &TrustSources{}
+	ts := &TrustSources{ledger: NewTrustLedger(0)}
 	for _, s := range sources {
 		if err := ts.Add(s); err != nil {
 			return nil, err
 		}
 	}
 	return ts, nil
+}
+
+// Ledger returns the trust ledger this set records decisions into (ADR 0027).
+// It is never nil for a set built by NewTrustSources.
+func (ts *TrustSources) Ledger() *TrustLedger {
+	if ts == nil {
+		return nil
+	}
+	return ts.ledger
 }
 
 // Add appends a source. Order is resolution order.
@@ -947,35 +960,66 @@ func NewPortalAuthenticator(trust *TrustSources) PortalAuthenticator {
 // Authenticate implements portal.Authenticator. Every failure wraps
 // portal.ErrUnauthenticated: a credential that does not verify is never
 // partially trusted, and an unknown scheme is refused rather than ignored.
+//
+// Each decision is recorded in the trust ledger (ADR 0027): an authenticated
+// credential with the principal it resolved, and a refusal with what was
+// presented and why. The ledger never sees the credential itself.
 func (a PortalAuthenticator) Authenticate(ctx context.Context, cred portal.Credential) (principal.Ref, error) {
 	now := cred.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
 	if a.trust == nil {
-		return principal.Ref{}, fmt.Errorf("%w: %w: no trust source is declared", portal.ErrUnauthenticated, ErrUnauthenticated)
+		return a.refuse(now, cred, "no trust source is declared",
+			fmt.Errorf("%w: %w: no trust source is declared", portal.ErrUnauthenticated, ErrUnauthenticated))
 	}
 	switch strings.ToLower(strings.TrimSpace(cred.Scheme)) {
 	case portal.SchemeBearer:
 		p, err := a.trust.VerifyToken(ctx, cred.Token, now)
 		if err != nil {
-			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+			return a.refuse(now, cred, err.Error(), fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err))
 		}
-		return p.Ref(), nil
+		return a.grant(now, cred, p.Ref())
 	case portal.SchemeEd25519:
 		p, err := a.trust.Resolve(cred.Principal)
 		if err != nil {
-			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+			return a.refuse(now, cred, err.Error(), fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err))
 		}
 		if err := p.Verify(cred.Message, cred.Proof, now); err != nil {
-			return principal.Ref{}, fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err)
+			return a.refuse(now, cred, err.Error(), fmt.Errorf("%w: %w", portal.ErrUnauthenticated, err))
 		}
-		return p.Ref(), nil
+		return a.grant(now, cred, p.Ref())
 	case "":
-		return principal.Ref{}, fmt.Errorf("%w: %w: no credential presented", portal.ErrUnauthenticated, ErrUnauthenticated)
+		return a.refuse(now, cred, "no credential presented",
+			fmt.Errorf("%w: %w: no credential presented", portal.ErrUnauthenticated, ErrUnauthenticated))
 	default:
-		return principal.Ref{}, fmt.Errorf("%w: %w: unsupported credential scheme %q", portal.ErrUnauthenticated, ErrUnauthenticated, cred.Scheme)
+		return a.refuse(now, cred, "unsupported credential scheme",
+			fmt.Errorf("%w: %w: unsupported credential scheme %q", portal.ErrUnauthenticated, ErrUnauthenticated, cred.Scheme))
 	}
+}
+
+// grant records an authenticated credential and returns its principal.
+func (a PortalAuthenticator) grant(now time.Time, cred portal.Credential, ref principal.Ref) (principal.Ref, error) {
+	if l := a.trust.Ledger(); l != nil {
+		l.Append(TrustEvent{
+			At: now.UTC(), Kind: TrustAuthenticated, Principal: ref,
+			Scheme: strings.ToLower(strings.TrimSpace(cred.Scheme)),
+		})
+	}
+	return ref, nil
+}
+
+// refuse records a refusal — with the CLAIMED principal when the presentation
+// named one, so an operator sees who was turned away — and returns the error.
+// detail is a reason, never the presented material.
+func (a PortalAuthenticator) refuse(now time.Time, cred portal.Credential, detail string, err error) (principal.Ref, error) {
+	if l := a.trust.Ledger(); l != nil {
+		l.Append(TrustEvent{
+			At: now.UTC(), Kind: TrustRefused, Principal: cred.Principal,
+			Scheme: strings.ToLower(strings.TrimSpace(cred.Scheme)), Detail: detail,
+		})
+	}
+	return principal.Ref{}, err
 }
 
 // Compile-time checks: the declared sources satisfy the trust seam, and the
