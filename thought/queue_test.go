@@ -65,9 +65,11 @@ func TestQueueDefersUntilDue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	later := time.Now().UTC().Add(400 * time.Millisecond)
+	// The deferral is far enough out that the assertions below cannot race a
+	// slow runner. This used now+400ms, which a loaded CI runner under -race
+	// can exceed between the enqueue and the dequeue.
 	deferred := newThought("deferred", 1) // highest priority, but not due
-	deferred.DeferUntil = later
+	deferred.DeferUntil = time.Now().UTC().Add(time.Hour)
 	if err := q.Enqueue(deferred); err != nil {
 		t.Fatal(err)
 	}
@@ -88,22 +90,44 @@ func TestQueueDefersUntilDue(t *testing.T) {
 	if _, ok := q.Dequeue(); ok {
 		t.Fatal("deferred thought claimed before its time")
 	}
-
-	// Once the not-before time passes, the deferred thought is
-	// claimable and back in priority order.
-	time.Sleep(600 * time.Millisecond)
-	tk, ok = q.Dequeue()
-	if !ok {
-		t.Fatal("deferred thought never became claimable")
-	}
-	if tk.ID != "deferred" {
-		t.Errorf("claimed %q, want the deferred thought", tk.ID)
-	}
 }
 
+// TestQueueClaimsOnceDue is the other half of the deferral mechanism: once the
+// not-before time has passed, the thought is claimable and back in priority
+// order. It uses an already-past deferral rather than waiting on a wall clock,
+// so it is deterministic on any runner.
+func TestQueueClaimsOnceDue(t *testing.T) {
+	q, err := NewQueue(Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	due := newThought("deferred", 1)
+	due.DeferUntil = time.Now().UTC().Add(-time.Second)
+	if err := q.Enqueue(due); err != nil {
+		t.Fatal(err)
+	}
+	lower := newThought("immediate", 4)
+	if err := q.Enqueue(lower); err != nil {
+		t.Fatal(err)
+	}
+
+	// Its not-before time has passed, so it is claimable and back in priority
+	// order — ahead of the lower-priority immediate thought.
+	tk, ok := q.Dequeue()
+	if !ok {
+		t.Fatal("thought not claimable once its not-before time has passed")
+	}
+	if tk.ID != "deferred" {
+		t.Errorf("claimed %q, want the now-due deferred thought", tk.ID)
+	}
+}
 func TestQueueDeferralSurvivesRestart(t *testing.T) {
-	// Durability: the deferral is persisted, so a rebuilt
-	// queue over the same store still skips the thought until due.
+	// Durability: the deferral is persisted, so a rebuilt queue over the same
+	// store still skips a thought until due — and claims one whose time has
+	// already passed. The deferrals are far-future and already-past rather
+	// than a short near-future window plus a sleep, so no runner can race
+	// them.
 	store := NewMemoryStore()
 	cfg := Config{MaxConcurrent: 2, PrioritySlots: 0, SlotExhaustion: PolicyQueue, FlushInterval: -1} // legacy sync: the restart test needs persisted rows
 
@@ -111,24 +135,25 @@ func TestQueueDeferralSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	later := time.Now().UTC().Add(400 * time.Millisecond)
-	deferred := newThought("deferred", 2)
-	deferred.DeferUntil = later
-	deferred.Metadata = map[string]string{"origin": OriginTool}
-	if err := q.Enqueue(deferred); err != nil {
+	notYet := newThought("not-yet", 2)
+	notYet.DeferUntil = time.Now().UTC().Add(time.Hour)
+	notYet.Metadata = map[string]string{"origin": OriginTool}
+	if err := q.Enqueue(notYet); err != nil {
+		t.Fatal(err)
+	}
+	alreadyDue := newThought("already-due", 3)
+	alreadyDue.DeferUntil = time.Now().UTC().Add(-time.Second)
+	if err := q.Enqueue(alreadyDue); err != nil {
 		t.Fatal(err)
 	}
 
 	// "Restart": a fresh queue over the same store performs crash
-	// recovery and reloads the deferred thought.
+	// recovery and reloads both thoughts with their deferrals.
 	q2, err := NewQueue(cfg, store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := q2.Dequeue(); ok {
-		t.Fatal("deferred thought claimable right after restart")
-	}
-	loaded, err := q2.GetThought("deferred")
+	loaded, err := q2.GetThought("not-yet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,12 +161,15 @@ func TestQueueDeferralSurvivesRestart(t *testing.T) {
 		t.Fatal("defer_until lost across restart")
 	}
 
-	time.Sleep(600 * time.Millisecond)
-	if _, ok := q2.Dequeue(); !ok {
-		t.Fatal("deferred thought still not claimable after the not-before time")
+	// The one whose time has passed is claimable; the other is still skipped.
+	tk, ok := q2.Dequeue()
+	if !ok || tk.ID != "already-due" {
+		t.Fatalf("claimed %v (%v), want the thought whose not-before time has passed", tk, ok)
+	}
+	if _, ok := q2.Dequeue(); ok {
+		t.Fatal("deferred thought claimable before its not-before time")
 	}
 }
-
 func TestEnqueueClampsSelfScheduledPriority(t *testing.T) {
 	q, err := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
 	if err != nil {
