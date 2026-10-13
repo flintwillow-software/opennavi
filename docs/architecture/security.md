@@ -214,10 +214,13 @@ the descriptor's flag is the declaration that a grant is required. The grant is
 `read:<type>.<field>`, which a `read:<type>` grant deliberately does not cover,
 so the read gate decides whether the type is readable and the field grant
 decides which fields; a field the principal may not read is absent, never null.
-Which *rows* a principal may see is a separate question, answered provider-side
-by a declared per-type filter the surface composes with the caller's query — a
-caller may narrow but never widen (ADR 0025 decision 3; implementation is a
-follow-up). A delta never carries a sensitive field, because the live window is
+Which *rows* a principal may see is a separate question, answered by a **scope**
+a type declares — a closed, referential rule that a named field must equal the
+acting principal's reference. The surface ANDs it with the caller's query (the
+scope wins a conflict, so a caller may narrow but never widen) and enforces it on
+the way out, and the provider applies it before paging; a row the scope excludes
+is reported as absent, not refused, because whether an id exists is itself scoped
+information (ADR 0025 decision 3, ADR 0028). A delta never carries a sensitive field, because the live window is
 shared by every connection. The in-process console sees sensitive fields because
 the service principal holds the ceiling, not because the surface special-cases
 a console.

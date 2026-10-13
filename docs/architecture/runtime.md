@@ -331,9 +331,14 @@ undeclared field is dropped, a page is bounded, and a field marked
 projection is **principal-aware** and sensitivity is a grant rather than a
 static omission for everyone (ADR 0022 decision 7, ADR 0025). A field the
 principal may not read is absent, never null. A delta never carries a sensitive
-field: the live window is shared by every connection (ADR 0025 decision 4). An
-in-process portal and the gateway's remote binding are two bindings of the same
-contract, so a portal is written once.
+field: the live window is shared by every connection (ADR 0025 decision 4).
+Which **rows** a principal sees is a third layer: a type may declare a `Scope`
+(a named field that must equal the acting principal's reference), which the
+surface ANDs into the caller's query — the scope wins, so a caller narrows but
+never widens — and the provider applies **before paging**, so a page stays full
+(ADR 0028). A scoped-out row reads as absent, not refused. An in-process portal
+and the gateway's remote binding are two bindings of the same contract, so a
+portal is written once.
 
 **Actions.** A type declares its actions — a thought steers, pauses, resumes,
 cancels, bumps, and retries; a todo completes, starts, and removes; a note
