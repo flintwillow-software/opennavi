@@ -53,9 +53,31 @@ var (
 // returns the first hit. A source that errors never masks one that knows the
 // reference — so the compiled inline principals remain the break-glass when an
 // identity provider is unreachable (ADR 0021, "Consequences").
+//
+// A principal a CREDENTIAL resolved is remembered briefly (see
+// ResolvedCacheTTL): an OIDC principal is derived from a token, not looked up,
+// so its claims cannot be recovered from a bare reference — the identity has to
+// survive from the authentication to the authorization that follows it.
 type TrustSources struct {
 	mu      sync.RWMutex
 	sources []TrustSource
+	// resolved caches principals a credential resolved, keyed by reference.
+	// Only VerifyToken populates it; a reference resolved from a store is
+	// cheap and stays uncached, so a revocation there takes effect at once.
+	resolved map[principal.Ref]resolvedPrincipal
+}
+
+// ResolvedCacheTTL bounds how long a principal a bearer token resolved to is
+// reused for its reference. The window is short because a remembered principal
+// outlives a revocation by at most this long; the gateway re-authenticates per
+// request, so the entry exists to carry identity from one request's
+// authentication to its own authorization, not to keep a session alive.
+const ResolvedCacheTTL = 30 * time.Second
+
+// resolvedPrincipal is one remembered principal and when it stops being used.
+type resolvedPrincipal struct {
+	principal *Principal
+	expires   time.Time
 }
 
 // NewTrustSources builds the ordered set. A nil source is refused rather than
@@ -113,6 +135,10 @@ func (ts *TrustSources) VerifyToken(ctx context.Context, token string, now time.
 		}
 		p, err := bearer.VerifyToken(ctx, token, now)
 		if err == nil {
+			// Keep the resolved identity: an OIDC principal cannot be resolved
+			// from its reference alone, and the authorization that follows this
+			// authentication needs its claims and groups.
+			ts.remember(p, now)
 			return p, nil
 		}
 		last = err
@@ -127,9 +153,16 @@ func (ts *TrustSources) VerifyToken(ctx context.Context, token string, now time.
 // ErrUnknownPrincipal when no source knows the reference. A source that fails
 // (an unreachable identity provider) is reported inside ErrUnknownPrincipal
 // only when nothing else resolved, so it can never mask a compiled principal.
+//
+// A reference a credential just resolved is answered from the remembered
+// principal, so the identity data the credential carried (claims, groups) is
+// available to the authorization that follows authentication.
 func (ts *TrustSources) Resolve(ref principal.Ref) (*Principal, error) {
 	if err := ref.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnknownPrincipal, err)
+	}
+	if p, ok := ts.remembered(ref, time.Now()); ok {
+		return p, nil
 	}
 	sources := ts.Sources()
 	var unavailable error
@@ -148,6 +181,33 @@ func (ts *TrustSources) Resolve(ref principal.Ref) (*Principal, error) {
 		return nil, fmt.Errorf("%w: %s: %w", ErrUnknownPrincipal, ref, unavailable)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrUnknownPrincipal, ref)
+}
+
+// remember records a principal a credential resolved, for ResolvedCacheTTL.
+func (ts *TrustSources) remember(p *Principal, now time.Time) {
+	if p == nil || p.Ref().IsZero() {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.resolved == nil {
+		ts.resolved = map[principal.Ref]resolvedPrincipal{}
+	}
+	ts.resolved[p.Ref()] = resolvedPrincipal{principal: p, expires: now.Add(ResolvedCacheTTL)}
+}
+
+// remembered returns the principal remembered for ref while it is still fresh.
+func (ts *TrustSources) remembered(ref principal.Ref, now time.Time) (*Principal, bool) {
+	ts.mu.RLock()
+	entry, ok := ts.resolved[ref]
+	ts.mu.RUnlock()
+	if !ok || now.After(entry.expires) {
+		return nil, false
+	}
+	return entry.principal, true
 }
 
 // ── OIDC identity provider ──────────────────────────────────────────────
