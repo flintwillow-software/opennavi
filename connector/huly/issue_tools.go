@@ -154,7 +154,7 @@ func (c *Client) issueUpdate(ctx context.Context, args map[string]any) (string, 
 		"objectClass": classIssue,
 		"objectSpace": stringField(issue, "space"),
 		"modifiedOn":  time.Now().UnixMilli(),
-		"modifiedBy":  s.account,
+		"modifiedBy":  s.socialID,
 		"operations":  map[string]any{"$set": set},
 		"retrieve":    false,
 	}

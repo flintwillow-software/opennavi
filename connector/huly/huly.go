@@ -133,7 +133,13 @@ func (c *Connector) SendTools() ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{list, comment, update, search}, nil
+	create, err := connector.SendTool(issueCreateDef(), c.live, func(ctx context.Context, cl *Client, args map[string]any) (string, error) {
+		return cl.issueCreate(ctx, args)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{list, comment, update, search, create}, nil
 }
 
 // resolveRef resolves a credential REFERENCE (ADR 0008): an environment
