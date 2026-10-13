@@ -163,7 +163,12 @@ func (n *Navi) assemble() error {
 		return err
 	}
 	n.registry = reg
-	return nil
+
+	// The compiled authorization policy (ADR 0021 decisions 3 and 11): the
+	// ceiling is derived from everything declared above — the catalog and the
+	// exposed types — and the declared roles and groups are compiled against
+	// it. Last, so a policy naming something undeclared fails the run.
+	return n.compilePolicy()
 }
 
 // assembleMemory builds the short-term memory service when the navi declares

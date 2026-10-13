@@ -112,9 +112,47 @@ compiled, identity is resolved at runtime** (ADR 0021).
   carries the operator's intent — and not about being in-process: a portal whose
   input is ambient (a room microphone, a sensor) must authenticate as a real
   principal, or whoever is in the room holds root-equivalent capability.
+- **The input channel is a policy fact, and it is not authority.**
+  `navi.OnChannel` makes the console-versus-microphone distinction expressible
+  rather than only documented, and it says *where intent arrived*, not *who
+  authored it*: a microphone grant is exercisable by whoever is audible, so
+  scoping it narrowly (no `shell_exec`, confirmation for consequential actions,
+  speaker verification later) is a deployment decision this vocabulary cannot
+  make. Because a binding declares its transport (the in-process binding
+  included — ADR 0019 calls it a transport), "local only" is expressible as
+  `OnTransport("in-process")`; a request with no binding context matches no
+  transport condition at all. Both label kinds are load-bearing: a binding must
+  not reuse a transport label or a channel label for a different path, or a
+  scoped grant widens silently from "this device's microphone" to "any audio,
+  anywhere". Where locality matters, name both facts
+  (`OnChannel(...)` together with `OnTransport(...)`).
 - **The development default is explicit and named.** `portal.AllowAllAuthenticator`
   trusts every connection, credential or none; the reference navi wires it only
   behind `--dev-allow-all`. It is never the shipped model.
+
+**Policy is compiled; identity is resolved.** The other half of the split above
+(ADR 0021 decisions 3–5 and 11). A *capability* is a closed verb — `connect`,
+`read`, `act`, `call`, `enqueue` — over a *referential* target, so it names a
+tool, a type, a field, or an action the navi already declares and nothing else.
+A *role* is a trust policy plus a permission policy; a *group* is the permission
+side of a collection whose membership comes from the trust source. Evaluation is
+default deny, explicit deny wins, allow required, intersected with the compiled
+ceiling and any session policy, with every condition passing — and the ceiling
+is *derived* from the declarations, so naming something undeclared is
+unreachable by construction rather than by a list somebody maintains.
+
+Conditions (`OnTransport`, `OnChannel`, `OnNetwork`, `Between`, `OnClaim`) are
+predicates on the **request**, which is where decision 9's "network is a
+condition, never an identity" is enforced: a mesh peer and a LAN client are
+told apart by a fact about the request, not by a principal that encodes
+transport. Note the asymmetry, because it reads backwards to anyone thinking in
+least-privilege terms: role and group grants **accumulate**, so adding a role
+never narrows what a principal may do — the subtractive moves are removing a
+role or group, or adding a deny, which wins across every layer.
+
+Portals never see any of this vocabulary; they ask the navi (ADR 0022 decision
+8), and enforcement — carrying an acting principal and the request facts to each
+of the four enforcement points — is NAVI-404.
 
 ## Thought modes
 

@@ -49,8 +49,6 @@ var (
 	// ErrDuplicatePrincipal is a second declaration of a principal the set
 	// already holds.
 	ErrDuplicatePrincipal = errors.New("navi: duplicate principal")
-	// ErrDuplicateMember is a principal added to a group twice.
-	ErrDuplicateMember = errors.New("navi: duplicate group member")
 	// ErrInvalidRole is an unnamed role.
 	ErrInvalidRole = errors.New("navi: invalid role")
 )
@@ -309,123 +307,9 @@ func (p *Principal) Verify(challenge, proof []byte, now time.Time) error {
 	return fmt.Errorf("%w: principal %s: %w", ErrUnauthenticated, p.ref, last)
 }
 
-// Group is a named collection of principals, optionally authenticatable
-// itself (ADR 0021 decision 2). A group used as a policy subject attributes
-// the action to the group rather than to a member — weaker attribution,
-// accepted rather than hidden.
-type Group struct {
-	ref principal.Ref
-
-	mu      sync.RWMutex
-	members []principal.Ref
-	shared  *Principal
-}
-
-// NewGroup builds a group from a group-kind reference and its members.
-func NewGroup(ref principal.Ref, members ...principal.Ref) (*Group, error) {
-	if err := ref.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidPrincipal, err)
-	}
-	if ref.Kind() != principal.KindGroup {
-		return nil, fmt.Errorf("%w: %s is not a group reference", ErrInvalidPrincipal, ref)
-	}
-	g := &Group{ref: ref}
-	for _, member := range members {
-		if err := g.Add(member); err != nil {
-			return nil, err
-		}
-	}
-	return g, nil
-}
-
-// Ref returns the group's reference.
-func (g *Group) Ref() principal.Ref { return g.ref }
-
-// Members returns a snapshot of the group's member references.
-func (g *Group) Members() []principal.Ref {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return append([]principal.Ref(nil), g.members...)
-}
-
-// Add puts a principal in the group. The reference must name a principal and
-// not be the group itself; adding a member twice is refused.
-func (g *Group) Add(ref principal.Ref) error {
-	if err := ref.Validate(); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidPrincipal, err)
-	}
-	if ref == g.ref {
-		return fmt.Errorf("%w: %s cannot be a member of itself", ErrInvalidPrincipal, ref)
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, held := range g.members {
-		if held == ref {
-			return fmt.Errorf("%w: %s is already a member of %s", ErrDuplicateMember, ref, g.ref)
-		}
-	}
-	g.members = append(g.members, ref)
-	return nil
-}
-
-// Remove takes a principal out of the group; an unknown member is refused.
-func (g *Group) Remove(ref principal.Ref) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i, held := range g.members {
-		if held != ref {
-			continue
-		}
-		g.members = append(g.members[:i], g.members[i+1:]...)
-		return nil
-	}
-	return fmt.Errorf("%w: %s is not a member of %s", ErrUnknownPrincipal, ref, g.ref)
-}
-
-// Shared returns the group's own authenticatable identity, or nil when the
-// group is a policy subject only (ADR 0021 decision 2).
-func (g *Group) Shared() *Principal {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.shared
-}
-
-// SetShared makes the group authenticatable itself — a shared identity with
-// its own keys — and returns that principal. The group's reference is the
-// shared principal's identity, so an action authenticated through it
-// attributes to the group.
-func (g *Group) SetShared(keys ...Authenticator) (*Principal, error) {
-	p, err := NewPrincipal(g.ref, keys...)
-	if err != nil {
-		return nil, err
-	}
-	g.mu.Lock()
-	g.shared = p
-	g.mu.Unlock()
-	return p, nil
-}
-
-// Role is a compiled capability set (ADR 0021 decisions 2 and 3). It is NOT a
-// principal: it holds no identity and no authenticators, and a trust source
-// never resolves one. The capability vocabulary and the compiled policy that
-// maps a role to capability arrive with the policy engine (NAVI-399); this
-// type fixes the vocabulary so a role can never be mistaken for a principal.
-type Role struct{ name string }
-
-// NewRole names a compiled role.
-func NewRole(name string) (Role, error) {
-	n := strings.TrimSpace(name)
-	if n == "" {
-		return Role{}, fmt.Errorf("%w: role has an empty name", ErrInvalidRole)
-	}
-	return Role{name: n}, nil
-}
-
-// Name returns the role's name.
-func (r Role) Name() string { return r.name }
-
-// IsZero reports whether r names no role.
-func (r Role) IsZero() bool { return r == Role{} }
+// Role and Group live in policy.go, with the rest of the compiled policy:
+// a role is a trust policy plus a permission policy, and a group is the
+// permission side of a collection whose membership comes from the trust source.
 
 // TrustSource resolves principals at runtime (ADR 0021 decisions 4 and 6). A
 // navi declares where trust comes from at compile time; the source resolves
