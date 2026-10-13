@@ -21,6 +21,9 @@ const (
 	TypeEntry = "entry"
 	// TypeMemory is the memory aggregate.
 	TypeMemory = "memory"
+	// TypeTrustEvent is the trust ledger: the trust decisions the navi made
+	// (ADR 0027). It is read-only and separate from the navi's own state.
+	TypeTrustEvent = "trust_event"
 )
 
 // DetailTranscript is the thought type's transcript detail collection.
@@ -42,6 +45,7 @@ func (n *Navi) builtinTypes() []TypeRegistration {
 		{Type: thoughtType(), Provider: thoughts, Act: thoughts.act},
 		{Type: entryType(), Provider: entryProvider{}},
 		{Type: memoryType(), Provider: &memoryProvider{n: n}},
+		{Type: trustEventType(), Provider: trustEventProvider{n: n}},
 	}
 }
 
@@ -67,6 +71,13 @@ func thoughtType() object.Type {
 			{Name: "skills", Label: "Skills", Kind: object.KindList, ItemKind: object.KindString, Section: "run"},
 			{Name: "depends_on", Label: "Depends on", Kind: object.KindList, ItemKind: object.KindRef,
 				RefType: TypeThought, Section: "relations"},
+			// Attribution (ADR 0022 decision 2, ADR 0027): who caused this
+			// thought and the chain that scheduled it. Read-only and NOT
+			// sensitive — the interaction record is what a portal reads, not
+			// working state.
+			{Name: "origin", Label: "Origin", Kind: object.KindString, Section: "attribution", ReadOnly: true},
+			{Name: "lineage", Label: "Lineage", Kind: object.KindList, ItemKind: object.KindRef,
+				RefType: TypeThought, Section: "attribution", ReadOnly: true},
 			// Derived from the thought's metadata role (the map itself is
 			// sensitive): a plan's verification is a different kind of work,
 			// and a portal distinguishes it without reading working state.
@@ -180,6 +191,9 @@ func thoughtObject(t *thought.Thought) object.Object {
 			"status": string(t.Status), "priority": t.Priority,
 			"provider": t.Provider, "model": t.Model, "mode": t.Mode,
 			"foreground": t.Foreground, "skills": t.Skills, "depends_on": t.DependsOn,
+			// Attribution: the principal that caused the thought and the chain
+			// that scheduled it (ADR 0022 decision 2, ADR 0027).
+			"origin": t.Origin.String(), "lineage": t.Lineage,
 			// Derived, non-sensitive state a portal must not lose: a plan's
 			// verification is semantically distinct from a normal thought, and
 			// the free-form metadata it is recorded in stays omitted.
@@ -357,3 +371,72 @@ func nextCursor(end, total int) string {
 
 // rawSchema parses a JSON Schema literal for an action's arguments.
 func rawSchema(s string) json.RawMessage { return json.RawMessage(strings.TrimSpace(s)) }
+
+// ── trust_event ────────────────────────────────────────────────────────
+
+// trustEventType is the trust ledger as a read-only type (ADR 0027): the trust
+// decisions the navi made — who was authenticated, who was refused — kept
+// separate from the navi-authored interaction record (the thought and its
+// lineage). Reading it is a capability (`read:trust_event`), so a deployment
+// decides who may audit trust, and an operator portal renders it like any other
+// type rather than through a bespoke endpoint.
+func trustEventType() object.Type {
+	return object.Type{
+		Name:  TypeTrustEvent,
+		Label: "Trust event",
+		ID:    "id",
+		Fields: []object.Field{
+			{Name: "id", Label: "ID", Kind: object.KindString, Section: "identity"},
+			{Name: "at", Label: "At", Kind: object.KindTime, Section: "decision"},
+			{Name: "kind", Label: "Kind", Kind: object.KindEnum, Section: "decision",
+				Enum: []string{string(TrustAuthenticated), string(TrustRefused)}},
+			{Name: "principal", Label: "Principal", Kind: object.KindString, Section: "decision"},
+			{Name: "scheme", Label: "Scheme", Kind: object.KindString, Section: "decision"},
+			{Name: "detail", Label: "Detail", Kind: object.KindText, Section: "decision"},
+		},
+		Views: []object.View{{Kind: object.ViewList, Name: "trust-events", Label: "Trust events",
+			Columns: []string{"at", "kind", "principal", "scheme"}}},
+	}
+}
+
+// trustEventProvider serves the trust ledger, newest first. A ledger entry has
+// no stable identity of its own — the ring has no durable key — so Get is
+// unsupported and the ledger is read as a bounded list; a durable ledger is a
+// follow-up (ADR 0027 open question 1).
+type trustEventProvider struct{ n *Navi }
+
+func (p trustEventProvider) List(q object.Query) ([]object.Object, string, error) {
+	var events []TrustEvent
+	if p.n != nil && p.n.trust != nil {
+		events = p.n.trust.Ledger().Events()
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
+	start, end := pageWindow(len(events), q)
+	out := make([]object.Object, 0, end-start)
+	for i := start; i < end; i++ {
+		out = append(out, trustEventObject(events[i], i))
+	}
+	return out, nextCursor(end, len(events)), nil
+}
+
+func (p trustEventProvider) Get(string) (object.Object, error) {
+	return object.Object{}, object.ErrNotFound
+}
+
+func (p trustEventProvider) Detail(string, string, object.Query) ([]object.Object, string, error) {
+	return nil, "", object.ErrUnknownDetail
+}
+
+// trustEventObject projects one ledger entry. index is a display handle within
+// the page, not a durable identity: the ledger is a ring.
+func trustEventObject(ev TrustEvent, index int) object.Object {
+	id := strconv.Itoa(index)
+	return object.Object{
+		Type: TypeTrustEvent,
+		ID:   id,
+		Fields: map[string]any{
+			"id": id, "at": ev.At, "kind": string(ev.Kind),
+			"principal": ev.Principal.String(), "scheme": ev.Scheme, "detail": ev.Detail,
+		},
+	}
+}

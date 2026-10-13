@@ -264,6 +264,26 @@ for build-time modules, its module path and version. Populated from
 provided each capability. `go.mod`/`go.sum` plus build info are the
 supply-chain record; artifact signing is deferred (see below).
 
+**Attribution** answers a second "who", and it is deliberately two records (ADR
+0021 decision 12, ADR 0027):
+
+- The **interaction record** is the navi's own state. A thought carries its
+  originator, the request facts it arrived with, its lineage, its mode, and its
+  transcript; `origin` and `lineage` are read-only fields on the thought type,
+  so "on whose behalf did this happen" is answerable through the object surface
+  like any other state, and it persists with the thought.
+- The **trust ledger** is operator-facing: an append-only, bounded record of the
+  trust decisions the navi makes — a credential it **authenticated** (which
+  principal, when, and by which scheme) and a credential it **refused** (with
+  the claimed principal and the reason). It never holds a credential. Reading it
+  is a capability (`read:trust_event`): the ledger is exposed as a read-only
+  type, so a deployment decides who may audit trust and an operator portal
+  renders it like any other type. A grant or revocation happens *outside* the
+  navi — a compiled declaration, or an operator editing a trust store — so the
+  ledger does not pretend to know an author for it; a future operator
+grant/revocation path would append `granted`/`revoked` events naming the
+  operator.
+
 ## Secrets
 
 - Secrets are **never** literals in source, tests, or fixtures.
