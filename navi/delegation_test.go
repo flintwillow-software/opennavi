@@ -27,7 +27,7 @@ func delegationNavi(t *testing.T, alice *Principal, roles ...Role) *Navi {
 		t.Fatalf("NewPrincipals: %v", err)
 	}
 	n := New("delegation-test", WithPlanCloseCheck(false), WithTrustSource(principals))
-	if err := n.Tools.Add(validTool("shell_exec")); err != nil {
+	if err := n.Tools.Add(execTool("shell_exec")); err != nil {
 		t.Fatalf("Tools.Add: %v", err)
 	}
 	for _, r := range roles {

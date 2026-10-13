@@ -110,6 +110,14 @@ func validTool(name string) tool.Tool {
 	}
 }
 
+// execTool builds a tool that passes shape validation at execute access, so a
+// test can tell a read-only mode from an execute one.
+func execTool(name string) tool.Tool {
+	t := validTool(name)
+	t.Def.Access = tool.AccessExecute
+	return t
+}
+
 // --- Add validation ---------------------------------------------------
 
 func TestAddShapeValidation(t *testing.T) {
