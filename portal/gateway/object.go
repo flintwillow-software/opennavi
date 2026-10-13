@@ -166,12 +166,12 @@ func (g *Gateway) objectsOrRefuse(w http.ResponseWriter) (object.Surface, bool) 
 // navi and the attachment authorized with the verified principal (ADR 0022
 // decisions 1 and 8).
 func (g *Gateway) authorizeAttach(w http.ResponseWriter, r *http.Request) bool {
-	who, err := g.authenticate(r)
+	actor, err := g.authenticate(r)
 	if err != nil {
 		g.refusal(w, err)
 		return false
 	}
-	if err := g.Attach(who); err != nil {
+	if err := g.Attach(actor); err != nil {
 		g.refusal(w, err)
 		return false
 	}

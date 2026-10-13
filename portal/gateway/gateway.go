@@ -48,6 +48,13 @@ type Gateway struct {
 	obs     portal.Observer
 	sub     portal.Subscription
 	objects object.Surface
+	// transport and channel label this binding's connections (ADR 0021
+	// decision 9): how a request arrived and what input channel carried it.
+	// A binding must not reuse a label for a different path, or every scoped
+	// grant widens silently. Defaults are "http" and "api"; a deployment
+	// labels its own binding with SetBinding.
+	transport string
+	channel   string
 	// auth resolves a presented credential to a verified principal (ADR 0021
 	// decisions 6-8). Nil refuses every attachment: a gateway with no
 	// authenticator authenticates nobody (fail closed).
@@ -61,7 +68,35 @@ type Gateway struct {
 // control (usually the navi's Hub). control may be nil: the gateway then
 // serves observation only and refuses control, fail-closed.
 func New(addr string, control portal.Portal) *Gateway {
-	return &Gateway{addr: addr, control: control}
+	g := &Gateway{addr: addr, control: control}
+	g.defaultBinding()
+	return g
+}
+
+// defaultBinding fills the transport and channel labels a binding that was
+// not explicitly labelled uses.
+func (g *Gateway) defaultBinding() {
+	if strings.TrimSpace(g.transport) == "" {
+		g.transport = "http"
+	}
+	if strings.TrimSpace(g.channel) == "" {
+		g.channel = "api"
+	}
+}
+
+// SetBinding labels how this gateway's connections arrive (ADR 0021 decision
+// 9): transport is the binding's own identity ("lan", "tailnet", "http"),
+// and channel is the input channel that carries the intent ("api",
+// "console"). The labels are load-bearing — a policy scoped to a transport or
+// channel matches on them — so one label must name one path. Empty values
+// keep the default.
+func (g *Gateway) SetBinding(transport, channel string) {
+	if strings.TrimSpace(transport) != "" {
+		g.transport = transport
+	}
+	if strings.TrimSpace(channel) != "" {
+		g.channel = channel
+	}
 }
 
 // Handler returns the gateway HTTP surface without owning a listener, so a
@@ -72,6 +107,7 @@ func New(addr string, control portal.Portal) *Gateway {
 // principal; nil refuses every attachment (fail closed).
 func Handler(control portal.Portal, obs portal.Observer, objects object.Surface, auth portal.Authenticator) http.Handler {
 	g := &Gateway{control: control, objects: objects, auth: auth}
+	g.defaultBinding()
 	if obs != nil {
 		g.obs = obs
 		g.sub = obs.Subscribe(DefaultSubscriptionCap)
@@ -163,44 +199,44 @@ func (g *Gateway) delegate(fn func(portal.Portal) error) error {
 	return fn(g.control)
 }
 
-// Attach authorizes a verified principal for the portal attachment.
-func (g *Gateway) Attach(who principal.Ref) error {
-	return g.delegate(func(p portal.Portal) error { return p.Attach(who) })
+// Attach authorizes a verified actor for the portal attachment.
+func (g *Gateway) Attach(actor portal.Actor) error {
+	return g.delegate(func(p portal.Portal) error { return p.Attach(actor) })
 }
 
 // Steer routes a steering message to a thought.
-func (g *Gateway) Steer(who principal.Ref, thoughtID, message string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Steer(who, thoughtID, message) })
+func (g *Gateway) Steer(actor portal.Actor, thoughtID, message string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Steer(actor, thoughtID, message) })
 }
 
 // Pause parks a running thought.
-func (g *Gateway) Pause(who principal.Ref, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Pause(who, thoughtID) })
+func (g *Gateway) Pause(actor portal.Actor, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Pause(actor, thoughtID) })
 }
 
 // Resume re-queues a paused thought.
-func (g *Gateway) Resume(who principal.Ref, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Resume(who, thoughtID) })
+func (g *Gateway) Resume(actor portal.Actor, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Resume(actor, thoughtID) })
 }
 
 // Cancel removes queued/paused work.
-func (g *Gateway) Cancel(who principal.Ref, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Cancel(who, thoughtID) })
+func (g *Gateway) Cancel(actor portal.Actor, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Cancel(actor, thoughtID) })
 }
 
 // BumpPriority changes a queued thought's priority.
-func (g *Gateway) BumpPriority(who principal.Ref, thoughtID string, prio int) error {
-	return g.delegate(func(p portal.Portal) error { return p.BumpPriority(who, thoughtID, prio) })
+func (g *Gateway) BumpPriority(actor portal.Actor, thoughtID string, prio int) error {
+	return g.delegate(func(p portal.Portal) error { return p.BumpPriority(actor, thoughtID, prio) })
 }
 
 // Retry re-queues a failed thought.
-func (g *Gateway) Retry(who principal.Ref, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Retry(who, thoughtID) })
+func (g *Gateway) Retry(actor portal.Actor, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Retry(actor, thoughtID) })
 }
 
-// Enqueue schedules a thought.
-func (g *Gateway) Enqueue(who principal.Ref, t *thought.Thought) error {
-	return g.delegate(func(p portal.Portal) error { return p.Enqueue(who, t) })
+// Enqueue schedules a thought on behalf of actor.
+func (g *Gateway) Enqueue(actor portal.Actor, t *thought.Thought) error {
+	return g.delegate(func(p portal.Portal) error { return p.Enqueue(actor, t) })
 }
 
 // ── HTTP surface ────────────────────────────────────────────────────────
@@ -261,19 +297,39 @@ func requestBody(r *http.Request) []byte {
 	return body
 }
 
-// authenticate resolves the request's credential to a verified principal. It
+// authenticate resolves the request's credential to a verified ACTOR: the
+// principal the navi resolved plus the request facts this binding knows. It
 // is the ONLY place a connection's identity is decided (ADR 0022 decision 8):
 // the gateway presents what the client sent and acts on the navi's answer. A
 // gateway with no authenticator authenticates nobody — fail closed.
-func (g *Gateway) authenticate(r *http.Request) (principal.Ref, error) {
+func (g *Gateway) authenticate(r *http.Request) (portal.Actor, error) {
 	if g.auth == nil {
-		return principal.Ref{}, fmt.Errorf("%w: no authenticator wired (fail closed)", portal.ErrUnauthenticated)
+		return portal.Actor{}, fmt.Errorf("%w: no authenticator wired (fail closed)", portal.ErrUnauthenticated)
 	}
 	cred, err := credentialFromRequest(r, requestBody(r), time.Now())
 	if err != nil {
-		return principal.Ref{}, err
+		return portal.Actor{}, err
 	}
-	return g.auth.Authenticate(r.Context(), cred)
+	who, err := g.auth.Authenticate(r.Context(), cred)
+	if err != nil {
+		return portal.Actor{}, err
+	}
+	return g.actor(r, who), nil
+}
+
+// actor pairs a verified principal with the request facts this binding knows:
+// its declared transport label, its input channel, the source address, and the
+// time (ADR 0021 decision 9).
+func (g *Gateway) actor(r *http.Request, who principal.Ref) portal.Actor {
+	return portal.Actor{
+		Who: who,
+		Info: portal.RequestInfo{
+			Transport:  g.transport,
+			Channel:    g.channel,
+			RemoteAddr: r.RemoteAddr,
+			At:         time.Now().UTC(),
+		},
+	}
 }
 
 // controlRequest is the POST /portal/control body. It carries NO identity:
@@ -297,12 +353,12 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: no control portal bound", http.StatusServiceUnavailable)
 		return
 	}
-	who, err := g.authenticate(r)
+	actor, err := g.authenticate(r)
 	if err != nil {
 		g.refusal(w, err)
 		return
 	}
-	if err := g.control.Attach(who); err != nil {
+	if err := g.control.Attach(actor); err != nil {
 		g.refusal(w, err)
 		return
 	}
@@ -320,23 +376,23 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 	var ctrlErr error
 	switch strings.ToLower(req.Action) {
 	case "attach":
-		ctrlErr = g.control.Attach(who)
+		ctrlErr = g.control.Attach(actor)
 	case "steer":
-		ctrlErr = g.control.Steer(who, req.ThoughtID, req.Text)
+		ctrlErr = g.control.Steer(actor, req.ThoughtID, req.Text)
 	case "pause":
-		ctrlErr = g.control.Pause(who, req.ThoughtID)
+		ctrlErr = g.control.Pause(actor, req.ThoughtID)
 	case "resume":
-		ctrlErr = g.control.Resume(who, req.ThoughtID)
+		ctrlErr = g.control.Resume(actor, req.ThoughtID)
 	case "cancel":
-		ctrlErr = g.control.Cancel(who, req.ThoughtID)
+		ctrlErr = g.control.Cancel(actor, req.ThoughtID)
 	case "bump":
 		prio := 4
 		if req.Priority >= 1 && req.Priority <= 10 {
 			prio = int(req.Priority)
 		}
-		ctrlErr = g.control.BumpPriority(who, req.ThoughtID, prio)
+		ctrlErr = g.control.BumpPriority(actor, req.ThoughtID, prio)
 	case "retry":
-		ctrlErr = g.control.Retry(who, req.ThoughtID)
+		ctrlErr = g.control.Retry(actor, req.ThoughtID)
 	case "enqueue":
 		now := time.Now().UTC()
 		t := &thought.Thought{
@@ -350,7 +406,7 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 		if req.Priority >= 1 && req.Priority <= 10 {
 			t.Priority = int(req.Priority)
 		}
-		ctrlErr = g.control.Enqueue(who, t)
+		ctrlErr = g.control.Enqueue(actor, t)
 	default:
 		http.Error(w, fmt.Sprintf("gateway: unknown action %q", req.Action), http.StatusBadRequest)
 		return

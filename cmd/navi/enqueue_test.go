@@ -20,7 +20,7 @@ import (
 // seam (production wires nil and fails closed until IAM).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(portal.Action, principal.Ref) error {
+func (a allowAllAuth) Authorize(portal.Action, portal.Actor) error {
 	return nil
 }
 

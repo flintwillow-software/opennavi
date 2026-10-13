@@ -13,7 +13,6 @@ import (
 
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/object"
-	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -85,20 +84,22 @@ type Portal interface {
 	Start(ctx context.Context, deps Deps) error
 	// Stop shuts the portal down.
 	Stop() error
-	// Attach authorizes a verified principal for control (fail-closed until
-	// authorization is granted). The principal is the one the navi resolved
-	// from the connection's credential, never a value the client asserted.
-	Attach(who principal.Ref) error
-	Steer(who principal.Ref, thoughtID, message string) error
-	Pause(who principal.Ref, thoughtID string) error
-	Resume(who principal.Ref, thoughtID string) error
-	Cancel(who principal.Ref, thoughtID string) error
+	// Attach authorizes a verified actor for control (fail-closed until
+	// authorization is granted). The actor carries the principal the navi
+	// resolved from the connection's credential, never a value the client
+	// asserted, together with the request facts the binding supplied.
+	Attach(actor Actor) error
+	Steer(actor Actor, thoughtID, message string) error
+	Pause(actor Actor, thoughtID string) error
+	Resume(actor Actor, thoughtID string) error
+	Cancel(actor Actor, thoughtID string) error
 	// BumpPriority changes a queued thought's priority (NAVI-319 added the
 	// operation to the portal surface; the queue clamps it).
-	BumpPriority(who principal.Ref, thoughtID string, prio int) error
+	BumpPriority(actor Actor, thoughtID string, prio int) error
 	// Retry re-queues a failed thought.
-	Retry(who principal.Ref, thoughtID string) error
-	// Enqueue schedules a new thought on behalf of who
-	// (session-created thoughts claim the foreground slot).
-	Enqueue(who principal.Ref, t *thought.Thought) error
+	Retry(actor Actor, thoughtID string) error
+	// Enqueue schedules a new thought on behalf of actor
+	// (session-created thoughts claim the foreground slot). The actor is
+	// recorded as the thought's originator (ADR 0022 decision 2).
+	Enqueue(actor Actor, t *thought.Thought) error
 }

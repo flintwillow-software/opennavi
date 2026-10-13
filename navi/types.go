@@ -66,12 +66,14 @@ func validateTypeRegistration(r TypeRegistration) error {
 type objectSurface struct {
 	types *TypeCollection
 
-	// auth and who are the authorization path for actions (ADR 0017
-	// decision 4): the same portal.Authorizer a control portal uses, consulted
-	// with the principal the navi declares the surface acts as. A nil
+	// auth and actor are the authorization path for actions (ADR 0017
+	// decision 4; ADR 0022 decisions 1 and 5): the same portal.Authorizer a
+	// control portal uses, consulted with the actor the surface acts as. The
+	// default actor is the in-process console (ADR 0021 decision 9); a
+	// network binding re-scopes the surface to its verified actor. A nil
 	// authorizer refuses every action — fail closed.
-	auth portal.Authorizer
-	who  principal.Ref
+	auth  portal.Authorizer
+	actor portal.Actor
 
 	// deltas is the bounded, cursor-ed live-change window Watch reads
 	// (ADR 0017 decision 6). Producers push translated queue, agent, action,
@@ -85,9 +87,15 @@ var _ object.Notifier = (*objectSurface)(nil)
 
 func newObjectSurface(types *TypeCollection, auth portal.Authorizer, who principal.Ref) *objectSurface {
 	return &objectSurface{
-		types:  types,
-		auth:   auth,
-		who:    who,
+		types: types,
+		auth:  auth,
+		// The default actor is the in-process console: the terminal the
+		// operator is sitting at (ADR 0021 decision 9). A network binding
+		// re-scopes the surface with its own verified actor.
+		actor: portal.Actor{
+			Who:  who,
+			Info: portal.RequestInfo{Transport: "in-process", Channel: "console"},
+		},
 		deltas: object.NewDeltaWindow(0),
 	}
 }
@@ -183,14 +191,14 @@ func (s *objectSurface) Act(typeName, id, action string, args map[string]any) er
 	return nil
 }
 
-// authorize consults the navi's authorizer for one action. No authorizer is
-// wired means no action is permitted (fail closed) — the same discipline
-// portal.Control follows.
+// authorize consults the navi's authorizer for one action, as the surface's
+// actor. No authorizer is wired means no action is permitted (fail closed) —
+// the same discipline portal.Control follows.
 func (s *objectSurface) authorize(action string) error {
 	if s.auth == nil {
 		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, action)
 	}
-	return s.auth.Authorize(portal.Action(action), s.who)
+	return s.auth.Authorize(portal.Action(action), s.actor)
 }
 
 // Watch returns the object deltas after a cursor, the next cursor to use,

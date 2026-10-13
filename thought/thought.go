@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // ThoughtStatus is the lifecycle state of a thought.
@@ -112,6 +114,73 @@ type Thought struct {
 	// cancellation: snapshot progress into Checkpoint and return; the
 	// worker then parks the thought (running → paused).
 	PreemptRequested bool
+
+	// Origin is the verified principal that CAUSED this thought (ADR 0022
+	// decision 2). It is recorded when the thought is enqueued — from the
+	// portal boundary's verified actor, or the navi's own service principal
+	// for system-originated work — and never from a value the thought author
+	// supplied. The zero reference means the runtime has not attributed the
+	// thought yet; the navi treats it as system-originated (navi:<name>),
+	// which is why fail-closed authorization does not disable the runtime's
+	// own machinery (ADR 0021 decision 10, ADR 0022 decision 3).
+	Origin principal.Ref
+	// OriginInfo records how the originating request arrived, so a policy
+	// condition evaluated later in the chain — on a follow-up or a tool call
+	// — sees the same facts the binding supplied at the door. Empty for a
+	// system-originated thought, which has no request behind it.
+	OriginInfo OriginInfo
+	// Lineage records the thought-to-thought chain that scheduled this
+	// thought (ADR 0022 decision 2): a follow-up appends its parent's id, so
+	// "on whose behalf did this happen" is answerable from the record. It is
+	// empty for a thought enqueued directly.
+	Lineage []string
+}
+
+// OriginInfo is how the originating request arrived, as the binding that
+// admitted it reported: the transport, the input channel, the source address,
+// and the time. It is a fact about the REQUEST, never an identity (ADR 0021
+// decision 9) — the identity is Origin.
+//
+// The fields are deliberately plain strings rather than a shared contract
+// type: the thought package stays dependency-light, and the navi maps this
+// onto the engine's request context (ADR 0022 decision 1).
+//
+// The time is NOT authoritative for authorization: NAVI-414 records that a
+// deferred thought's clock is the local one. A time-scoped condition is
+// evaluated at the point of the decision, not frozen at enqueue.
+type OriginInfo struct {
+	// Transport names how the request arrived ("lan", "tailnet", "lora",
+	// "in-process").
+	Transport string
+	// Channel names the input channel that carried the intent ("console",
+	// "microphone", "sensor", "api").
+	Channel string
+	// RemoteAddr is the source address when the binding had one.
+	RemoteAddr string
+	// At is when the request was admitted. Zero when there is none.
+	At time.Time
+}
+
+// IsZero reports whether no origin facts were recorded.
+func (o OriginInfo) IsZero() bool {
+	return o.Transport == "" && o.Channel == "" && o.RemoteAddr == "" && o.At.IsZero()
+}
+
+// InheritFrom makes t a follow-up of parent (ADR 0022 decision 3): it takes
+// the parent's originating principal and request facts, and appends the
+// parent's id to the lineage. It does nothing when t already has an origin —
+// an explicitly attributed thought is never overwritten — or when parent is
+// nil.
+func (t *Thought) InheritFrom(parent *Thought) {
+	if t == nil || parent == nil || !t.Origin.IsZero() {
+		return
+	}
+	t.Origin = parent.Origin
+	t.OriginInfo = parent.OriginInfo
+	lineage := make([]string, 0, len(parent.Lineage)+1)
+	lineage = append(lineage, parent.Lineage...)
+	lineage = append(lineage, parent.ID)
+	t.Lineage = lineage
 }
 
 // OriginSelf / OriginTool tag thoughts the navi scheduled for itself
@@ -231,6 +300,9 @@ func (t *Thought) Clone() *Thought {
 	}
 	if t.DependsOn != nil {
 		out.DependsOn = append([]string(nil), t.DependsOn...)
+	}
+	if t.Lineage != nil {
+		out.Lineage = append([]string(nil), t.Lineage...)
 	}
 	return &out
 }

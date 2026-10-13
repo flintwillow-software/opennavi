@@ -126,9 +126,9 @@ func TestActFailsClosedWithoutAnAuthorizer(t *testing.T) {
 func TestActRefusalFromAuthorizerStopsTheAction(t *testing.T) {
 	n := New("actions-denied", WithPlanCloseCheck(false))
 	enqueueThought(t, n, "t1", time.Now().UTC())
-	deny := portal.AuthorizerFunc(func(action portal.Action, who principal.Ref) error {
-		if who.String() != "service:operator" {
-			t.Fatalf("authorizer saw principal %q, want service:operator", who)
+	deny := portal.AuthorizerFunc(func(action portal.Action, actor portal.Actor) error {
+		if actor.Who.String() != "service:operator" {
+			t.Fatalf("authorizer saw principal %q, want service:operator", actor.Who)
 		}
 		return portal.ErrUnauthorized
 	})
