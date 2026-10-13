@@ -57,6 +57,13 @@ type Navi struct {
 	Connectors *Collection[connector.Connector]
 	Portals    *Collection[portal.Portal]
 	Modes      *Collection[Mode]
+	// Roles and Groups are the compiled authorization policy (ADR 0021
+	// decisions 3 and 5): declared here like tools and models, compiled
+	// against the derived ceiling at Run. A role is a trust policy plus a
+	// permission policy; a group is the permission side of a collection whose
+	// membership comes from the trust source.
+	Roles  *Collection[Role]
+	Groups *Collection[*Group]
 
 	// Datastores is the compiled candidate set of persistence backends
 	// (ADR 0011). The active one is selected from runtime config at
@@ -138,6 +145,10 @@ type Navi struct {
 	// refuses every action — fail closed.
 	objectAuth portal.Authorizer
 	objectWho  principal.Ref
+	// policy is the compiled authorization policy (ADR 0021 decisions 3-5,
+	// 11), built at assembly from the declared roles and groups against the
+	// derived ceiling. Nil before assembly.
+	policy *Policy
 	// trustSources are the declared trust sources (WithTrustSource) and trust
 	// is the compiled set built from them at New (ADR 0021 decision 6). An
 	// empty set means the navi cannot authenticate a network portal, which
@@ -319,6 +330,10 @@ func New(name string, opts ...Option) *Navi {
 			"portal", nil, validatePortal),
 		Modes: newCollection("mode",
 			func(m Mode) string { return m.Name }, validateMode),
+		Roles: newCollection("role",
+			func(r Role) string { return r.Name }, validateRole),
+		Groups: newCollection("group",
+			func(g *Group) string { return g.Ref().String() }, validateGroup),
 		Datastores: newDatastoreCollection(),
 		// The assembled-context budget defaults on; WithThoughtBudget
 		// overrides or disables it.
@@ -498,7 +513,7 @@ func (n *Navi) validate() error {
 	// Shape re-validation: an Add error the author ignored must not slip
 	// a malformed component into a serving navi.
 	for _, c := range []interface{ revalidate() error }{
-		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes, n.Datastores,
+		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes, n.Datastores, n.Roles, n.Groups,
 	} {
 		if err := c.revalidate(); err != nil {
 			return err
@@ -507,7 +522,7 @@ func (n *Navi) validate() error {
 	// Duplicate names, likewise: Add catches them eagerly, this catches
 	// them whether or not Add's error was read.
 	for _, d := range []interface{ duplicates() (string, bool) }{
-		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores,
+		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores, n.Roles, n.Groups,
 	} {
 		if name, dup := d.duplicates(); dup {
 			return fmt.Errorf("%w: %q", ErrDuplicate, name)

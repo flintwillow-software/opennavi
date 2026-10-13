@@ -231,14 +231,14 @@ type Decision struct {
 // afterwards.
 type Policy struct {
 	roles   []Role
-	groups  []Group
+	groups  []*Group
 	ceiling CapabilitySet
 }
 
 // NewPolicy compiles a policy. The ceiling is the navi's derived capability
 // set; every role and group grant must be inside it, which is the intersection
 // rule enforced once, at assembly, rather than per request.
-func NewPolicy(ceiling CapabilitySet, roles []Role, groups []Group) (*Policy, error) {
+func NewPolicy(ceiling CapabilitySet, roles []Role, groups []*Group) (*Policy, error) {
 	if err := ceiling.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: ceiling: %w", ErrInvalid, err)
 	}
@@ -284,7 +284,7 @@ func NewPolicy(ceiling CapabilitySet, roles []Role, groups []Group) (*Policy, er
 func (p *Policy) Roles() []Role { return append([]Role(nil), p.roles...) }
 
 // Groups returns the compiled groups.
-func (p *Policy) Groups() []Group { return append([]Group(nil), p.groups...) }
+func (p *Policy) Groups() []*Group { return append([]*Group(nil), p.groups...) }
 
 // Ceiling returns the compiled capability ceiling.
 func (p *Policy) Ceiling() CapabilitySet { return p.ceiling }
@@ -353,6 +353,15 @@ func (p *Policy) Decide(req AccessRequest) Decision {
 
 // applicable returns the permission layers a principal holds: one per role it
 // may hold and one per group the trust source placed it in.
+//
+// These layers UNION, and that has an operational consequence worth stating
+// plainly, because it reads backwards to anyone thinking in least-privilege
+// terms: assigning an additional role can never narrow what a principal may do,
+// so its effective grant is the BROADEST of its roles and groups. An operator
+// reaching for least privilege will want to "give them a restricted role" —
+// that does nothing while a permissive role is already held. The only
+// subtractive moves are removing a role or group, or adding a deny, which wins
+// across every layer.
 func (p *Policy) applicable(who *Principal) []grant {
 	if who == nil {
 		return nil

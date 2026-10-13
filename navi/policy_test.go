@@ -181,7 +181,7 @@ func TestPolicyAllowsViaRoleAndGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := NewPolicy(declaredCeiling(), []Role{role}, []Group{*group})
+	p, err := NewPolicy(declaredCeiling(), []Role{role}, []*Group{group})
 	if err != nil {
 		t.Fatalf("NewPolicy: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestPolicyDenyWinsAcrossLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := NewPolicy(declaredCeiling(), []Role{role}, []Group{*group})
+	p, err := NewPolicy(declaredCeiling(), []Role{role}, []*Group{group})
 	if err != nil {
 		t.Fatal(err)
 	}
