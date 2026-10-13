@@ -55,6 +55,7 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 	mux.HandleFunc("/_accounts", f.serveAccounts)
 	mux.HandleFunc("/_transactor/api/v1/find-all/", f.serveFindAll)
 	mux.HandleFunc("/_transactor/api/v1/tx/", f.serveTx)
+	mux.HandleFunc("/_transactor/api/v1/search-fulltext/", f.serveSearch)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -117,6 +118,22 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 		data = f.persons
 	}
 	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": filterDocs(data, query)})
+}
+
+// serveSearch answers the full-text search route with Huly's `{docs, total}`
+// envelope.
+func (f *fakeHuly) serveSearch(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.requests = append(f.requests, "search:"+r.URL.Query().Get("query"))
+	f.mu.Unlock()
+	writeJSON(w, map[string]any{
+		"total": 1,
+		"docs": []map[string]any{{
+			"id": "6acd168268c57585aac3fa3f", "title": "Huly connector",
+			"shortTitle": "NAVI-408", "score": 12.5,
+			"doc": map[string]any{"_id": "6acd168268c57585aac3fa3f", "_class": "tracker:class:Issue"},
+		}},
+	})
 }
 
 func (f *fakeHuly) serveTx(w http.ResponseWriter, r *http.Request) {
@@ -335,11 +352,13 @@ func TestEgressToolsRefuseBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTools: %v", err)
 	}
-	if len(tools) != 2 {
-		t.Fatalf("got %d tools, want 2", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("got %d tools, want 4", len(tools))
 	}
-	if _, err := tools[0].Handler(context.Background(), nil); !errors.Is(err, connector.ErrNotStarted) {
-		t.Fatalf("call before Start = %v, want ErrNotStarted", err)
+	for _, tl := range tools {
+		if _, err := tl.Handler(context.Background(), nil); !errors.Is(err, connector.ErrNotStarted) {
+			t.Fatalf("%s before Start = %v, want ErrNotStarted", tl.Def.Name, err)
+		}
 	}
 }
 
@@ -374,5 +393,132 @@ func TestResolveRefReadsEnvThenFile(t *testing.T) {
 	}
 	if got := resolveRef("MISSING", func(string) string { return "" }); got != "" {
 		t.Errorf("missing reference = %q, want empty", got)
+	}
+}
+
+// TestIssueUpdateSetsStatusAssigneeAndPriority pins the update transaction: a
+// single TxUpdateDoc carrying only the fields given, with the status and
+// assignee references resolved.
+func TestIssueUpdateSetsStatusAssigneeAndPriority(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+
+	out, err := client.issueUpdate(context.Background(), map[string]any{
+		"issue": "NAVI-408", "status": "In Progress", "assignee": "bastilli", "priority": "high",
+	})
+	if err != nil {
+		t.Fatalf("issueUpdate: %v", err)
+	}
+	if !strings.Contains(out, `"updated":["status","assignee","priority"]`) {
+		t.Errorf("result = %s, want the updated fields", out)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.txs) != 1 {
+		t.Fatalf("posted %d transactions, want 1", len(f.txs))
+	}
+	tx := f.txs[0]
+	if tx["_class"] != classTxUpdateDoc || tx["objectId"] != "6acd168268c57585aac3fa3f" ||
+		tx["objectClass"] != classIssue {
+		t.Fatalf("tx = %v, want a TxUpdateDoc on the issue", tx)
+	}
+	ops, _ := tx["operations"].(map[string]any)
+	set, _ := ops["$set"].(map[string]any)
+	if set["status"] != "tracker:status:InProgress" {
+		t.Errorf("status = %v, want the resolved reference", set["status"])
+	}
+	if set["assignee"] != "6aa2a3038376b1c099c0403d" {
+		t.Errorf("assignee = %v, want the resolved person id", set["assignee"])
+	}
+	if set["priority"] != float64(2) {
+		t.Errorf("priority = %v, want 2 (high)", set["priority"])
+	}
+}
+
+// TestIssueUpdateClearsAssignee pins the empty-assignee path: it clears the
+// field rather than resolving a person named "".
+func TestIssueUpdateClearsAssignee(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+
+	if _, err := client.issueUpdate(context.Background(), map[string]any{"issue": "NAVI-408", "assignee": ""}); err != nil {
+		t.Fatalf("issueUpdate: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ops, _ := f.txs[0]["operations"].(map[string]any)
+	set, _ := ops["$set"].(map[string]any)
+	if v, present := set["assignee"]; !present || v != nil {
+		t.Errorf("assignee = %v (present %v), want an explicit null", v, present)
+	}
+}
+
+// TestIssueUpdateRefusesNothingToDo pins the guard: an update with no fields is
+// refused rather than posting an empty transaction.
+func TestIssueUpdateRefusesNothingToDo(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+	if _, err := client.issueUpdate(context.Background(), map[string]any{"issue": "NAVI-408"}); err == nil {
+		t.Fatal("an update with no fields succeeded, want a refusal")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.txs) != 0 {
+		t.Errorf("posted %d transactions for a no-op, want 0", len(f.txs))
+	}
+}
+
+// TestIssueSearchReturnsDocuments pins the search path: the full-text route,
+// mapped to the documents Huly returns.
+func TestIssueSearchReturnsDocuments(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+
+	out, err := client.issueSearch(context.Background(), map[string]any{"query": "Huly connector", "limit": 5})
+	if err != nil {
+		t.Fatalf("issueSearch: %v", err)
+	}
+	var got struct {
+		Results []map[string]any `json:"results"`
+		Count   int              `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v (%s)", err, out)
+	}
+	if got.Count != 1 || got.Results[0]["identifier"] != "NAVI-408" ||
+		got.Results[0]["class"] != "tracker:class:Issue" {
+		t.Fatalf("results = %s, want the issue", out)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	found := false
+	for _, r := range f.requests {
+		if r == "search:Huly connector" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("search route not called: %v", f.requests)
+	}
+}
+
+// TestPriorityScale pins Huly's priority numbering: no-priority is 0 and a
+// LOWER number is a HIGHER priority.
+func TestPriorityScale(t *testing.T) {
+	for name, want := range map[string]int{"no-priority": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4} {
+		if got, ok := priorityFromString(name); !ok || got != want {
+			t.Errorf("priorityFromString(%q) = %d (ok %v), want %d", name, got, ok, want)
+		}
+	}
+	if priorityToString(2) != "high" {
+		t.Errorf("priorityToString(2) = %q, want high", priorityToString(2))
+	}
+	if _, ok := priorityFromString("catastrophic"); ok {
+		t.Error("an unknown priority was accepted")
 	}
 }
