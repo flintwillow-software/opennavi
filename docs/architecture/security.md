@@ -118,10 +118,12 @@ compiled, identity is resolved at runtime** (ADR 0021).
   authored it*: a microphone grant is exercisable by whoever is audible, so
   scoping it narrowly (no `shell_exec`, confirmation for consequential actions,
   speaker verification later) is a deployment decision this vocabulary cannot
-  make. Because a transport condition correctly fails when a binding has no
-  transport, "local only" is expressed as a channel — which makes a channel
-  label load-bearing: **a label must not be reused across transports**, or a
-  grant silently widens from "this device's microphone" to "any audio,
+  make. Because a binding declares its transport (the in-process binding
+  included — ADR 0019 calls it a transport), "local only" is expressible as
+  `OnTransport("in-process")`; a request with no binding context matches no
+  transport condition at all. Both label kinds are load-bearing: a binding must
+  not reuse a transport label or a channel label for a different path, or a
+  scoped grant widens silently from "this device's microphone" to "any audio,
   anywhere". Where locality matters, name both facts
   (`OnChannel(...)` together with `OnTransport(...)`).
 - **The development default is explicit and named.** `portal.AllowAllAuthenticator`

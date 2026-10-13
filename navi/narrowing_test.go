@@ -127,11 +127,22 @@ func TestChannelIsSeparateFromTransport(t *testing.T) {
 		t.Error("the microphone grant must permit the microphone")
 	}
 
-	// A transport condition does not match a binding that has no transport:
-	// a requirement that cannot be shown to hold is not met.
+	// A transport condition is a requirement: a request with no binding context
+	// matches nothing.
 	lan := CapabilitySet{Allow: []Grant{When(Enqueue(), OnTransport("lan"))}}
-	if lan.Permits(Enqueue(), inProcessConsole) {
-		t.Error("a transport condition must not match an in-process binding with no transport")
+	if lan.Permits(Enqueue(), RequestContext{}) {
+		t.Error("a transport condition must not match a request with no binding context")
+	}
+	// The in-process binding declares its own transport — ADR 0019 calls the
+	// in-process binding a transport, so "in-process" is a label, not an
+	// absence — which is why a grant can name it rather than being forced to
+	// lean on the channel label alone.
+	inProcess := CapabilitySet{Allow: []Grant{When(Enqueue(), OnTransport("in-process"))}}
+	if !inProcess.Permits(Enqueue(), RequestContext{Transport: "in-process", Channel: "console"}) {
+		t.Error("a grant must be able to name the in-process transport")
+	}
+	if inProcess.Permits(Enqueue(), RequestContext{Transport: "lan", Channel: "console"}) {
+		t.Error("the in-process grant must not match the LAN")
 	}
 	// The same binding is reachable by an unconditioned or channel-scoped grant.
 	if !(CapabilitySet{Allow: Allows(Enqueue())}).Permits(Enqueue(), inProcessConsole) {

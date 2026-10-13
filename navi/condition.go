@@ -35,9 +35,12 @@ type RequestContext struct {
 	Principal *Principal
 	// Now is the evaluation time. Zero means "use time.Now".
 	Now time.Time
-	// Transport names how the request ARRIVED: "lan", "tailnet", "lora",
-	// "in-process" — whatever the binding declares. Empty when the binding has
-	// no transport notion (a local console, a serial link).
+	// Transport names how the request ARRIVED — the binding's own identity:
+	// "lan", "tailnet", "lora", "in-process". ADR 0019 calls the in-process
+	// binding a transport, so "in-process" is a value, not an absence: every
+	// binding declares one. Empty means the request has no binding context at
+	// all (an internal call, a test), and a transport condition correctly fails
+	// then — a requirement that cannot be shown to hold is not met.
 	Transport string
 	// Channel names what carried the intent — the INPUT CHANNEL: "console",
 	// "microphone", "sensor", "api". It is deliberately separate from
@@ -112,15 +115,21 @@ func (c ConditionFunc) Validate() error {
 // transportCondition matches how the request arrived.
 type transportCondition struct{ want string }
 
-// OnTransport requires the request to arrive on a named transport — "lan",
-// "tailnet", "lora". This is how a mesh peer is told from a LAN client without
-// putting transport into the principal (ADR 0021 decision 9). The label is the
-// binding's; the policy decides what it means.
+// OnTransport requires the request to have arrived on a named transport — the
+// binding's own identity: "lan", "tailnet", "lora", "in-process". This is how
+// a mesh peer is told from a LAN client without putting transport into the
+// principal (ADR 0021 decision 9). The label is the binding's; the policy
+// decides what it means.
 //
-// An in-process binding with no transport notion leaves Transport empty, so a
-// transport condition does not match it — correctly, because a condition is a
-// requirement. Use OnChannel for a binding that has no transport but does have
-// an input channel.
+// Every binding declares one, the in-process binding included — ADR 0019 calls
+// it a transport, so "in-process" is a label rather than an absence. A request
+// with no binding context at all leaves Transport empty and matches nothing,
+// because a condition is a requirement.
+//
+// The label is load-bearing in exactly the way a channel label is: a binding
+// must not reuse a transport label for a different path. Labelling a
+// mesh-relayed binding "lan" widens every transport-scoped grant silently, and
+// nothing in evaluation notices.
 func OnTransport(label string) Condition {
 	return transportCondition{want: strings.ToLower(strings.TrimSpace(label))}
 }
@@ -159,14 +168,13 @@ type channelCondition struct{ want string }
 //     verification later) is the other half, and it is a deployment decision
 //     this vocabulary cannot make for you.
 //
-//   - It makes the LABEL load-bearing. A transport condition correctly fails
-//     when a binding has no transport, so "local only" cannot be expressed as
-//     the absence of a transport — it has to be a channel. If any binding ever
-//     labels mesh-relayed audio "microphone", OnChannel("microphone") widens
-//     silently from "this device's own microphone" to "any audio, anywhere",
-//     and nothing in evaluation notices. The rule that keeps it sound: a
-//     channel label must not be reused across transports. Where locality
-//     matters, name both facts rather than leaning on the label alone:
+//   - It makes the LABEL load-bearing. A channel label names one input path,
+//     and reusing it for another widens every channel-scoped grant silently: if
+//     a binding labels mesh-relayed audio "microphone", OnChannel("microphone")
+//     stops meaning "this device's own microphone" and starts meaning "any
+//     audio, anywhere", and nothing in evaluation notices. The rule: one label,
+//     one input path. Where locality matters, name both facts rather than
+//     leaning on the channel alone:
 //
 //     When(Call("shell_exec"), OnChannel("microphone"), OnTransport("in-process"))
 func OnChannel(label string) Condition {
