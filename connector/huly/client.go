@@ -43,8 +43,12 @@ type session struct {
 	workspace string
 	// token is the workspace-scoped bearer token.
 	token string
-	// account is the account uuid Huly stamps on transactions.
-	account string
+	// socialID is the account's PRIMARY SOCIAL ID, which Huly stamps on a
+	// transaction as its author (modifiedBy/createdBy). It is NOT the account
+	// uuid: Huly's own client builds its transaction factory with
+	// `me.primarySocialId`, and a transaction carrying the uuid is refused with
+	// AccountMismatch.
+	socialID string
 }
 
 // maxBody bounds how much of a response is read, so a hostile or broken server
@@ -173,13 +177,29 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	if strings.TrimSpace(sel.Endpoint) == "" || strings.TrimSpace(sel.Token) == "" {
 		return nil, fmt.Errorf("huly: workspace %q answered with no endpoint or token", ws)
 	}
+	endpoint := strings.Replace(sel.Endpoint, "ws", "http", 1)
+
+	// A transaction's author is the account's PRIMARY SOCIAL ID, not its uuid:
+	// Huly's own client builds its transaction factory from `me.primarySocialId`,
+	// and a transaction carrying the uuid is refused with AccountMismatch.
+	var account struct {
+		PrimarySocialID string `json:"primarySocialId"`
+	}
+	accountURL := fmt.Sprintf("%s/api/v1/account/%s", strings.TrimRight(endpoint, "/"), url.PathEscape(sel.Workspace))
+	if err := c.getJSON(ctx, accountURL, sel.Token, &account); err != nil {
+		return nil, fmt.Errorf("huly: read account: %w", err)
+	}
+	socialID := strings.TrimSpace(account.PrimarySocialID)
+	if socialID == "" {
+		return nil, fmt.Errorf("huly: account has no primary social id")
+	}
 	return &session{
 		// Huly answers with the WebSocket endpoint; the REST routes live at the
 		// same host with the http scheme.
-		endpoint:  strings.Replace(sel.Endpoint, "ws", "http", 1),
+		endpoint:  endpoint,
 		workspace: sel.Workspace,
 		token:     sel.Token,
-		account:   sel.Account,
+		socialID:  socialID,
 	}, nil
 }
 
@@ -230,12 +250,19 @@ func (c *Client) findAll(ctx context.Context, class string, query, options map[s
 // tx applies one transaction. Huly's own client posts a single transaction
 // object here, not an array.
 func (c *Client) tx(ctx context.Context, transaction map[string]any) error {
+	_, err := c.txRaw(ctx, transaction)
+	return err
+}
+
+// txRaw applies a transaction and returns the server's answer, which a
+// `retrieve` transaction uses to hand back the updated document.
+func (c *Client) txRaw(ctx context.Context, transaction map[string]any) ([]byte, error) {
 	s, err := c.session(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	target := fmt.Sprintf("%s/api/v1/tx/%s", strings.TrimRight(s.endpoint, "/"), url.PathEscape(s.workspace))
-	return c.postJSON(ctx, target, s.token, transaction, nil)
+	return c.postRaw(ctx, target, s.token, transaction)
 }
 
 // rpc calls the accounts service: a `{method, params}` body answering
@@ -281,19 +308,7 @@ func (c *Client) getRaw(ctx context.Context, target, token string) ([]byte, erro
 }
 
 func (c *Client) postJSON(ctx context.Context, target, token string, in, out any) error {
-	blob, err := json.Marshal(in)
-	if err != nil {
-		return fmt.Errorf("huly: encode request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(blob))
-	if err != nil {
-		return fmt.Errorf("huly: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	body, err := c.do(req)
+	body, err := c.postRaw(ctx, target, token, in)
 	if err != nil {
 		return err
 	}
@@ -301,6 +316,22 @@ func (c *Client) postJSON(ctx context.Context, target, token string, in, out any
 		return nil
 	}
 	return json.Unmarshal(body, out)
+}
+
+func (c *Client) postRaw(ctx context.Context, target, token string, in any) ([]byte, error) {
+	blob, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("huly: encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(blob))
+	if err != nil {
+		return nil, fmt.Errorf("huly: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return c.do(req)
 }
 
 // do performs a request and returns its body, mapping a refusal and a transport

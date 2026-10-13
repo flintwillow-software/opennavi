@@ -30,6 +30,7 @@ type fakeHuly struct {
 	issues   []map[string]any
 	statuses []map[string]any
 	persons  []map[string]any
+	project  map[string]any
 }
 
 func newFakeHuly(t *testing.T) *fakeHuly {
@@ -38,7 +39,11 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 		issues: []map[string]any{
 			{"_id": "6acd168268c57585aac3fa3f", "identifier": "NAVI-408", "title": "Huly connector",
 				"status": "tracker:status:InProgress", "assignee": "6aa2a3038376b1c099c0403d",
-				"priority": 2, "number": 408, "modifiedOn": 1000, "space": "space-1"},
+				"priority": 2, "number": 408, "modifiedOn": 1000, "space": "space-1", "rank": "0|i001c7:"},
+		},
+		project: map[string]any{
+			"_id": "space-1", "identifier": "NAVI", "name": "OpenNAVI", "sequence": 418,
+			"defaultIssueStatus": "tracker:status:Backlog", "space": "core:space:Space",
 		},
 		statuses: []map[string]any{
 			{"_id": "tracker:status:Backlog", "name": "Backlog", "category": "task:statusCategory:UnStarted"},
@@ -54,6 +59,7 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 	})
 	mux.HandleFunc("/_accounts", f.serveAccounts)
 	mux.HandleFunc("/_transactor/api/v1/find-all/", f.serveFindAll)
+	mux.HandleFunc("/_transactor/api/v1/account/", f.serveAccount)
 	mux.HandleFunc("/_transactor/api/v1/tx/", f.serveTx)
 	mux.HandleFunc("/_transactor/api/v1/search-fulltext/", f.serveSearch)
 	f.srv = httptest.NewServer(mux)
@@ -116,6 +122,10 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 		data = f.statuses
 	case classPerson:
 		data = f.persons
+	case classProject:
+		if f.project != nil {
+			data = []map[string]any{f.project}
+		}
 	}
 	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": filterDocs(data, query)})
 }
@@ -136,6 +146,12 @@ func (f *fakeHuly) serveSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// serveAccount answers the account route, whose primarySocialId is the author
+// a transaction must carry.
+func (f *fakeHuly) serveAccount(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"uuid": "acct-uuid", "primarySocialId": "social-1"})
+}
+
 func (f *fakeHuly) serveTx(w http.ResponseWriter, r *http.Request) {
 	blob, _ := io.ReadAll(r.Body)
 	var tx map[string]any
@@ -144,6 +160,22 @@ func (f *fakeHuly) serveTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
+	// A sequence bump is the create path's first transaction: answer with the
+	// updated document, the way a `retrieve` transaction does.
+	if tx["_class"] == classTxUpdateDoc {
+		if ops, ok := tx["operations"].(map[string]any); ok {
+			if inc, ok := ops["$inc"].(map[string]any); ok {
+				if _, ok := inc["sequence"]; ok && f.project != nil {
+					f.project["sequence"] = toInt(f.project["sequence"]) + 1
+					f.txs = append(f.txs, tx)
+					seq := f.project["sequence"]
+					f.mu.Unlock()
+					writeJSON(w, map[string]any{"result": map[string]any{"sequence": seq}})
+					return
+				}
+			}
+		}
+	}
 	f.txs = append(f.txs, tx)
 	f.mu.Unlock()
 	writeJSON(w, map[string]any{"result": []any{}})
@@ -299,6 +331,9 @@ func TestIssueCommentPostsACollectionTransaction(t *testing.T) {
 	if tx["_class"] != classTxCreateDoc || tx["objectClass"] != classChatMessage {
 		t.Errorf("tx classes = %v / %v, want a ChatMessage create", tx["_class"], tx["objectClass"])
 	}
+	if tx["modifiedBy"] != "social-1" || tx["createdBy"] != "social-1" {
+		t.Errorf("author = %v/%v, want the account's primary social id", tx["modifiedBy"], tx["createdBy"])
+	}
 	if tx["collection"] != collectionComments || tx["attachedTo"] != "6acd168268c57585aac3fa3f" ||
 		tx["attachedToClass"] != classIssue {
 		t.Errorf("tx attachment = %v/%v/%v, want the issue's comments collection",
@@ -352,8 +387,8 @@ func TestEgressToolsRefuseBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTools: %v", err)
 	}
-	if len(tools) != 4 {
-		t.Fatalf("got %d tools, want 4", len(tools))
+	if len(tools) != 5 {
+		t.Fatalf("got %d tools, want 5", len(tools))
 	}
 	for _, tl := range tools {
 		if _, err := tl.Handler(context.Background(), nil); !errors.Is(err, connector.ErrNotStarted) {
@@ -423,6 +458,9 @@ func TestIssueUpdateSetsStatusAssigneeAndPriority(t *testing.T) {
 	if tx["_class"] != classTxUpdateDoc || tx["objectId"] != "6acd168268c57585aac3fa3f" ||
 		tx["objectClass"] != classIssue {
 		t.Fatalf("tx = %v, want a TxUpdateDoc on the issue", tx)
+	}
+	if tx["modifiedBy"] != "social-1" {
+		t.Errorf("author = %v, want the account's primary social id", tx["modifiedBy"])
 	}
 	ops, _ := tx["operations"].(map[string]any)
 	set, _ := ops["$set"].(map[string]any)
@@ -520,5 +558,138 @@ func TestPriorityScale(t *testing.T) {
 	}
 	if _, ok := priorityFromString("catastrophic"); ok {
 		t.Error("an unknown priority was accepted")
+	}
+}
+
+// TestRankNext pins the LexoRank successor: the middle for a project with no
+// issues, then +8 (the gap Huly's own client leaves), and strict monotonicity
+// over a run.
+func TestRankNext(t *testing.T) {
+	for prev, want := range map[string]string{
+		"":          rankMiddle,
+		"0|hzzzzz:": "0|i00007:",
+		"0|i00007:": "0|i0000f:",
+		"0|i001c7:": "0|i001cf:",
+	} {
+		got, err := rankNext(prev)
+		if err != nil || got != want {
+			t.Errorf("rankNext(%q) = %q (%v), want %q", prev, got, err, want)
+		}
+	}
+	prev := rankMiddle
+	for i := 0; i < 64; i++ {
+		next, err := rankNext(prev)
+		if err != nil {
+			t.Fatalf("rankNext(%q): %v", prev, err)
+		}
+		if next <= prev {
+			t.Fatalf("rankNext(%q) = %q, which does not sort after it", prev, next)
+		}
+		prev = next
+	}
+}
+
+// TestIssueCreateCreatesATopLevelIssue pins the whole create flow: the sequence
+// bump, the rank placed after the project's last issue, and the document
+// attached to NoParent.
+func TestIssueCreateCreatesATopLevelIssue(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+
+	out, err := client.issueCreate(context.Background(), map[string]any{
+		"project": "NAVI", "title": "a new issue", "status": "In Progress", "priority": "high",
+	})
+	if err != nil {
+		t.Fatalf("issueCreate: %v", err)
+	}
+	if !strings.Contains(out, `"identifier":"NAVI-419"`) {
+		t.Errorf("result = %s, want NAVI-419", out)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.txs) != 2 {
+		t.Fatalf("posted %d transactions, want a sequence bump and a create", len(f.txs))
+	}
+	inc := f.txs[0]
+	if inc["_class"] != classTxUpdateDoc || inc["objectClass"] != classProject {
+		t.Fatalf("first transaction = %v, want the project sequence bump", inc)
+	}
+	if inc["modifiedBy"] != "social-1" {
+		t.Errorf("the sequence bump's author = %v, want the primary social id", inc["modifiedBy"])
+	}
+	create := f.txs[1]
+	if create["modifiedBy"] != "social-1" || create["createdBy"] != "social-1" {
+		t.Errorf("the create's author = %v/%v, want the primary social id", create["modifiedBy"], create["createdBy"])
+	}
+	if create["_class"] != classTxCreateDoc || create["objectClass"] != classIssue ||
+		create["objectSpace"] != "space-1" {
+		t.Fatalf("create transaction = %v, want an issue in the project space", create)
+	}
+	if create["attachedTo"] != noParent || create["attachedToClass"] != classIssue ||
+		create["collection"] != collectionSubIssues {
+		t.Errorf("attachment = %v/%v/%v, want a top-level issue",
+			create["attachedTo"], create["attachedToClass"], create["collection"])
+	}
+	attrs, _ := create["attributes"].(map[string]any)
+	if attrs["identifier"] != "NAVI-419" || attrs["number"] != float64(419) {
+		t.Errorf("identity = %v/%v, want NAVI-419", attrs["identifier"], attrs["number"])
+	}
+	if attrs["status"] != "tracker:status:InProgress" || attrs["priority"] != float64(2) {
+		t.Errorf("status/priority = %v/%v, want In Progress / 2", attrs["status"], attrs["priority"])
+	}
+	if attrs["rank"] != "0|i001cf:" {
+		t.Errorf("rank = %v, want the successor of the last issue's rank", attrs["rank"])
+	}
+	if v, present := attrs["description"]; !present || v != nil {
+		t.Errorf("description = %v, want null (rich text is a separate service)", v)
+	}
+	if attrs["kind"] != taskTypeIssue {
+		t.Errorf("kind = %v, want %s", attrs["kind"], taskTypeIssue)
+	}
+}
+
+// TestIssueCreateAsASubIssue pins the parent path: the issue is attached to its
+// parent and carries the parent chain.
+func TestIssueCreateAsASubIssue(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+
+	if _, err := client.issueCreate(context.Background(), map[string]any{
+		"project": "NAVI", "title": "child", "parent": "NAVI-408",
+	}); err != nil {
+		t.Fatalf("issueCreate: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	create := f.txs[1]
+	if create["attachedTo"] != "6acd168268c57585aac3fa3f" || create["attachedToClass"] != classIssue {
+		t.Errorf("attachment = %v, want the parent issue", create["attachedTo"])
+	}
+	attrs, _ := create["attributes"].(map[string]any)
+	parents, _ := attrs["parents"].([]any)
+	if len(parents) != 1 {
+		t.Fatalf("parents = %v, want one entry", attrs["parents"])
+	}
+	entry, _ := parents[0].(map[string]any)
+	if entry["identifier"] != "NAVI-408" {
+		t.Errorf("parent entry = %v, want NAVI-408", entry)
+	}
+}
+
+// TestIssueCreateRefusesAnUnknownProject pins the fail-closed lookup.
+func TestIssueCreateRefusesAnUnknownProject(t *testing.T) {
+	f := newFakeHuly(t)
+	_, live := connectFake(t, f, map[string]string{"HULY_TOKEN": "t"})
+	client, _ := live.Get()
+	if _, err := client.issueCreate(context.Background(), map[string]any{"project": "NOPE", "title": "x"}); err == nil {
+		t.Fatal("create in an unknown project succeeded, want a refusal")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.txs) != 0 {
+		t.Errorf("posted %d transactions for an unknown project, want 0", len(f.txs))
 	}
 }
