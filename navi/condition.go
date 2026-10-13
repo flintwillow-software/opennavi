@@ -22,22 +22,33 @@ import (
 // *what* may be done, a condition says *when the request qualifies*.
 
 // RequestContext is what a condition is evaluated against: facts about the
-// request and the acting principal. The binding supplies the transport facts
-// (it is the only layer that knows them); the navi supplies the principal it
-// verified and the clock. A condition never consults anything else — there is
-// no ambient state to reach for, which is what keeps evaluation reproducible.
+// request and the acting principal. The binding supplies the transport and
+// channel facts (it is the only layer that knows them); the navi supplies the
+// principal it verified and the clock. A condition never consults anything
+// else — there is no ambient state to reach for, which is what keeps
+// evaluation reproducible.
 type RequestContext struct {
 	// Principal is the verified acting principal, with the claims and groups
 	// the trust source resolved. Nil for a request that has not been
-	// authenticated: a condition may then still match on transport, and the
-	// allow-required rule is what refuses the request.
+	// authenticated: a condition may then still match on transport or channel,
+	// and the allow-required rule is what refuses the request.
 	Principal *Principal
 	// Now is the evaluation time. Zero means "use time.Now".
 	Now time.Time
-	// Transport names the binding a request arrived on: "console", "lan",
-	// "tailnet", "lora" — whatever the binding declares. Empty when the
-	// binding has no transport notion.
+	// Transport names how the request ARRIVED: "lan", "tailnet", "lora",
+	// "in-process" — whatever the binding declares. Empty when the binding has
+	// no transport notion (a local console, a serial link).
 	Transport string
+	// Channel names what carried the intent — the INPUT CHANNEL: "console",
+	// "microphone", "sensor", "api". It is deliberately separate from
+	// Transport, because the two are independent and it is the channel that
+	// trust turns on: an SSH session is a console over a network transport,
+	// and a voice portal is a microphone in-process. ADR 0021 decision 9 makes
+	// the in-process console root because it is the terminal the operator is
+	// sitting at — an input-channel property — so a policy must be able to
+	// require a channel, or a microphone could inherit the console's trust by
+	// sharing its address space.
+	Channel string
 	// RemoteAddr is the source address when the binding has one. Empty
 	// otherwise (an in-process console, a serial link).
 	RemoteAddr string
@@ -67,6 +78,10 @@ type Condition interface {
 }
 
 // ConditionFunc adapts a predicate to a Condition.
+//
+// A custom condition is opaque to implication: Exceeds cannot show that it is
+// implied by anything, so a set carrying one is never accepted as narrower than
+// a condition it cannot be shown to imply. That is the fail-closed direction.
 type ConditionFunc struct {
 	ConditionName string
 	MatchFunc     func(ctx RequestContext) bool
@@ -94,13 +109,18 @@ func (c ConditionFunc) Validate() error {
 	return nil
 }
 
-// transportCondition matches the binding's transport label.
+// transportCondition matches how the request arrived.
 type transportCondition struct{ want string }
 
 // OnTransport requires the request to arrive on a named transport — "lan",
-// "tailnet", "lora", "console". This is how a mesh peer is told from a LAN
-// client without putting transport into the principal (ADR 0021 decision 9).
-// The label is the binding's; the policy decides what it means.
+// "tailnet", "lora". This is how a mesh peer is told from a LAN client without
+// putting transport into the principal (ADR 0021 decision 9). The label is the
+// binding's; the policy decides what it means.
+//
+// An in-process binding with no transport notion leaves Transport empty, so a
+// transport condition does not match it — correctly, because a condition is a
+// requirement. Use OnChannel for a binding that has no transport but does have
+// an input channel.
 func OnTransport(label string) Condition {
 	return transportCondition{want: strings.ToLower(strings.TrimSpace(label))}
 }
@@ -114,6 +134,33 @@ func (c transportCondition) Match(ctx RequestContext) bool {
 func (c transportCondition) Validate() error {
 	if c.want == "" {
 		return fmt.Errorf("%w: transport condition needs a label", ErrInvalid)
+	}
+	return nil
+}
+
+// channelCondition matches the input channel the intent arrived on.
+type channelCondition struct{ want string }
+
+// OnChannel requires the request's intent to have arrived on a named input
+// channel — "console", "microphone", "sensor", "api". This is the fact that
+// distinguishes the console from an ambient-input portal embedded the same
+// way: both may be in-process, and only the channel says which is which. It is
+// what makes ADR 0021 decision 9's "the console is root because it is the
+// terminal the operator is sitting at" expressible as policy rather than only
+// as prose.
+func OnChannel(label string) Condition {
+	return channelCondition{want: strings.ToLower(strings.TrimSpace(label))}
+}
+
+func (c channelCondition) Name() string { return "channel" }
+
+func (c channelCondition) Match(ctx RequestContext) bool {
+	return strings.ToLower(strings.TrimSpace(ctx.Channel)) == c.want
+}
+
+func (c channelCondition) Validate() error {
+	if c.want == "" {
+		return fmt.Errorf("%w: channel condition needs a label", ErrInvalid)
 	}
 	return nil
 }
@@ -208,6 +255,12 @@ type claimCondition struct{ name, value string }
 // come from the trust source (ADR 0021 decision 4); the provider supplies
 // identity and claims, the navi supplies policy — so this reads a fact the
 // provider asserted and the navi decided to require.
+//
+// A claim is NOT a role. ADR 0021 decision 2 defines a role as a compiled
+// capability set, and decision 5 splits a role into a trust policy and a
+// permission policy; neither is a claim, and a trust source can never mint one.
+// Name claim keys for what they are — `tier`, `team`, `deployment` — rather
+// than `role`, so the two concepts do not read as one.
 func OnClaim(name, value string) Condition {
 	return claimCondition{name: strings.TrimSpace(name), value: value}
 }
@@ -251,4 +304,79 @@ func validateConditions(conds []Condition) error {
 		}
 	}
 	return nil
+}
+
+// ── implication ─────────────────────────────────────────────────────────
+
+// impliesAll reports whether holding every condition in have guarantees every
+// condition in want — that is, whether the request set described by have is a
+// SUBSET of the one described by want. It is the comparison a narrowing check
+// needs: a grant is inside a ceiling only when its conditions are at least as
+// restrictive as the ceiling's.
+//
+// It is deliberately conservative. A pair it cannot reason about is reported as
+// not implied, so an uncomparable condition makes the check refuse rather than
+// assume. Conditions are opaque predicates in general; only the ones this
+// package defines are comparable, so a custom ConditionFunc never narrows past
+// a condition it cannot be shown to imply.
+func impliesAll(have, want []Condition) bool {
+	for _, w := range want {
+		implied := false
+		for _, h := range have {
+			if conditionImplies(h, w) {
+				implied = true
+				break
+			}
+		}
+		if !implied {
+			return false
+		}
+	}
+	return true
+}
+
+// conditionImplies reports whether have is at least as restrictive as want.
+func conditionImplies(have, want Condition) bool {
+	switch w := want.(type) {
+	case transportCondition:
+		h, ok := have.(transportCondition)
+		return ok && h.want == w.want
+	case channelCondition:
+		h, ok := have.(channelCondition)
+		return ok && h.want == w.want
+	case claimCondition:
+		h, ok := have.(claimCondition)
+		return ok && h.name == w.name && h.value == w.value
+	case networkCondition:
+		h, ok := have.(networkCondition)
+		return ok && h.net != nil && w.net != nil && subnetOf(h.net, w.net)
+	case timeWindowCondition:
+		h, ok := have.(timeWindowCondition)
+		return ok && windowWithin(h, w)
+	}
+	return false
+}
+
+// subnetOf reports whether inner is contained in outer.
+func subnetOf(inner, outer *net.IPNet) bool {
+	innerOnes, innerBits := inner.Mask.Size()
+	outerOnes, outerBits := outer.Mask.Size()
+	if innerBits != outerBits || innerOnes < outerOnes {
+		return false
+	}
+	return outer.Contains(inner.IP)
+}
+
+// windowWithin reports whether h is contained in w. A zero bound is unbounded
+// in that direction, so an unbounded h is never inside a bounded w.
+func windowWithin(h, w timeWindowCondition) bool {
+	// Lower bound: h.from must be at or after w.from.
+	if !w.from.IsZero() && (h.from.IsZero() || h.from.Before(w.from)) {
+		return false
+	}
+	// Upper bound: h.to must be at or before w.to.
+	if !w.to.IsZero() && (h.to.IsZero() || h.to.After(w.to)) {
+		return false
+	}
+	return true
 }

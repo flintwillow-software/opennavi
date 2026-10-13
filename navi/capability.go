@@ -270,18 +270,34 @@ func (s CapabilitySet) Permits(c Capability, ctx RequestContext) bool {
 }
 
 // Exceeds reports whether the set permits anything the ceiling does not, and
-// names the first violation. Only Allow can widen — a deny only narrows — and
-// a condition only narrows further, so the capability is checked and the
-// conditions are not: a conditioned grant can never exceed an unconditioned
-// one. That is what makes a role's grants composable with the compiled
-// ceiling, and it is the intersection rule enforced at assembly.
+// names the first violation. Only Allow can widen — a deny only narrows.
+//
+// A grant is inside the ceiling only when the ceiling's own conditions are
+// IMPLIED by the grant's. A bare grant against a conditioned ceiling is an
+// escalation, not a match: capability-only comparison would call them equal and
+// hand the principal an unconditioned capability the ceiling never granted.
+// An uncomparable condition is refused rather than assumed — see impliesAll.
 func (s CapabilitySet) Exceeds(ceiling CapabilitySet) error {
 	for _, a := range s.Allow {
-		if !ceiling.Permits(a.Capability, RequestContext{}) {
-			return fmt.Errorf("%w: capability %s is not permitted by the compiled ceiling", ErrInvalid, a.Capability)
+		if err := a.withinCeiling(ceiling); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// withinCeiling reports whether one grant permits no more than the ceiling: some
+// ceiling grant must cover the capability and be no narrower than this grant.
+func (g Grant) withinCeiling(ceiling CapabilitySet) error {
+	for _, c := range ceiling.Allow {
+		if !c.Capability.covers(g.Capability) {
+			continue
+		}
+		if impliesAll(g.When, c.When) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: capability %s is not permitted by the compiled ceiling", ErrInvalid, g.Capability)
 }
 
 // Validate checks every capability and condition in the set.
