@@ -207,6 +207,26 @@ type Type struct {
 	Actions []Action `json:"actions,omitempty"`
 	// Views are optional presentation hints.
 	Views []View `json:"views,omitempty"`
+	// Scope, when set, is the type's ROW-level scoping rule (ADR 0025 decision
+	// 3): which objects of the type a principal may see. Nil means the type is
+	// not row-scoped.
+	Scope *Scope `json:"scope,omitempty"`
+}
+
+// Scope is a type's row-level scoping rule (ADR 0025 decision 3, ADR 0028).
+// It is closed and referential — it names a field the type already declares —
+// and the one rule is "that field equals the acting principal's reference",
+// so there is no expression language (ADR 0017).
+//
+// A scope NARROWS: the surface ANDs it with the caller's query, so a caller may
+// narrow further but can never widen, and the provider applies the result. A
+// type with no scope is not row-scoped — every row the read gate admits is
+// visible.
+type Scope struct {
+	// Field is the declared field compared to the acting principal. Its value
+	// is the principal's reference ("user:alice"), so a type exposes the field
+	// it is scoped on.
+	Field string `json:"field"`
 }
 
 // Field returns the named field descriptor.
@@ -267,6 +287,14 @@ func (t Type) Validate() error {
 		}
 		if f.Kind == KindRef && strings.TrimSpace(f.RefType) == "" {
 			return fmt.Errorf("object: type %q: ref field %q requires a ref type", t.Name, f.Name)
+		}
+	}
+	if t.Scope != nil {
+		if strings.TrimSpace(t.Scope.Field) == "" {
+			return fmt.Errorf("object: type %q: scope needs a field", t.Name)
+		}
+		if !fields[t.Scope.Field] {
+			return fmt.Errorf("object: type %q: scope field %q is not a declared field", t.Name, t.Scope.Field)
 		}
 	}
 	details := map[string]bool{}

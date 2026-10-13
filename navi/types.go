@@ -172,10 +172,18 @@ func (s *objectSurface) List(typeName string, q object.Query) ([]object.Object, 
 	if err := s.authorizeCap(Read(typeName)); err != nil {
 		return nil, "", err
 	}
+	// A declared scope is a required narrowing layer: it is ANDed into the
+	// caller's filter, so a caller may narrow further but never widen.
+	q.Filter = andFilter(q.Filter, scopeFilter(reg.Type, s.actor))
 	objs, next, err := reg.Provider.List(q)
 	if err != nil {
 		return nil, "", err
 	}
+	// Backstop: the scope is a SECURITY property, so the surface enforces it on
+	// the way out as well as passing it to the provider. A provider that
+	// ignored the filter would otherwise drop the scope silently, which is the
+	// fail-open direction (ADR 0028).
+	objs = filterObjects(objs, scopeFilter(reg.Type, s.actor))
 	return projectAll(reg.Type, objs, s.allowedSensitive(reg.Type)), next, nil
 }
 
@@ -191,6 +199,11 @@ func (s *objectSurface) Get(typeName, id string) (object.Object, error) {
 	obj, err := reg.Provider.Get(id)
 	if err != nil {
 		return object.Object{}, err
+	}
+	// A row the scope excludes is reported as absent, not refused: whether an
+	// id exists is itself something a scoped principal may not learn.
+	if !s.scopeAllows(reg.Type, obj) {
+		return object.Object{}, fmt.Errorf("%w: %s", object.ErrNotFound, id)
 	}
 	return project(reg.Type, obj, s.allowedSensitive(reg.Type)), nil
 }
@@ -210,6 +223,19 @@ func (s *objectSurface) Detail(typeName, id, detail string, q object.Query) ([]o
 	// parent type does not cover it — the referential rule is per target.
 	if err := s.authorizeCap(Read(d.Type)); err != nil {
 		return nil, "", err
+	}
+	// A detail hangs off its parent, so the PARENT's scope decides: a principal
+	// that may not read the object may not read its transcript. Only a scoped
+	// type pays the parent read — an unscoped type is unchanged, and a
+	// transcript whose thought is no longer in memory stays readable.
+	if reg.Type.Scope != nil {
+		parent, err := reg.Provider.Get(id)
+		if err != nil {
+			return nil, "", err
+		}
+		if !s.scopeAllows(reg.Type, parent) {
+			return nil, "", fmt.Errorf("%w: %s", object.ErrNotFound, id)
+		}
 	}
 	objs, next, err := reg.Provider.Detail(id, detail, q)
 	if err != nil {
@@ -281,6 +307,125 @@ func (s *objectSurface) Watch(after int) ([]object.Delta, int, bool, error) {
 // lands instead of polling Watch on a timer (ADR 0019 decision 5).
 func (s *objectSurface) Notify() <-chan struct{} {
 	return s.deltas.Notify()
+}
+
+// scopeFilter returns the filter a type's declared scope adds for an actor, or
+// nil when the type is not row-scoped (ADR 0025 decision 3).
+func scopeFilter(t object.Type, actor portal.Actor) map[string]any {
+	if t.Scope == nil || actor.IsZero() {
+		return nil
+	}
+	return map[string]any{t.Scope.Field: actor.Who.String()}
+}
+
+// andFilter merges a scope filter into a caller's filter. The scope wins a
+// conflict, so a caller cannot widen by naming the scoped field itself.
+func andFilter(caller, scope map[string]any) map[string]any {
+	if len(scope) == 0 {
+		return caller
+	}
+	if len(caller) == 0 {
+		return scope
+	}
+	out := make(map[string]any, len(caller)+len(scope))
+	for k, v := range caller {
+		out[k] = v
+	}
+	for k, v := range scope {
+		out[k] = v
+	}
+	return out
+}
+
+// scopeAllows reports whether one object passes the type's scope for the
+// surface's actor. A scoped type with no verified actor is refused (fail
+// closed); a type with no scope allows every object.
+func (s *objectSurface) scopeAllows(t object.Type, o object.Object) bool {
+	if t.Scope == nil {
+		return true
+	}
+	if s.actor.IsZero() {
+		return false
+	}
+	return fmt.Sprint(o.Fields[t.Scope.Field]) == s.actor.Who.String()
+}
+
+// filterObjects applies a declared query filter to objects before paging:
+// equality on a field, and `$in` for a list of allowed values. It is what makes
+// a scope (and a caller's filter) real rather than advisory — a provider that
+// ignored it would drop the scope silently.
+func filterObjects(objs []object.Object, filter map[string]any) []object.Object {
+	if len(filter) == 0 {
+		return objs
+	}
+	out := make([]object.Object, 0, len(objs))
+	for _, o := range objs {
+		if objectMatches(o, filter) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func objectMatches(o object.Object, filter map[string]any) bool {
+	for key, want := range filter {
+		got := o.Fields[key]
+		if in, ok := want.(map[string]any); ok {
+			allowed, ok := in["$in"]
+			if !ok || !valueIn(got, allowed) {
+				return false
+			}
+			continue
+		}
+		if !equalValue(got, want) {
+			return false
+		}
+	}
+	return true
+}
+
+func valueIn(got, allowed any) bool {
+	switch list := allowed.(type) {
+	case []any:
+		for _, v := range list {
+			if equalValue(got, v) {
+				return true
+			}
+		}
+	case []string:
+		for _, v := range list {
+			if equalValue(got, v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// equalValue compares a field value to a filter value, tolerating the number
+// shape a JSON decode produces.
+func equalValue(got, want any) bool {
+	if got == want {
+		return true
+	}
+	if g, ok := asFloat(got); ok {
+		if w, ok := asFloat(want); ok {
+			return g == w
+		}
+	}
+	return fmt.Sprint(got) == fmt.Sprint(want)
+}
+
+func asFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case float64:
+		return t, true
+	}
+	return 0, false
 }
 
 func (s *objectSurface) registration(typeName string) (TypeRegistration, error) {

@@ -139,12 +139,16 @@ func (p *thoughtProvider) List(q object.Query) ([]object.Object, string, error) 
 	}
 	all := p.n.Thoughts.GetThoughts()
 	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
-	start, end := pageWindow(len(all), q)
-	out := make([]object.Object, 0, end-start)
-	for _, t := range all[start:end] {
-		out = append(out, thoughtObject(t))
+	// Filter BEFORE paging, so a page stays full and the cursor is an index
+	// into the filtered list — a scope a provider ignored would be dropped
+	// silently (ADR 0028).
+	objs := make([]object.Object, 0, len(all))
+	for _, t := range all {
+		objs = append(objs, p.n.thoughtObject(t))
 	}
-	return out, nextCursor(end, len(all)), nil
+	objs = filterObjects(objs, q.Filter)
+	start, end := pageWindow(len(objs), q)
+	return objs[start:end], nextCursor(end, len(objs)), nil
 }
 
 func (p *thoughtProvider) Get(id string) (object.Object, error) {
@@ -155,7 +159,7 @@ func (p *thoughtProvider) Get(id string) (object.Object, error) {
 	if err != nil {
 		return object.Object{}, err
 	}
-	return thoughtObject(t), nil
+	return p.n.thoughtObject(t), nil
 }
 
 func (p *thoughtProvider) Detail(id, detail string, q object.Query) ([]object.Object, string, error) {
@@ -181,7 +185,19 @@ func (p *thoughtProvider) Detail(id, detail string, q object.Query) ([]object.Ob
 	return out, nextCursor(end, len(entries)), nil
 }
 
-func thoughtObject(t *thought.Thought) object.Object {
+// effectiveOrigin is a thought's originator as the record shows it: the
+// principal that caused it, or the navi's own service principal when nothing
+// attributed it (ADR 0022 decision 3). Exposing the EFFECTIVE value is what
+// makes a row-level scope on `origin` match system-originated work rather than
+// hiding it from the navi that did it.
+func (n *Navi) effectiveOrigin(t *thought.Thought) string {
+	if !t.Origin.IsZero() {
+		return t.Origin.String()
+	}
+	return n.serviceRef().String()
+}
+
+func (n *Navi) thoughtObject(t *thought.Thought) object.Object {
 	return object.Object{
 		Type:    TypeThought,
 		ID:      t.ID,
@@ -193,7 +209,7 @@ func thoughtObject(t *thought.Thought) object.Object {
 			"foreground": t.Foreground, "skills": t.Skills, "depends_on": t.DependsOn,
 			// Attribution: the principal that caused the thought and the chain
 			// that scheduled it (ADR 0022 decision 2, ADR 0027).
-			"origin": t.Origin.String(), "lineage": t.Lineage,
+			"origin": n.effectiveOrigin(t), "lineage": t.Lineage,
 			// Derived, non-sensitive state a portal must not lose: a plan's
 			// verification is semantically distinct from a normal thought, and
 			// the free-form metadata it is recorded in stays omitted.
@@ -291,12 +307,13 @@ func (p *memoryProvider) List(q object.Query) ([]object.Object, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	start, end := pageWindow(len(recs), q)
-	out := make([]object.Object, 0, end-start)
-	for _, r := range recs[start:end] {
-		out = append(out, memoryObject(r))
+	objs := make([]object.Object, 0, len(recs))
+	for _, r := range recs {
+		objs = append(objs, memoryObject(r))
 	}
-	return out, nextCursor(end, len(recs)), nil
+	objs = filterObjects(objs, q.Filter)
+	start, end := pageWindow(len(objs), q)
+	return objs[start:end], nextCursor(end, len(objs)), nil
 }
 
 func (p *memoryProvider) Get(id string) (object.Object, error) {
@@ -411,12 +428,13 @@ func (p trustEventProvider) List(q object.Query) ([]object.Object, string, error
 		events = p.n.trust.Ledger().Events()
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
-	start, end := pageWindow(len(events), q)
-	out := make([]object.Object, 0, end-start)
-	for i := start; i < end; i++ {
-		out = append(out, trustEventObject(events[i], i))
+	objs := make([]object.Object, 0, len(events))
+	for i, ev := range events {
+		objs = append(objs, trustEventObject(ev, i))
 	}
-	return out, nextCursor(end, len(events)), nil
+	objs = filterObjects(objs, q.Filter)
+	start, end := pageWindow(len(objs), q)
+	return objs[start:end], nextCursor(end, len(objs)), nil
 }
 
 func (p trustEventProvider) Get(string) (object.Object, error) {

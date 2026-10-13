@@ -110,3 +110,24 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		}
 	}
 }
+
+// TestTypeScopeMustNameADeclaredField is ADR 0028 decision 1: a scope is
+// referential, so it must name a field the type declares.
+func TestTypeScopeMustNameADeclaredField(t *testing.T) {
+	base := func(scope *object.Scope) object.Type {
+		return object.Type{Name: "thing", ID: "id",
+			Fields: []object.Field{{Name: "id", Kind: object.KindString}}, Scope: scope}
+	}
+	if err := base(&object.Scope{Field: "origin"}).Validate(); err == nil {
+		t.Error("a scope naming an undeclared field validated")
+	}
+	if err := base(&object.Scope{}).Validate(); err == nil {
+		t.Error("a scope with no field validated")
+	}
+	if err := base(&object.Scope{Field: "id"}).Validate(); err != nil {
+		t.Errorf("a scope naming a declared field must validate: %v", err)
+	}
+	if err := base(nil).Validate(); err != nil {
+		t.Errorf("a type with no scope must validate: %v", err)
+	}
+}
