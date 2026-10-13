@@ -140,6 +140,36 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	t.Log("update priority=low applied")
 
+	// ── description (the collaborator service) ─────────────────────────
+	if _, err := c.issueDescriptionSet(ctx, map[string]any{
+		"issue": idA, "text": "smoke description line one\nsmoke description line two",
+	}); err != nil {
+		t.Fatalf("issueDescriptionSet: %v", err)
+	}
+	descOut, err := c.issueDescription(ctx, map[string]any{"issue": idA})
+	if err != nil {
+		t.Fatalf("issueDescription: %v", err)
+	}
+	desc, _ := smokeDecode(t, descOut)["description"].(string)
+	if !strings.Contains(desc, "line one") || !strings.Contains(desc, "line two") {
+		t.Fatalf("description = %q, want both lines", desc)
+	}
+	// A second write updates the document in place.
+	if _, err := c.issueDescriptionSet(ctx, map[string]any{
+		"issue": idA, "text": "smoke description replaced",
+	}); err != nil {
+		t.Fatalf("issueDescriptionSet (update): %v", err)
+	}
+	descOut, err = c.issueDescription(ctx, map[string]any{"issue": idA})
+	if err != nil {
+		t.Fatalf("issueDescription (after update): %v", err)
+	}
+	desc, _ = smokeDecode(t, descOut)["description"].(string)
+	if strings.TrimSpace(desc) != "smoke description replaced" {
+		t.Fatalf("description after update = %q, want the replacement", desc)
+	}
+	t.Log("description write/read/update applied")
+
 	// ── label ──────────────────────────────────────────────────────────
 	labelOut, err := c.issueLabel(ctx, map[string]any{"issue": idA, "label": "smoke-label"})
 	if err != nil {

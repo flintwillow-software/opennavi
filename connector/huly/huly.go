@@ -151,7 +151,19 @@ func (c *Connector) SendTools() ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{list, comment, update, search, create, label, relation}, nil
+	description, err := connector.SendTool(issueDescriptionDef(), c.live, func(ctx context.Context, cl *Client, args map[string]any) (string, error) {
+		return cl.issueDescription(ctx, args)
+	})
+	if err != nil {
+		return nil, err
+	}
+	descriptionSet, err := connector.SendTool(issueDescriptionSetDef(), c.live, func(ctx context.Context, cl *Client, args map[string]any) (string, error) {
+		return cl.issueDescriptionSet(ctx, args)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{list, comment, update, search, create, label, relation, description, descriptionSet}, nil
 }
 
 // resolveRef resolves a credential REFERENCE (ADR 0008): an environment

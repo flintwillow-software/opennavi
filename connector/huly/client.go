@@ -49,6 +49,10 @@ type session struct {
 	// `me.primarySocialId`, and a transaction carrying the uuid is refused with
 	// AccountMismatch.
 	socialID string
+	// collaborator is the http(s) root of the instance's collaborator service
+	// (config.json's COLLABORATOR_URL), where rich text such as an issue's
+	// description lives. Empty when the instance declares none.
+	collaborator string
 }
 
 // maxBody bounds how much of a response is read, so a hostile or broken server
@@ -129,7 +133,8 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	}
 
 	var conf struct {
-		AccountsURL string `json:"ACCOUNTS_URL"`
+		AccountsURL     string `json:"ACCOUNTS_URL"`
+		CollaboratorURL string `json:"COLLABORATOR_URL"`
 	}
 	if err := c.getJSON(ctx, base+"/config.json", "", &conf); err != nil {
 		return nil, fmt.Errorf("huly: read config.json: %w", err)
@@ -178,6 +183,7 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("huly: workspace %q answered with no endpoint or token", ws)
 	}
 	endpoint := strings.Replace(sel.Endpoint, "ws", "http", 1)
+	collaborator := strings.Replace(strings.TrimSpace(conf.CollaboratorURL), "ws", "http", 1)
 
 	// A transaction's author is the account's PRIMARY SOCIAL ID, not its uuid:
 	// Huly's own client builds its transaction factory from `me.primarySocialId`,
@@ -196,10 +202,11 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	return &session{
 		// Huly answers with the WebSocket endpoint; the REST routes live at the
 		// same host with the http scheme.
-		endpoint:  endpoint,
-		workspace: sel.Workspace,
-		token:     sel.Token,
-		socialID:  socialID,
+		endpoint:     endpoint,
+		workspace:    sel.Workspace,
+		token:        sel.Token,
+		socialID:     socialID,
+		collaborator: collaborator,
 	}, nil
 }
 
