@@ -1,0 +1,355 @@
+package huly
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// This file is the Huly REST client: the transport the egress tools call
+// through. It speaks Huly's own REST API — `GET /api/v1/find-all/{workspace}`
+// and `POST /api/v1/tx/{workspace}` — so the connector is native Go, not a
+// wrapper around another process (NAVI-408).
+//
+// The workspace session is established lazily and cached: a navi that starts
+// while Huly is unreachable still serves, and the first call reports the failure
+// rather than the process refusing to start.
+
+// Client is a connected Huly workspace. It is safe for concurrent use.
+type Client struct {
+	cfg  Config
+	http *http.Client
+
+	mu   sync.Mutex
+	sess *session
+}
+
+// session is the workspace-scoped connection the API calls need.
+type session struct {
+	// endpoint is the workspace's transactor root, http(s) scheme.
+	endpoint string
+	// workspace is the workspace id (a uuid) the routes carry.
+	workspace string
+	// token is the workspace-scoped bearer token.
+	token string
+	// account is the account uuid Huly stamps on transactions.
+	account string
+}
+
+// maxBody bounds how much of a response is read, so a hostile or broken server
+// cannot exhaust memory.
+const maxBody = 8 << 20
+
+func newClient(cfg Config) *Client {
+	hc := cfg.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: defaultTimeout}
+	}
+	return &Client{cfg: cfg, http: hc}
+}
+
+func defaultEnv(name string) string        { return os.Getenv(name) }
+func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// connect establishes the workspace session. Idempotent: a second call while a
+// session is live is a no-op.
+func (c *Client) connect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sess != nil {
+		return nil
+	}
+	s, err := c.open(ctx)
+	if err != nil {
+		return err
+	}
+	c.sess = s
+	return nil
+}
+
+// session returns the live session, connecting on first use.
+func (c *Client) session(ctx context.Context) (*session, error) {
+	c.mu.Lock()
+	if c.sess != nil {
+		s := c.sess
+		c.mu.Unlock()
+		return s, nil
+	}
+	c.mu.Unlock()
+	if err := c.connect(ctx); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sess == nil {
+		return nil, fmt.Errorf("huly: no session")
+	}
+	return c.sess, nil
+}
+
+// forget drops the cached session so the next call reconnects. It is how a
+// refused token recovers: a workspace token can expire or be revoked, and one
+// reconnect with a fresh one recovers the call.
+func (c *Client) forget() {
+	c.mu.Lock()
+	c.sess = nil
+	c.mu.Unlock()
+}
+
+// open runs the three-step connection: read the instance's config for its
+// accounts URL, authenticate against it, and select the workspace, which
+// answers with the transactor endpoint and a workspace token.
+func (c *Client) open(ctx context.Context) (*session, error) {
+	base := strings.TrimRight(strings.TrimSpace(c.cfg.URL), "/")
+	if base == "" {
+		base = DefaultURL
+	}
+	ws := strings.TrimSpace(c.cfg.Workspace)
+	if ws == "" {
+		return nil, fmt.Errorf("huly: no workspace declared (Config.Workspace)")
+	}
+	env := c.cfg.Env
+	if env == nil {
+		env = defaultEnv
+	}
+
+	var conf struct {
+		AccountsURL string `json:"ACCOUNTS_URL"`
+	}
+	if err := c.getJSON(ctx, base+"/config.json", "", &conf); err != nil {
+		return nil, fmt.Errorf("huly: read config.json: %w", err)
+	}
+	accounts := strings.TrimRight(strings.TrimSpace(conf.AccountsURL), "/")
+	if accounts == "" {
+		return nil, fmt.Errorf("huly: %s/config.json declares no ACCOUNTS_URL", base)
+	}
+
+	// A token reference takes precedence over a login (ADR 0008).
+	accountToken := resolveRef(c.cfg.Credential, env)
+	if accountToken == "" {
+		email := resolveRef(c.cfg.Email, env)
+		password := resolveRef(c.cfg.Password, env)
+		if email == "" || password == "" {
+			return nil, fmt.Errorf("huly: no credential declared; set Config.Credential (an account-token reference) or Config.Email and Config.Password (ADR 0008)")
+		}
+		var login struct {
+			Token string `json:"token"`
+		}
+		if err := c.rpc(ctx, accounts, "", map[string]any{
+			"method": "login",
+			"params": map[string]any{"email": email, "password": password},
+		}, &login); err != nil {
+			return nil, fmt.Errorf("huly: login: %w", err)
+		}
+		accountToken = strings.TrimSpace(login.Token)
+	}
+	if accountToken == "" {
+		return nil, fmt.Errorf("huly: authentication produced no token")
+	}
+
+	var sel struct {
+		Endpoint  string `json:"endpoint"`
+		Token     string `json:"token"`
+		Workspace string `json:"workspace"`
+		Account   string `json:"account"`
+	}
+	if err := c.rpc(ctx, accounts, accountToken, map[string]any{
+		"method": "selectWorkspace",
+		"params": map[string]any{"workspaceUrl": ws, "kind": "external", "externalRegions": []any{}},
+	}, &sel); err != nil {
+		return nil, fmt.Errorf("huly: select workspace %q: %w", ws, err)
+	}
+	if strings.TrimSpace(sel.Endpoint) == "" || strings.TrimSpace(sel.Token) == "" {
+		return nil, fmt.Errorf("huly: workspace %q answered with no endpoint or token", ws)
+	}
+	return &session{
+		// Huly answers with the WebSocket endpoint; the REST routes live at the
+		// same host with the http scheme.
+		endpoint:  strings.Replace(sel.Endpoint, "ws", "http", 1),
+		workspace: sel.Workspace,
+		token:     sel.Token,
+		account:   sel.Account,
+	}, nil
+}
+
+// findAll reads documents of one class. Huly answers with a TotalArray envelope
+// (`{"value": [...]}`); a bare array is also accepted, so a version difference
+// does not break a read.
+func (c *Client) findAll(ctx context.Context, class string, query, options map[string]any) ([]map[string]any, error) {
+	s, err := c.session(ctx)
+	if err != nil {
+		return nil, err
+	}
+	params := url.Values{}
+	params.Set("class", class)
+	if len(query) > 0 {
+		b, err := json.Marshal(query)
+		if err != nil {
+			return nil, fmt.Errorf("huly: encode query: %w", err)
+		}
+		params.Set("query", string(b))
+	}
+	if len(options) > 0 {
+		b, err := json.Marshal(options)
+		if err != nil {
+			return nil, fmt.Errorf("huly: encode options: %w", err)
+		}
+		params.Set("options", string(b))
+	}
+	target := fmt.Sprintf("%s/api/v1/find-all/%s?%s",
+		strings.TrimRight(s.endpoint, "/"), url.PathEscape(s.workspace), params.Encode())
+
+	body, err := c.getRaw(ctx, target, s.token)
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Value []map[string]any `json:"value"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Value != nil {
+		return envelope.Value, nil
+	}
+	var bare []map[string]any
+	if err := json.Unmarshal(body, &bare); err != nil {
+		return nil, fmt.Errorf("huly: decode find-all response: %w", err)
+	}
+	return bare, nil
+}
+
+// tx applies one transaction. Huly's own client posts a single transaction
+// object here, not an array.
+func (c *Client) tx(ctx context.Context, transaction map[string]any) error {
+	s, err := c.session(ctx)
+	if err != nil {
+		return err
+	}
+	target := fmt.Sprintf("%s/api/v1/tx/%s", strings.TrimRight(s.endpoint, "/"), url.PathEscape(s.workspace))
+	return c.postJSON(ctx, target, s.token, transaction, nil)
+}
+
+// rpc calls the accounts service: a `{method, params}` body answering
+// `{result}` or `{error}`.
+func (c *Client) rpc(ctx context.Context, target, token string, body map[string]any, out any) error {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := c.postJSON(ctx, target, token, body, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+		return fmt.Errorf("huly: %s", clip(envelope.Error))
+	}
+	if out != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+		return json.Unmarshal(envelope.Result, out)
+	}
+	return nil
+}
+
+func (c *Client) getJSON(ctx context.Context, target, token string, out any) error {
+	body, err := c.getRaw(ctx, target, token)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+func (c *Client) getRaw(ctx context.Context, target, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("huly: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return c.do(req)
+}
+
+func (c *Client) postJSON(ctx context.Context, target, token string, in, out any) error {
+	blob, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("huly: encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(blob))
+	if err != nil {
+		return fmt.Errorf("huly: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	body, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+// do performs a request and returns its body, mapping a refusal and a transport
+// failure to a clean error. A 401/403 drops the cached session, so a revoked or
+// expired workspace token recovers on the next call.
+func (c *Client) do(req *http.Request) ([]byte, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("huly: %s %s: %w", req.Method, req.URL.Path, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		c.forget()
+		return nil, fmt.Errorf("huly: %s %s: %s (credential refused)", req.Method, req.URL.Path, resp.Status)
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("huly: %s %s: %s: %s", req.Method, req.URL.Path, resp.Status, clip(body))
+	}
+	return body, nil
+}
+
+// idCounter makes an id unique within a process even when two are generated in
+// the same second.
+var idCounter uint32
+
+// newID builds a Huly document id: 24 hex characters — the unix second, ten
+// random hex digits, and a per-process counter, which is the shape Huly's own
+// client generates.
+func newID() string {
+	secs := uint32(time.Now().Unix())
+	return fmt.Sprintf("%08x%06x%04x%06x",
+		secs, randHex(1<<24), randHex(1<<16), atomic.AddUint32(&idCounter, 1)&0xFFFFFF)
+}
+
+// randHex returns a random value below n as hex.
+func randHex(n int64) int64 {
+	v, err := rand.Int(rand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0
+	}
+	return v.Int64()
+}
+
+// clip bounds an error detail so a server's response cannot flood a transcript.
+func clip(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 400 {
+		return s[:400] + "…"
+	}
+	return s
+}
