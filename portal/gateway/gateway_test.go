@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	pubportal "github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
 type allowAll struct{}
 
-func (allowAll) Authorize(action pubportal.Action, identity string) error { return nil }
+func (allowAll) Authorize(pubportal.Action, principal.Ref) error { return nil }
 
 func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()
@@ -39,7 +40,7 @@ func newGateway(t *testing.T, auth pubportal.Authorizer) (*Gateway, *pubportal.B
 		t.Fatal(err)
 	}
 	gw := New("127.0.0.1:0", hub)
-	if err := gw.Start(context.Background(), pubportal.Deps{Observation: broker}); err != nil {
+	if err := gw.Start(context.Background(), pubportal.Deps{Observation: broker, Authenticator: pubportal.AllowAllAuthenticator(principal.MustParse("service:test"))}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { gw.Stop() })
@@ -55,7 +56,7 @@ func TestGatewayServesObservationAndControl(t *testing.T) {
 
 	// Control: enqueue through the HTTP channel.
 	resp, err := http.Post(base+"/portal/control", "application/json",
-		strings.NewReader(`{"action":"enqueue","id":"g1","prompt":"hi","identity":"u"}`))
+		strings.NewReader(`{"action":"enqueue","id":"g1","prompt":"hi"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestGatewayServesObservationAndControl(t *testing.T) {
 	}
 
 	// Observation: the lifecycle event is on the served stream.
-	resp, frames := openSSE(t, base+"/portal/stream?identity=u")
+	resp, frames := openSSE(t, base+"/portal/stream")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream status = %d", resp.StatusCode)
@@ -89,7 +90,7 @@ func TestGatewayFailsClosedWithoutAuthorizer(t *testing.T) {
 	base := "http://" + gw.BoundAddr()
 
 	resp, err := http.Post(base+"/portal/control", "application/json",
-		strings.NewReader(`{"action":"enqueue","id":"x","prompt":"hi","identity":"u"}`))
+		strings.NewReader(`{"action":"enqueue","id":"x","prompt":"hi"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestGatewayFailsClosedWithoutAuthorizer(t *testing.T) {
 		t.Fatalf("control without authorizer = %d, want 403", resp.StatusCode)
 	}
 
-	resp, err = http.Get(base + "/portal/stream?identity=u")
+	resp, err = http.Get(base + "/portal/stream")
 	if err != nil {
 		t.Fatal(err)
 	}

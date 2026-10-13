@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -46,9 +48,13 @@ type Gateway struct {
 	obs     portal.Observer
 	sub     portal.Subscription
 	objects object.Surface
-	ln      net.Listener
-	srv     *http.Server
-	log     *slog.Logger
+	// auth resolves a presented credential to a verified principal (ADR 0021
+	// decisions 6-8). Nil refuses every attachment: a gateway with no
+	// authenticator authenticates nobody (fail closed).
+	auth portal.Authenticator
+	ln   net.Listener
+	srv  *http.Server
+	log  *slog.Logger
 }
 
 // New builds a gateway that serves on addr and delegates attach/control to
@@ -62,9 +68,10 @@ func New(addr string, control portal.Portal) *Gateway {
 // host that already runs an HTTP server (the reference navi's serve path)
 // can mount it. It subscribes one observation mailbox from obs; obs may be
 // nil (observation endpoints then answer 503), as may objects (the object
-// routes then answer 503).
-func Handler(control portal.Portal, obs portal.Observer, objects object.Surface) http.Handler {
-	g := &Gateway{control: control, objects: objects}
+// routes then answer 503). auth resolves a presented credential to a verified
+// principal; nil refuses every attachment (fail closed).
+func Handler(control portal.Portal, obs portal.Observer, objects object.Surface, auth portal.Authenticator) http.Handler {
+	g := &Gateway{control: control, objects: objects, auth: auth}
 	if obs != nil {
 		g.obs = obs
 		g.sub = obs.Subscribe(DefaultSubscriptionCap)
@@ -100,6 +107,9 @@ func (g *Gateway) Start(ctx context.Context, deps portal.Deps) error {
 	// The object surface is handed in the same Deps (ADR 0017): the gateway
 	// serves whatever the navi exposes, exactly as the in-process portal does.
 	g.objects = deps.Objects
+	// The navi resolves trust for its portals (ADR 0022 decision 8): the
+	// gateway presents the credential and acts on the answer.
+	g.auth = deps.Authenticator
 
 	ln, err := net.Listen("tcp", g.addr)
 	if err != nil {
@@ -153,44 +163,44 @@ func (g *Gateway) delegate(fn func(portal.Portal) error) error {
 	return fn(g.control)
 }
 
-// Attach authorizes an identity for the portal attachment.
-func (g *Gateway) Attach(identity string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Attach(identity) })
+// Attach authorizes a verified principal for the portal attachment.
+func (g *Gateway) Attach(who principal.Ref) error {
+	return g.delegate(func(p portal.Portal) error { return p.Attach(who) })
 }
 
 // Steer routes a steering message to a thought.
-func (g *Gateway) Steer(identity, thoughtID, message string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Steer(identity, thoughtID, message) })
+func (g *Gateway) Steer(who principal.Ref, thoughtID, message string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Steer(who, thoughtID, message) })
 }
 
 // Pause parks a running thought.
-func (g *Gateway) Pause(identity, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Pause(identity, thoughtID) })
+func (g *Gateway) Pause(who principal.Ref, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Pause(who, thoughtID) })
 }
 
 // Resume re-queues a paused thought.
-func (g *Gateway) Resume(identity, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Resume(identity, thoughtID) })
+func (g *Gateway) Resume(who principal.Ref, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Resume(who, thoughtID) })
 }
 
 // Cancel removes queued/paused work.
-func (g *Gateway) Cancel(identity, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Cancel(identity, thoughtID) })
+func (g *Gateway) Cancel(who principal.Ref, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Cancel(who, thoughtID) })
 }
 
 // BumpPriority changes a queued thought's priority.
-func (g *Gateway) BumpPriority(identity, thoughtID string, prio int) error {
-	return g.delegate(func(p portal.Portal) error { return p.BumpPriority(identity, thoughtID, prio) })
+func (g *Gateway) BumpPriority(who principal.Ref, thoughtID string, prio int) error {
+	return g.delegate(func(p portal.Portal) error { return p.BumpPriority(who, thoughtID, prio) })
 }
 
 // Retry re-queues a failed thought.
-func (g *Gateway) Retry(identity, thoughtID string) error {
-	return g.delegate(func(p portal.Portal) error { return p.Retry(identity, thoughtID) })
+func (g *Gateway) Retry(who principal.Ref, thoughtID string) error {
+	return g.delegate(func(p portal.Portal) error { return p.Retry(who, thoughtID) })
 }
 
 // Enqueue schedules a thought.
-func (g *Gateway) Enqueue(identity string, t *thought.Thought) error {
-	return g.delegate(func(p portal.Portal) error { return p.Enqueue(identity, t) })
+func (g *Gateway) Enqueue(who principal.Ref, t *thought.Thought) error {
+	return g.delegate(func(p portal.Portal) error { return p.Enqueue(who, t) })
 }
 
 // ── HTTP surface ────────────────────────────────────────────────────────
@@ -204,6 +214,18 @@ func (g *Gateway) Enqueue(identity string, t *thought.Thought) error {
 // under `_` (`/_types`), so `portal` and `_`-prefixed roots are reserved
 // type names.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Buffer a body once, so a signed request can bind it and every handler
+	// reads the same bytes. GET and HEAD carry none.
+	if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBytes))
+		if err != nil {
+			http.Error(w, "gateway: read body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r = r.WithContext(context.WithValue(r.Context(), bodyKey{}, body))
+	}
 	path := strings.Trim(r.URL.Path, "/")
 	switch path {
 	case "portal/stream":
@@ -230,18 +252,34 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// attachIdentity extracts the client identity: the `identity` query
-// parameter, falling back to the X-Portal-Identity header.
-func attachIdentity(r *http.Request) string {
-	if v := r.URL.Query().Get("identity"); v != "" {
-		return v
-	}
-	return r.Header.Get("X-Portal-Identity")
+// bodyKey carries the buffered request body so authenticate can bind it to a
+// signed request after the body has been read once.
+type bodyKey struct{}
+
+func requestBody(r *http.Request) []byte {
+	body, _ := r.Context().Value(bodyKey{}).([]byte)
+	return body
 }
 
-// controlRequest is the POST /portal/control body.
+// authenticate resolves the request's credential to a verified principal. It
+// is the ONLY place a connection's identity is decided (ADR 0022 decision 8):
+// the gateway presents what the client sent and acts on the navi's answer. A
+// gateway with no authenticator authenticates nobody — fail closed.
+func (g *Gateway) authenticate(r *http.Request) (principal.Ref, error) {
+	if g.auth == nil {
+		return principal.Ref{}, fmt.Errorf("%w: no authenticator wired (fail closed)", portal.ErrUnauthenticated)
+	}
+	cred, err := credentialFromRequest(r, requestBody(r), time.Now())
+	if err != nil {
+		return principal.Ref{}, err
+	}
+	return g.auth.Authenticate(r.Context(), cred)
+}
+
+// controlRequest is the POST /portal/control body. It carries NO identity:
+// the acting principal comes from the verified credential (ADR 0022 decision
+// 8), never from the body.
 type controlRequest struct {
-	Identity  string  `json:"identity"`
 	Action    string  `json:"action"`
 	ThoughtID string  `json:"thoughtID"`
 	Text      string  `json:"text"`
@@ -250,12 +288,22 @@ type controlRequest struct {
 	Priority  float64 `json:"priority"`
 }
 
-// serveControl answers POST /portal/control. Every action is
-// authorizer-gated by the control portal; with a nil authorizer all
-// actions are refused 403 (fail closed) until IAM lands.
+// serveControl answers POST /portal/control. The connection is authenticated
+// first and the attachment authorized; every action is then authorizer-gated
+// by the control portal with the VERIFIED principal, and with a nil authorizer
+// all actions are refused 403 (fail closed).
 func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 	if g.control == nil {
 		http.Error(w, "gateway: no control portal bound", http.StatusServiceUnavailable)
+		return
+	}
+	who, err := g.authenticate(r)
+	if err != nil {
+		g.refusal(w, err)
+		return
+	}
+	if err := g.control.Attach(who); err != nil {
+		g.refusal(w, err)
 		return
 	}
 	blob, rerr := io.ReadAll(r.Body)
@@ -268,31 +316,27 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: control body is not an object", http.StatusBadRequest)
 		return
 	}
-	identity := req.Identity
-	if identity == "" {
-		identity = attachIdentity(r)
-	}
 
 	var ctrlErr error
 	switch strings.ToLower(req.Action) {
 	case "attach":
-		ctrlErr = g.control.Attach(identity)
+		ctrlErr = g.control.Attach(who)
 	case "steer":
-		ctrlErr = g.control.Steer(identity, req.ThoughtID, req.Text)
+		ctrlErr = g.control.Steer(who, req.ThoughtID, req.Text)
 	case "pause":
-		ctrlErr = g.control.Pause(identity, req.ThoughtID)
+		ctrlErr = g.control.Pause(who, req.ThoughtID)
 	case "resume":
-		ctrlErr = g.control.Resume(identity, req.ThoughtID)
+		ctrlErr = g.control.Resume(who, req.ThoughtID)
 	case "cancel":
-		ctrlErr = g.control.Cancel(identity, req.ThoughtID)
+		ctrlErr = g.control.Cancel(who, req.ThoughtID)
 	case "bump":
 		prio := 4
 		if req.Priority >= 1 && req.Priority <= 10 {
 			prio = int(req.Priority)
 		}
-		ctrlErr = g.control.BumpPriority(identity, req.ThoughtID, prio)
+		ctrlErr = g.control.BumpPriority(who, req.ThoughtID, prio)
 	case "retry":
-		ctrlErr = g.control.Retry(identity, req.ThoughtID)
+		ctrlErr = g.control.Retry(who, req.ThoughtID)
 	case "enqueue":
 		now := time.Now().UTC()
 		t := &thought.Thought{
@@ -306,7 +350,7 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 		if req.Priority >= 1 && req.Priority <= 10 {
 			t.Priority = int(req.Priority)
 		}
-		ctrlErr = g.control.Enqueue(identity, t)
+		ctrlErr = g.control.Enqueue(who, t)
 	default:
 		http.Error(w, fmt.Sprintf("gateway: unknown action %q", req.Action), http.StatusBadRequest)
 		return
@@ -320,14 +364,20 @@ func (g *Gateway) serveControl(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
-// refusal maps a control error onto an HTTP status: authorization
-// refusals are 403, everything else is 400.
+// refusal maps a control or authentication error onto an HTTP status: a
+// credential that does not authenticate is 401, an authorization refusal is
+// 403, everything else is 400. The reason is logged, never returned to the
+// client (a refusal must not become an oracle).
 func (g *Gateway) refusal(w http.ResponseWriter, err error) {
-	if errors.Is(err, portal.ErrUnauthorized) {
+	switch {
+	case errors.Is(err, portal.ErrUnauthenticated):
+		g.logf("gateway: authentication refused", "err", err.Error())
+		http.Error(w, "portal: unauthenticated (fail closed)", http.StatusUnauthorized)
+	case errors.Is(err, portal.ErrUnauthorized):
 		http.Error(w, "portal: unauthorized (fail closed)", http.StatusForbidden)
-		return
+	default:
+		http.Error(w, "portal: "+err.Error(), http.StatusBadRequest)
 	}
-	http.Error(w, "portal: "+err.Error(), http.StatusBadRequest)
 }
 
 // Compile-time checks: the gateway is a portal component that binds an

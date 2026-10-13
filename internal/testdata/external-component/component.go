@@ -19,6 +19,7 @@ import (
 	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 )
@@ -115,11 +116,13 @@ func (w *Watcher) Stop() error {
 	return nil
 }
 
-// Dashboard is a minimal, fail-closed portal: it attaches identities
+// Dashboard is a minimal, fail-closed portal: it attaches a principal
 // explicitly and refuses control for anyone else. It implements
-// portal.Portal so the composition root satisfies it structurally.
+// portal.Portal so the composition root satisfies it structurally. The actor
+// is a VERIFIED principal reference (ADR 0022 decision 8), never a string a
+// client asserted.
 type Dashboard struct {
-	attached map[string]bool
+	attached map[principal.Ref]bool
 }
 
 var _ portal.Portal = (*Dashboard)(nil)
@@ -130,48 +133,48 @@ func (d *Dashboard) Start(ctx context.Context, deps portal.Deps) error { return 
 // Stop shuts the dashboard down.
 func (d *Dashboard) Stop() error { return nil }
 
-// Attach authorizes identity for control. An empty identity is refused.
-func (d *Dashboard) Attach(identity string) error {
-	if identity == "" {
+// Attach authorizes a principal for control. A zero reference is refused.
+func (d *Dashboard) Attach(who principal.Ref) error {
+	if err := who.Validate(); err != nil {
 		return fmt.Errorf("dashboard: %w", portal.ErrUnauthorized)
 	}
 	if d.attached == nil {
-		d.attached = map[string]bool{}
+		d.attached = map[principal.Ref]bool{}
 	}
-	d.attached[identity] = true
+	d.attached[who] = true
 	return nil
 }
 
-func (d *Dashboard) authorize(identity string) error {
-	if !d.attached[identity] {
+func (d *Dashboard) authorize(who principal.Ref) error {
+	if !d.attached[who] {
 		return fmt.Errorf("dashboard: %w", portal.ErrUnauthorized)
 	}
 	return nil
 }
 
 // Steer injects a message into a running thought.
-func (d *Dashboard) Steer(identity, thoughtID, message string) error {
-	return d.authorize(identity)
+func (d *Dashboard) Steer(who principal.Ref, thoughtID, message string) error {
+	return d.authorize(who)
 }
 
 // Pause pauses a thought.
-func (d *Dashboard) Pause(identity, thoughtID string) error { return d.authorize(identity) }
+func (d *Dashboard) Pause(who principal.Ref, thoughtID string) error { return d.authorize(who) }
 
 // Resume resumes a paused thought.
-func (d *Dashboard) Resume(identity, thoughtID string) error { return d.authorize(identity) }
+func (d *Dashboard) Resume(who principal.Ref, thoughtID string) error { return d.authorize(who) }
 
 // Cancel cancels a thought.
-func (d *Dashboard) Cancel(identity, thoughtID string) error { return d.authorize(identity) }
+func (d *Dashboard) Cancel(who principal.Ref, thoughtID string) error { return d.authorize(who) }
 
 // BumpPriority changes a queued thought's priority.
-func (d *Dashboard) BumpPriority(identity, thoughtID string, prio int) error {
-	return d.authorize(identity)
+func (d *Dashboard) BumpPriority(who principal.Ref, thoughtID string, prio int) error {
+	return d.authorize(who)
 }
 
 // Retry re-queues a failed thought.
-func (d *Dashboard) Retry(identity, thoughtID string) error { return d.authorize(identity) }
+func (d *Dashboard) Retry(who principal.Ref, thoughtID string) error { return d.authorize(who) }
 
-// Enqueue schedules a new thought on behalf of identity.
-func (d *Dashboard) Enqueue(identity string, t *thought.Thought) error {
-	return d.authorize(identity)
+// Enqueue schedules a new thought on behalf of who.
+func (d *Dashboard) Enqueue(who principal.Ref, t *thought.Thought) error {
+	return d.authorize(who)
 }

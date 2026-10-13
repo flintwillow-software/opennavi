@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/principal"
 )
 
@@ -584,4 +586,156 @@ func TestResolvedPrincipalCarriesClaimsAndGroups(t *testing.T) {
 	if _, err := NewResolvedPrincipal(ref, nil, []principal.Ref{{}}); !errors.Is(err, ErrInvalidPrincipal) {
 		t.Errorf("zero group = %v, want ErrInvalidPrincipal", err)
 	}
+}
+
+// ── the portal seam ─────────────────────────────────────────────────────
+
+func TestPortalAuthenticatorResolvesCredentials(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := context.Background()
+	ref := principal.MustParse("service:cli")
+	pub, priv := keypair(t)
+	key, err := NewEd25519Key("k1", pub)
+	if err != nil {
+		t.Fatalf("NewEd25519Key: %v", err)
+	}
+	who, err := NewPrincipal(ref, key)
+	if err != nil {
+		t.Fatalf("NewPrincipal: %v", err)
+	}
+	compiled, err := NewPrincipals(who)
+	if err != nil {
+		t.Fatalf("NewPrincipals: %v", err)
+	}
+	trust, err := NewTrustSources(compiled)
+	if err != nil {
+		t.Fatalf("NewTrustSources: %v", err)
+	}
+	auth := NewPortalAuthenticator(trust)
+
+	message := []byte("POST\n/portal/control\n1\nabc")
+	cred := portal.Credential{
+		Scheme: portal.SchemeEd25519, Principal: ref, KeyID: "k1",
+		Message: message, Proof: ed25519.Sign(priv, message), Now: now,
+	}
+	got, err := auth.Authenticate(ctx, cred)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if got != ref {
+		t.Errorf("principal = %s, want %s", got, ref)
+	}
+
+	bad := cred
+	bad.Proof = ed25519.Sign(priv, []byte("another message"))
+	if _, err := auth.Authenticate(ctx, bad); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("bad signature = %v, want ErrUnauthenticated", err)
+	}
+
+	absent := cred
+	absent.Principal = principal.MustParse("service:absent")
+	if _, err := auth.Authenticate(ctx, absent); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("unknown principal = %v, want ErrUnauthenticated", err)
+	}
+
+	// No credential, an unknown scheme, and a nil trust set are all refused.
+	if _, err := auth.Authenticate(ctx, portal.Credential{Now: now}); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("no credential = %v, want ErrUnauthenticated", err)
+	}
+	if _, err := auth.Authenticate(ctx, portal.Credential{Scheme: "kerberos", Now: now}); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("unknown scheme = %v, want ErrUnauthenticated", err)
+	}
+	if _, err := NewPortalAuthenticator(nil).Authenticate(ctx, cred); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("nil trust set = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestPortalAuthenticatorVerifiesBearerTokens(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := context.Background()
+	p := newIDP(t)
+	trust, err := NewTrustSources(newOIDC(t, p, now))
+	if err != nil {
+		t.Fatalf("NewTrustSources: %v", err)
+	}
+	auth := NewPortalAuthenticator(trust)
+
+	got, err := auth.Authenticate(ctx, portal.Credential{
+		Scheme: portal.SchemeBearer, Token: p.signRS256(t, p.claims(t, now)), Now: now,
+	})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if want := principal.MustParse("user:alice"); got != want {
+		t.Errorf("principal = %s, want %s", got, want)
+	}
+
+	if _, err := auth.Authenticate(ctx, portal.Credential{Scheme: portal.SchemeBearer, Token: "not-a-token", Now: now}); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("bad token = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// depsPortal records the Deps the navi hands a portal at Start, delegating the
+// rest of the portal contract to the shared fakePortal.
+type depsPortal struct {
+	*fakePortal
+	deps portal.Deps
+}
+
+func (p *depsPortal) Start(ctx context.Context, deps portal.Deps) error {
+	p.deps = deps
+	return p.fakePortal.Start(ctx, deps)
+}
+
+// TestNaviWiresPortalAuthenticator pins the seam NAVI-402 consumes: the
+// composition root hands every portal an authenticator backed by the declared
+// trust sources.
+func TestNaviWiresPortalAuthenticator(t *testing.T) {
+	ref := principal.MustParse("service:relay")
+	who, err := NewPrincipal(ref)
+	if err != nil {
+		t.Fatalf("NewPrincipal: %v", err)
+	}
+	compiled, err := NewPrincipals(who)
+	if err != nil {
+		t.Fatalf("NewPrincipals: %v", err)
+	}
+	trust, err := NewTrustSources(compiled)
+	if err != nil {
+		t.Fatalf("NewTrustSources: %v", err)
+	}
+
+	p := &depsPortal{fakePortal: newFakePortal(":0")}
+	n := New("auth-wired", WithDefaultModel("ollama"), WithTrustSource(trust))
+	if err := n.Models.Add(model.Provider{Name: "ollama", Model: "qwen3.8:27b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Portals.Add(p); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Run(ctx) }()
+	waitFor(t, p.started, "portal start")
+
+	if p.deps.Authenticator == nil {
+		t.Fatal("the navi wired no portal authenticator")
+	}
+
+	// The wired authenticator resolves through the declared trust source: no
+	// credential is refused, and an Ed25519 claim for a compiled principal
+	// with a bad proof is refused too.
+	if _, err := p.deps.Authenticator.Authenticate(ctx, portal.Credential{}); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("no credential = %v, want ErrUnauthenticated", err)
+	}
+	if _, err := p.deps.Authenticator.Authenticate(ctx, portal.Credential{
+		Scheme: portal.SchemeEd25519, Principal: ref, KeyID: "absent",
+	}); !errors.Is(err, portal.ErrUnauthenticated) {
+		t.Errorf("unproven claim = %v, want ErrUnauthenticated", err)
+	}
+
+	cancel()
+	<-done
 }

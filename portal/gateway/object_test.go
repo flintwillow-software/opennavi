@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	pubportal "github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -171,29 +171,15 @@ func newObjectServer(t *testing.T, auth pubportal.Authorizer, surface object.Sur
 	if err := hub.Start(context.Background(), pubportal.Deps{ThoughtSystem: q, Observation: broker}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(Handler(hub, broker, surface))
+	srv := httptest.NewServer(Handler(hub, broker, surface, pubportal.AllowAllAuthenticator(principal.MustParse("service:test"))))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// withIdentity adds the test identity to a URL, preserving any query the
-// caller already set.
-func withIdentity(t *testing.T, raw string) string {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	q.Set("identity", "u")
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 // get performs a GET and returns the status and body.
 func get(t *testing.T, raw string) (int, []byte) {
 	t.Helper()
-	resp, err := http.Get(withIdentity(t, raw))
+	resp, err := http.Get(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +191,7 @@ func get(t *testing.T, raw string) (int, []byte) {
 // post performs a POST with a JSON body and returns the status and body.
 func post(t *testing.T, raw, body string) (int, []byte) {
 	t.Helper()
-	resp, err := http.Post(withIdentity(t, raw), "application/json", strings.NewReader(body))
+	resp, err := http.Post(raw, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +437,7 @@ func TestGatewayObjectRoutesWithoutSurface(t *testing.T) {
 func TestClientRoundTripsTheSurface(t *testing.T) {
 	fake := newFakeSurface()
 	srv := newObjectServer(t, allowAll{}, fake)
-	c := NewClient(srv.URL, "u")
+	c := NewClient(srv.URL, nil)
 	if err := c.OpenStream(context.Background()); err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -524,7 +510,7 @@ func TestClientRoundTripsTheSurface(t *testing.T) {
 // "nothing changed" — when the stream is not usable (ADR 0019 decision 8).
 func TestClientReportsRefusalsAndGaps(t *testing.T) {
 	srv := newObjectServer(t, nil, newFakeSurface())
-	c := NewClient(srv.URL, "u")
+	c := NewClient(srv.URL, nil)
 
 	_, _, err := c.List("thought", object.Query{})
 	var se *StatusError
@@ -542,7 +528,7 @@ func TestClientReportsRefusalsAndGaps(t *testing.T) {
 	}
 
 	// A transport failure is an error too, not a gap.
-	dead := NewClient("http://127.0.0.1:1", "u")
+	dead := NewClient("http://127.0.0.1:1", nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := dead.OpenStream(ctx); err == nil {

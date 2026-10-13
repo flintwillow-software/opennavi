@@ -13,6 +13,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/object"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -45,6 +46,12 @@ type Deps struct {
 	Objects object.Surface
 	// Log is the shared structured logger (stdlib log/slog).
 	Log *slog.Logger
+	// Authenticator resolves a presented credential to a verified principal
+	// (ADR 0021 decisions 6-8). The navi supplies it; a portal presents a
+	// credential and acts on the answer, never evaluating policy (ADR 0022
+	// decision 8). Nil means no connection can be authenticated — a portal
+	// that serves a transport then refuses every attachment (fail closed).
+	Authenticator Authenticator
 }
 
 // Addressed is an OPTIONAL capability a portal may implement: a portal
@@ -78,19 +85,20 @@ type Portal interface {
 	Start(ctx context.Context, deps Deps) error
 	// Stop shuts the portal down.
 	Stop() error
-	// Attach authorizes an identity for control (fail-closed until
-	// authorization is granted).
-	Attach(identity string) error
-	Steer(identity, thoughtID, message string) error
-	Pause(identity, thoughtID string) error
-	Resume(identity, thoughtID string) error
-	Cancel(identity, thoughtID string) error
+	// Attach authorizes a verified principal for control (fail-closed until
+	// authorization is granted). The principal is the one the navi resolved
+	// from the connection's credential, never a value the client asserted.
+	Attach(who principal.Ref) error
+	Steer(who principal.Ref, thoughtID, message string) error
+	Pause(who principal.Ref, thoughtID string) error
+	Resume(who principal.Ref, thoughtID string) error
+	Cancel(who principal.Ref, thoughtID string) error
 	// BumpPriority changes a queued thought's priority (NAVI-319 added the
 	// operation to the portal surface; the queue clamps it).
-	BumpPriority(identity, thoughtID string, prio int) error
+	BumpPriority(who principal.Ref, thoughtID string, prio int) error
 	// Retry re-queues a failed thought.
-	Retry(identity, thoughtID string) error
-	// Enqueue schedules a new thought on behalf of identity
+	Retry(who principal.Ref, thoughtID string) error
+	// Enqueue schedules a new thought on behalf of who
 	// (session-created thoughts claim the foreground slot).
-	Enqueue(identity string, t *thought.Thought) error
+	Enqueue(who principal.Ref, t *thought.Thought) error
 }

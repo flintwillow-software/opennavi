@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -47,8 +48,8 @@ func NewPortal() *Portal { return &Portal{done: make(chan error, 1)} }
 // because everything it renders and every action it posts goes through the
 // remote object surface and observation stream (ADR 0017) — which is what a
 // remote front-end is.
-func RunAttached(ctx context.Context, base, identity string) error {
-	tr, err := NewRemote(base, identity)
+func RunAttached(ctx context.Context, base string, creds portal.CredentialSource) error {
+	tr, err := NewRemote(base, creds)
 	if err != nil {
 		return err
 	}
@@ -128,9 +129,11 @@ func (p *Portal) Stop() error {
 	return nil
 }
 
-// Attach is a no-op for the local-trust in-process TUI: the console user
-// is the trusted principal pre-IAM.
-func (p *Portal) Attach(identity string) error { return nil }
+// Attach is a no-op for the in-process console: it IS the binary, with no
+// transport, so it is trusted structurally rather than by a credential (ADR
+// 0021 decision 9). Its actions still carry the console principal the navi
+// supplied through Deps, so the record names an actor.
+func (p *Portal) Attach(principal.Ref) error { return nil }
 
 func (p *Portal) transport() (Transport, error) {
 	p.mu.Lock()
@@ -154,37 +157,37 @@ func (p *Portal) act(thoughtID, action string, args map[string]any) error {
 }
 
 // Steer routes a message to a thought.
-func (p *Portal) Steer(identity, thoughtID, message string) error {
+func (p *Portal) Steer(_ principal.Ref, thoughtID, message string) error {
 	return p.act(thoughtID, "steer", map[string]any{"message": message})
 }
 
 // Pause parks a running thought.
-func (p *Portal) Pause(identity, thoughtID string) error {
+func (p *Portal) Pause(_ principal.Ref, thoughtID string) error {
 	return p.act(thoughtID, "pause", nil)
 }
 
 // Resume re-queues a paused thought.
-func (p *Portal) Resume(identity, thoughtID string) error {
+func (p *Portal) Resume(_ principal.Ref, thoughtID string) error {
 	return p.act(thoughtID, "resume", nil)
 }
 
 // Cancel removes queued/paused work.
-func (p *Portal) Cancel(identity, thoughtID string) error {
+func (p *Portal) Cancel(_ principal.Ref, thoughtID string) error {
 	return p.act(thoughtID, "cancel", nil)
 }
 
 // BumpPriority changes a queued thought's priority.
-func (p *Portal) BumpPriority(identity, thoughtID string, prio int) error {
+func (p *Portal) BumpPriority(_ principal.Ref, thoughtID string, prio int) error {
 	return p.act(thoughtID, "bump", map[string]any{"priority": prio})
 }
 
 // Retry re-queues a failed thought.
-func (p *Portal) Retry(identity, thoughtID string) error {
+func (p *Portal) Retry(_ principal.Ref, thoughtID string) error {
 	return p.act(thoughtID, "retry", nil)
 }
 
 // Enqueue schedules a thought.
-func (p *Portal) Enqueue(identity string, t *thought.Thought) error {
+func (p *Portal) Enqueue(_ principal.Ref, t *thought.Thought) error {
 	tr, err := p.transport()
 	if err != nil {
 		return err

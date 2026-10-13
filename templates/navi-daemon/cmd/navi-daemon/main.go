@@ -47,6 +47,18 @@ func run() error {
 	if cfg := os.Getenv("NAVI_CONFIG"); cfg != "" {
 		opts = append(opts, navi.WithRuntimeConfig(cfg))
 	}
+
+	// Trust: the gateway authenticates every connection through a declared
+	// trust source (ADR 0021 decisions 6-8, ADR 0022 decision 8). This starter
+	// reads a keyed trust store whose path NAVI_TRUST_STORE names (an ADR 0008
+	// reference: the env var names a path). With no store configured the
+	// gateway still serves and refuses every attachment (fail closed).
+	trustStore, err := navi.NewFileTrustStore(navi.FileTrustStoreConfig{Path: "NAVI_TRUST_STORE"})
+	if err != nil {
+		return err
+	}
+	opts = append(opts, navi.WithTrustSource(trustStore))
+
 	n := navi.New("navi-daemon", opts...)
 
 	if err := n.Tools.Add(queueStatusTool()); err != nil {
@@ -65,9 +77,10 @@ func run() error {
 		return err
 	}
 
-	// Gateway: the HTTP observation + control portal. Control is
-	// authorizer-gated and fails closed until IAM lands, so this starter
-	// binds no control portal (observation only).
+	// Gateway: the HTTP observation + control portal. A connection is
+	// authenticated by the navi against the declared trust sources before it
+	// reaches any surface, and control is authorizer-gated and fails closed —
+	// this starter binds no control portal (observation only).
 	if err := n.Portals.Add(gateway.New(":8080", nil)); err != nil {
 		return err
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/portal/tui"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 	"github.com/flintwillow-software/opennavi/tool"
 	"github.com/flintwillow-software/opennavi/tool/builtin"
@@ -56,12 +57,27 @@ type runParams struct {
 	// thinking. Absent from the config it says nothing at all.
 	noThinking bool
 
+	// Trust configuration (NAVI-401/402). trustStore is an ADR 0008 reference
+	// to a keyed trust-store document; oidcIssuer/oidcAudience declare an OIDC
+	// identity provider. devAllowAll is the explicit development default: no
+	// credential is required and every connection is trusted.
+	trustStore   string
+	oidcIssuer   string
+	oidcAudience string
+	devAllowAll  bool
+
 	logger *logging.Logger
 	// slogLogger is the navi's structured logger, routed like the runtime
 	// logger so TUI mode does not scribble over the alt-screen.
 	slogLogger *slog.Logger
 	cancel     context.CancelFunc
 }
+
+// objectActor is the principal the reference navi's object surface acts as.
+// The surface still acts as ONE declared principal for every connection;
+// threading a connection's verified principal into the object path is the
+// delegated-authorization slice (ADR 0022; NAVI-404).
+var objectActor = principal.MustParse("navi:navi")
 
 // serveReferenceNavi assembles the reference navi and serves it until ctx ends (or,
 // in TUI mode, the user quits).
@@ -86,13 +102,15 @@ func serveReferenceNavi(p runParams) error {
 		naviID = "default"
 	}
 
-	// Pre-IAM: the reference navi's portals are a trusted operator surface,
-	// and the object surface acts as the same operator through the same
-	// authorizer a control portal uses (ADR 0017 decision 4). A real
-	// authorizer replaces AllowAll when IAM lands.
+	// Portals are authenticated by the navi (ADR 0021 decisions 6-8, ADR 0022
+	// decision 8): a connection's credential is resolved through the declared
+	// trust sources, and the principal it yields is what the control surface
+	// authorizes. The authorizer is still AllowAll — the compiled policy engine
+	// is NAVI-399 — but it is asked about a VERIFIED principal, never a value a
+	// client asserted.
 	auth := portal.AllowAll()
 
-	n := navi.New("navi",
+	opts := []navi.Option{
 		navi.WithVersion("0.1.0"),
 		navi.WithLogger(p.slogLogger),
 		navi.WithPermissions(navi.PermissionPolicy{
@@ -102,8 +120,31 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithShortTermMemory(),
-		navi.WithObjectAuthorizer(auth, "operator"),
-	)
+		navi.WithObjectAuthorizer(auth, objectActor),
+	}
+	if p.trustStore != "" {
+		store, terr := navi.NewFileTrustStore(navi.FileTrustStoreConfig{Path: p.trustStore})
+		if terr != nil {
+			return fmt.Errorf("navi: trust store: %w", terr)
+		}
+		opts = append(opts, navi.WithTrustSource(store))
+	}
+	if p.oidcIssuer != "" {
+		idp, ierr := navi.NewOIDC(navi.OIDCConfig{Issuer: p.oidcIssuer, Audience: p.oidcAudience})
+		if ierr != nil {
+			return fmt.Errorf("navi: OIDC trust source: %w", ierr)
+		}
+		opts = append(opts, navi.WithTrustSource(idp))
+	}
+	if p.devAllowAll {
+		p.slogLogger.Warn("navi: --dev-allow-all trusts every portal connection without a credential; never use it on an untrusted network")
+		opts = append(opts, navi.WithPortalAuthenticator(portal.AllowAllAuthenticator(objectActor)))
+	} else if p.portalAddr != "" && p.trustStore == "" && p.oidcIssuer == "" {
+		p.slogLogger.Warn("navi: --portal-addr is set but no trust source is declared; every remote attachment will be refused (fail closed)",
+			"hint", "declare --trust-store or --oidc-issuer, or opt into --dev-allow-all for local use")
+	}
+
+	n := navi.New("navi", opts...)
 
 	// The reference navi declares all three backends: `fs` is the compiled
 	// default (ADR 0011 — markdown + frontmatter, human-inspectable, durable),

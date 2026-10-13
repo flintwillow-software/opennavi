@@ -10,6 +10,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -25,7 +26,7 @@ func toolStateNavi(t *testing.T) (*Navi, *objectSurface, datastore.ToolState) {
 			t.Fatalf("Add(%s): %v", reg.Type.Name, err)
 		}
 	}
-	return n, newObjectSurface(n.Types, portal.AllowAll(), "test"), state
+	return n, newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test")), state
 }
 
 func TestActThoughtLifecycleActions(t *testing.T) {
@@ -112,7 +113,7 @@ func TestActValidatesDeclaredArgs(t *testing.T) {
 func TestActFailsClosedWithoutAnAuthorizer(t *testing.T) {
 	n := New("actions-noauth", WithPlanCloseCheck(false))
 	enqueueThought(t, n, "t1", time.Now().UTC())
-	s := newObjectSurface(n.Types, nil, "")
+	s := newObjectSurface(n.Types, nil, principal.Ref{})
 
 	if err := s.Act(TypeThought, "t1", "pause", nil); !errors.Is(err, portal.ErrUnauthorized) {
 		t.Fatalf("Act without an authorizer = %v, want ErrUnauthorized", err)
@@ -125,13 +126,13 @@ func TestActFailsClosedWithoutAnAuthorizer(t *testing.T) {
 func TestActRefusalFromAuthorizerStopsTheAction(t *testing.T) {
 	n := New("actions-denied", WithPlanCloseCheck(false))
 	enqueueThought(t, n, "t1", time.Now().UTC())
-	deny := portal.AuthorizerFunc(func(action portal.Action, identity string) error {
-		if identity != "operator" {
-			t.Fatalf("authorizer saw identity %q, want operator", identity)
+	deny := portal.AuthorizerFunc(func(action portal.Action, who principal.Ref) error {
+		if who.String() != "service:operator" {
+			t.Fatalf("authorizer saw principal %q, want service:operator", who)
 		}
 		return portal.ErrUnauthorized
 	})
-	s := newObjectSurface(n.Types, deny, "operator")
+	s := newObjectSurface(n.Types, deny, principal.MustParse("service:operator"))
 
 	if err := s.Act(TypeThought, "t1", "pause", nil); !errors.Is(err, portal.ErrUnauthorized) {
 		t.Fatalf("Act with a refusing authorizer = %v, want ErrUnauthorized", err)

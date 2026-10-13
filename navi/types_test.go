@@ -9,6 +9,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -18,7 +19,7 @@ import (
 func objectNavi(t *testing.T) (*Navi, *objectSurface) {
 	t.Helper()
 	n := New("objects", WithPlanCloseCheck(false))
-	return n, newObjectSurface(n.Types, portal.AllowAll(), "test")
+	return n, newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test"))
 }
 
 func enqueueThought(t *testing.T, n *Navi, id string, created time.Time) {
@@ -249,7 +250,7 @@ func TestToolStateTypesReadThroughTheBoundView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newObjectSurface(n.Types, portal.AllowAll(), "test")
+	s := newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test"))
 	todos, _, err := s.List(TypeTodo, object.Query{})
 	if err != nil {
 		t.Fatalf("List(todo): %v", err)

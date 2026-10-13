@@ -5,6 +5,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // TypeRegistration pairs an exposed object type's descriptor with the
@@ -65,12 +66,12 @@ func validateTypeRegistration(r TypeRegistration) error {
 type objectSurface struct {
 	types *TypeCollection
 
-	// auth and identity are the authorization path for actions (ADR 0017
+	// auth and who are the authorization path for actions (ADR 0017
 	// decision 4): the same portal.Authorizer a control portal uses, consulted
-	// with the identity the navi declares the surface acts as. A nil
+	// with the principal the navi declares the surface acts as. A nil
 	// authorizer refuses every action — fail closed.
-	auth     portal.Authorizer
-	identity string
+	auth portal.Authorizer
+	who  principal.Ref
 
 	// deltas is the bounded, cursor-ed live-change window Watch reads
 	// (ADR 0017 decision 6). Producers push translated queue, agent, action,
@@ -82,12 +83,12 @@ type objectSurface struct {
 var _ object.Surface = (*objectSurface)(nil)
 var _ object.Notifier = (*objectSurface)(nil)
 
-func newObjectSurface(types *TypeCollection, auth portal.Authorizer, identity string) *objectSurface {
+func newObjectSurface(types *TypeCollection, auth portal.Authorizer, who principal.Ref) *objectSurface {
 	return &objectSurface{
-		types:    types,
-		auth:     auth,
-		identity: identity,
-		deltas:   object.NewDeltaWindow(0),
+		types:  types,
+		auth:   auth,
+		who:    who,
+		deltas: object.NewDeltaWindow(0),
 	}
 }
 
@@ -189,7 +190,7 @@ func (s *objectSurface) authorize(action string) error {
 	if s.auth == nil {
 		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, action)
 	}
-	return s.auth.Authorize(portal.Action(action), s.identity)
+	return s.auth.Authorize(portal.Action(action), s.who)
 }
 
 // Watch returns the object deltas after a cursor, the next cursor to use,

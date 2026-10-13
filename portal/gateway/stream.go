@@ -10,6 +10,7 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -40,7 +41,12 @@ func (g *Gateway) serveStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: not started", http.StatusServiceUnavailable)
 		return
 	}
-	if err := g.Attach(attachIdentity(r)); err != nil {
+	who, aerr := g.authenticate(r)
+	if aerr != nil {
+		g.refusal(w, aerr)
+		return
+	}
+	if err := g.Attach(who); err != nil {
 		g.refusal(w, err)
 		return
 	}
@@ -226,8 +232,12 @@ func (g *Gateway) serveStreamCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: no object surface bound", http.StatusServiceUnavailable)
 		return
 	}
-	identity := attachIdentity(r)
-	if err := g.Attach(identity); err != nil {
+	who, aerr := g.authenticate(r)
+	if aerr != nil {
+		g.refusal(w, aerr)
+		return
+	}
+	if err := g.Attach(who); err != nil {
 		g.refusal(w, err)
 		return
 	}
@@ -241,13 +251,13 @@ func (g *Gateway) serveStreamCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: body is not a call frame", http.StatusBadRequest)
 		return
 	}
-	res, status := g.dispatchCall(identity, f.Call)
+	res, status := g.dispatchCall(who, f.Call)
 	writeResultFrame(w, res, status)
 }
 
 // dispatchCall performs one Surface call (or creation) and maps the outcome
 // onto a result plus the HTTP status that classifies a failure.
-func (g *Gateway) dispatchCall(identity string, c *portal.Call) (portal.Result, int) {
+func (g *Gateway) dispatchCall(who principal.Ref, c *portal.Call) (portal.Result, int) {
 	switch c.Method {
 	case portal.MethodTypes:
 		types, err := g.objects.Types()
@@ -309,7 +319,7 @@ func (g *Gateway) dispatchCall(identity string, c *portal.Call) (portal.Result, 
 		if c.DeferUntil != nil {
 			t.DeferUntil = c.DeferUntil.UTC()
 		}
-		if err := g.control.Enqueue(identity, t); err != nil {
+		if err := g.control.Enqueue(who, t); err != nil {
 			return errResult(err)
 		}
 		return portal.Result{OK: true}, http.StatusOK
