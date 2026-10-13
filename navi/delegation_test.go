@@ -1,6 +1,7 @@
 package navi
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -243,5 +244,81 @@ func TestFollowUpInheritsOriginator(t *testing.T) {
 	}
 	if !gotOrphan.Origin.IsZero() {
 		t.Errorf("an unattributed thought gained origin %s", gotOrphan.Origin)
+	}
+}
+
+// TestOIDCPrincipalIsAuthorizedAfterAuthentication is the regression this slice
+// fixes: a bearer token authenticates to a principal whose claims live in the
+// token, not in a store, so the resolved identity has to survive from
+// authentication to the authorization that follows it. Before the fix,
+// `principalFor` re-resolved the bare reference through the trust sources and
+// OIDC refused ("resolved from a token, not a reference"), so every
+// OIDC-authenticated connection was denied.
+func TestOIDCPrincipalIsAuthorizedAfterAuthentication(t *testing.T) {
+	now := time.Now().UTC()
+	p := newIDP(t)
+	trust, err := NewTrustSources(newOIDC(t, p, now))
+	if err != nil {
+		t.Fatalf("NewTrustSources: %v", err)
+	}
+	aliceRef := principal.MustParse("user:alice")
+	// The role is gated on a CLAIM the token carried, not on the reference, so
+	// this passes only if the resolved identity survived authentication — the
+	// reference alone would not satisfy it.
+	role, err := NewRole("reader",
+		TrustPolicy{Claims: map[string]string{"email": "alice@example.com"}},
+		CapabilitySet{Allow: Allows(Read("thought"))})
+	if err != nil {
+		t.Fatalf("NewRole: %v", err)
+	}
+	n := New("oidc-authz", WithPlanCloseCheck(false), WithTrustSource(trust))
+	if err := n.Roles.Add(role); err != nil {
+		t.Fatalf("Roles.Add: %v", err)
+	}
+	if err := n.compilePolicy(); err != nil {
+		t.Fatalf("compilePolicy: %v", err)
+	}
+
+	ref, err := NewPortalAuthenticator(trust).Authenticate(context.Background(), portal.Credential{
+		Scheme: portal.SchemeBearer, Token: p.signRS256(t, p.claims(t, now)), Now: now,
+	})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if err := n.authorizeCapability(portal.Actor{Who: ref}, Read("thought")); err != nil {
+		t.Fatalf("an OIDC-authenticated principal must be authorized: %v", err)
+	}
+	if ref != aliceRef {
+		t.Errorf("authenticated principal = %s, want %s", ref, aliceRef)
+	}
+}
+
+// TestResolvedPrincipalCacheExpires pins the bound: a remembered principal is
+// used for ResolvedCacheTTL and then no longer answers a reference, so a
+// revocation cannot be outlived by the cache.
+func TestResolvedPrincipalCacheExpires(t *testing.T) {
+	ref := principal.MustParse("user:alice")
+	p, err := NewResolvedPrincipal(ref, map[string]string{"email": "alice@example.com"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, err := NewTrustSources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remember it as though it were resolved more than a TTL ago: the entry is
+	// stale and must not answer.
+	ts.remember(p, time.Now().Add(-2*ResolvedCacheTTL))
+	if _, err := ts.Resolve(ref); !errors.Is(err, ErrUnknownPrincipal) {
+		t.Fatalf("a stale remembered principal = %v, want ErrUnknownPrincipal", err)
+	}
+
+	ts.remember(p, time.Now())
+	got, err := ts.Resolve(ref)
+	if err != nil {
+		t.Fatalf("a fresh remembered principal = %v, want it resolved", err)
+	}
+	if got.Claims()["email"] != "alice@example.com" {
+		t.Errorf("claims = %v, want the resolved claim", got.Claims())
 	}
 }
