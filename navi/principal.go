@@ -157,9 +157,15 @@ func (k *Ed25519Key) Verify(challenge, proof []byte, now time.Time) error {
 
 // Principal is an identity with authenticators attached (ADR 0021 decision 1).
 // The identity is the Ref; the keys are a mutable set, so rotation and
-// revocation never change identity.
+// revocation never change identity. Claims and group membership are identity
+// data a trust source supplied (ADR 0021 decision 4): they are never policy.
 type Principal struct {
 	ref principal.Ref
+
+	// claims and groups are supplied by a trust source at resolution and are
+	// immutable afterwards, so they are read without the key mutex.
+	claims map[string]string
+	groups []principal.Ref
 
 	mu   sync.RWMutex
 	keys []Authenticator
@@ -168,10 +174,24 @@ type Principal struct {
 // NewPrincipal builds a principal for ref and attaches each key. A zero or
 // malformed ref, a nil key, or two keys sharing an id is refused.
 func NewPrincipal(ref principal.Ref, keys ...Authenticator) (*Principal, error) {
+	return NewResolvedPrincipal(ref, nil, nil, keys...)
+}
+
+// NewResolvedPrincipal builds a principal with the identity data a trust
+// source resolved: claims and group membership alongside the keys (ADR 0021
+// decision 4). It is the constructor trust sources use; an author declaring a
+// principal inline uses NewPrincipal.
+func NewResolvedPrincipal(ref principal.Ref, claims map[string]string, groups []principal.Ref, keys ...Authenticator) (*Principal, error) {
 	if err := ref.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidPrincipal, err)
 	}
-	p := &Principal{ref: ref}
+	p := &Principal{ref: ref, claims: cloneClaims(claims)}
+	for _, group := range groups {
+		if err := group.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: group: %w", ErrInvalidPrincipal, err)
+		}
+		p.groups = append(p.groups, group)
+	}
 	for _, key := range keys {
 		if err := p.Attach(key); err != nil {
 			return nil, err
@@ -182,6 +202,38 @@ func NewPrincipal(ref principal.Ref, keys ...Authenticator) (*Principal, error) 
 
 // Ref returns the principal's identity.
 func (p *Principal) Ref() principal.Ref { return p.ref }
+
+// Claims returns a copy of the identity claims a trust source supplied; nil
+// when there are none. Claims are identity data, never policy (ADR 0021
+// decision 4).
+func (p *Principal) Claims() map[string]string { return cloneClaims(p.claims) }
+
+// Groups returns a copy of the group references the principal belongs to, as
+// the trust source supplied them (ADR 0021 decision 4).
+func (p *Principal) Groups() []principal.Ref { return append([]principal.Ref(nil), p.groups...) }
+
+// InGroup reports whether the trust source placed the principal in group.
+func (p *Principal) InGroup(group principal.Ref) bool {
+	for _, g := range p.groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// cloneClaims copies a claims map so a caller cannot mutate a principal's
+// identity through the map it passed or received.
+func cloneClaims(claims map[string]string) map[string]string {
+	if len(claims) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(claims))
+	for k, v := range claims {
+		out[k] = v
+	}
+	return out
+}
 
 // Keys returns a snapshot of the principal's authenticators.
 func (p *Principal) Keys() []Authenticator {
