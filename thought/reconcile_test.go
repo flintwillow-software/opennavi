@@ -104,16 +104,28 @@ func TestReconcileAdoptsExternalPending(t *testing.T) {
 	extWrite(st, &Thought{ID: "ext-1", Prompt: "from CLI", Priority: 4, Status: ThoughtPending})
 
 	// Adopted within a tick: IN MEMORY (not just the store fallback —
-	// GetThought falls back to the store for unknown ids) + event
-	// emitted. Wait on the in-memory list, not GetThought.
+	// GetThought falls back to the store for unknown ids) AND its enqueue
+	// event emitted. Wait for BOTH together: the adoption and its event are
+	// collected under the queue lock but the event is emitted only after the
+	// lock is released, so observing the thought alone can beat the event by
+	// a scheduling quantum — the race this test used to lose.
 	waitReconcile(t, 2*time.Second, func() bool {
+		inMemory := false
 		for _, tt := range q.GetThoughts() {
 			if tt.ID == "ext-1" && tt.Status == ThoughtPending {
+				inMemory = true
+			}
+		}
+		if !inMemory {
+			return false
+		}
+		for _, ev := range rec.allEvents() {
+			if ev.Kind == EventEnqueued && ev.ThoughtID == "ext-1" && strings.Contains(ev.Detail, "external-adopted") {
 				return true
 			}
 		}
 		return false
-	}, "external thought adoption")
+	}, "external thought adoption and its enqueue event")
 
 	acks := rec.allEvents()
 	found := false
