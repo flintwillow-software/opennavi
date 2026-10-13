@@ -207,6 +207,16 @@ func (n *Navi) authorizeCapability(actor portal.Actor, cap Capability) error {
 	return nil
 }
 
+// permitsCapability implements objectGate's non-failing half: projection asks
+// it about one sensitive field, where a denial means "omit the field" rather
+// than "refuse the read" (ADR 0022 decision 7).
+func (n *Navi) permitsCapability(actor portal.Actor, cap Capability) bool {
+	if actor.IsZero() {
+		return false
+	}
+	return n.decideActor(actor, cap, nil).Allowed
+}
+
 // Compile-time check: the composition root is the policy authorizer a portal
 // receives (ADR 0022 decision 8), and the object surface's default gate.
 var (

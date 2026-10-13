@@ -197,11 +197,20 @@ the surface no longer acts as one declared principal for every connection.
 - **The mode chosen at enqueue is a session policy** that can only narrow (ADR
 0022 decision 4); the selectable set is derived from what the principal already
 holds. The session layer itself is NAVI-397.
-- **Read scoping and field sensitivity compose.** Projection becomes
-principal-aware, so a sensitive field is one a principal may see only with a
-grant rather than one the surface removes for everyone; that projection is
-NAVI-398. This slice gates the read (`read:<type>`, and a detail as its own
-type) as the acting principal.
+- **Read scoping and field sensitivity compose** (ADR 0022 decision 7, ADR
+0025). A field marked `Sensitive` is one a principal may see only with a grant,
+not one the surface removes for everyone: projection is **principal-aware**, and
+the descriptor's flag is the declaration that a grant is required. The grant is
+`read:<type>.<field>`, which a `read:<type>` grant deliberately does not cover,
+so the read gate decides whether the type is readable and the field grant
+decides which fields; a field the principal may not read is absent, never null.
+Which *rows* a principal may see is a separate question, answered provider-side
+by a declared per-type filter the surface composes with the caller's query — a
+caller may narrow but never widen (ADR 0025 decision 3; implementation is a
+follow-up). A delta never carries a sensitive field, because the live window is
+shared by every connection. The in-process console sees sensitive fields because
+the service principal holds the ceiling, not because the surface special-cases
+a console.
 
 ## Thought modes
 
