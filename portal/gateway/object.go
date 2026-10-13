@@ -37,7 +37,10 @@ func (g *Gateway) serveTypes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
+	if !ok {
+		return
+	}
+	if _, ok := g.authorizeAttach(w, r); !ok {
 		return
 	}
 	types, err := surface.Types()
@@ -79,11 +82,14 @@ func (g *Gateway) serveList(w http.ResponseWriter, r *http.Request, typeName str
 	if !methodIs(w, r, http.MethodGet) {
 		return
 	}
-	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
+	if _, ok := g.objectsOrRefuse(w); !ok {
 		return
 	}
-	objs, next, err := surface.List(typeName, queryFrom(r))
+	actor, ok := g.authorizeAttach(w, r)
+	if !ok {
+		return
+	}
+	objs, next, err := g.surfaceFor(actor).List(typeName, queryFrom(r))
 	if err != nil {
 		g.objectRefusal(w, err)
 		return
@@ -96,11 +102,14 @@ func (g *Gateway) serveGet(w http.ResponseWriter, r *http.Request, typeName, id 
 	if !methodIs(w, r, http.MethodGet) {
 		return
 	}
-	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
+	if _, ok := g.objectsOrRefuse(w); !ok {
 		return
 	}
-	obj, err := surface.Get(typeName, id)
+	actor, ok := g.authorizeAttach(w, r)
+	if !ok {
+		return
+	}
+	obj, err := g.surfaceFor(actor).Get(typeName, id)
 	if err != nil {
 		g.objectRefusal(w, err)
 		return
@@ -114,11 +123,14 @@ func (g *Gateway) serveDetail(w http.ResponseWriter, r *http.Request, typeName, 
 	if !methodIs(w, r, http.MethodGet) {
 		return
 	}
-	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
+	if _, ok := g.objectsOrRefuse(w); !ok {
 		return
 	}
-	objs, next, err := surface.Detail(typeName, id, detail, queryFrom(r))
+	actor, ok := g.authorizeAttach(w, r)
+	if !ok {
+		return
+	}
+	objs, next, err := g.surfaceFor(actor).Detail(typeName, id, detail, queryFrom(r))
 	if err != nil {
 		g.objectRefusal(w, err)
 		return
@@ -134,15 +146,18 @@ func (g *Gateway) serveAction(w http.ResponseWriter, r *http.Request, typeName, 
 	if !methodIs(w, r, http.MethodPost) {
 		return
 	}
-	surface, ok := g.objectsOrRefuse(w)
-	if !ok || !g.authorizeAttach(w, r) {
+	if _, ok := g.objectsOrRefuse(w); !ok {
+		return
+	}
+	actor, ok := g.authorizeAttach(w, r)
+	if !ok {
 		return
 	}
 	args, ok := readArgs(w, r)
 	if !ok {
 		return
 	}
-	if err := surface.Act(typeName, id, action, args); err != nil {
+	if err := g.surfaceFor(actor).Act(typeName, id, action, args); err != nil {
 		g.objectRefusal(w, err)
 		return
 	}
@@ -163,19 +178,31 @@ func (g *Gateway) objectsOrRefuse(w http.ResponseWriter) (object.Surface, bool) 
 
 // authorizeAttach gates a route on the same fail-closed attachment path the
 // observation stream uses: the connection's credential is authenticated by the
-// navi and the attachment authorized with the verified principal (ADR 0022
-// decisions 1 and 8).
-func (g *Gateway) authorizeAttach(w http.ResponseWriter, r *http.Request) bool {
-	who, err := g.authenticate(r)
+// navi and the attachment authorized with the verified actor (ADR 0022
+// decisions 1 and 8). It returns the actor, so the caller can re-scope the
+// object surface to it.
+func (g *Gateway) authorizeAttach(w http.ResponseWriter, r *http.Request) (portal.Actor, bool) {
+	actor, err := g.authenticate(r)
 	if err != nil {
 		g.refusal(w, err)
-		return false
+		return portal.Actor{}, false
 	}
-	if err := g.Attach(who); err != nil {
+	if err := g.Attach(actor); err != nil {
 		g.refusal(w, err)
-		return false
+		return portal.Actor{}, false
 	}
-	return true
+	return actor, true
+}
+
+// surfaceFor returns the object surface as actor sees it (ADR 0022 decision
+// 1): a scoping surface is asked for a per-connection view, so reads and
+// actions authorize as the verified principal. A surface that does not scope
+// acts as its own declared actor.
+func (g *Gateway) surfaceFor(actor portal.Actor) object.Surface {
+	if s, ok := g.objects.(portal.Scoper); ok {
+		return s.Scope(actor)
+	}
+	return g.objects
 }
 
 // methodIs enforces one HTTP method, answering 405 otherwise.

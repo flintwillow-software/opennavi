@@ -219,6 +219,10 @@ func (n *Navi) bindTools(a *agent.Agent, t *thought.Thought) error {
 	if err != nil {
 		return err
 	}
+	// Per-call authorization (ADR 0022 decision 5): every tool call is checked
+	// as the thought's originating principal, so a principal cannot launder an
+	// action through the agent.
+	opts.Authorize = n.toolAuthorize(t)
 	ex := agent.NewToolExecutor("parallel", 4)
 	if _, err := bridge.Bind(ex, n.registry, opts); err != nil {
 		return fmt.Errorf("bind tools: %w", err)

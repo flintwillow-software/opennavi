@@ -268,13 +268,15 @@ func WithPortalAuthenticator(a portal.Authenticator) Option {
 	return func(n *Navi) { n.portalAuth = a }
 }
 
-// WithObjectAuthorizer declares who may perform actions through the typed
-// object surface (ADR 0017 decision 4): auth is the same portal.Authorizer a
-// control portal uses, and who is the principal the surface acts as — a
-// validated principal reference, not a free string. Absent, every action is
-// refused — fail closed. The surface still acts as ONE declared principal for
-// every connection; threading a connection's verified principal into the
-// object path is the delegated-authorization slice (ADR 0022; NAVI-404).
+// WithObjectAuthorizer declares an explicit authorizer for the typed object
+// surface, overriding the compiled policy (ADR 0017 decision 4). who is the
+// principal the in-process surface acts as — a validated principal reference,
+// not a free string; absent, the surface acts as the navi's own service
+// principal, which holds the compiled ceiling by construction. This is the
+// dev/test override (portal.AllowAll for a trusted console); a shipped navi
+// should leave it unset so reads and actions go through the compiled policy.
+// A network binding re-scopes the surface to the connection's verified actor
+// before every read and action (ADR 0022 decision 1).
 func WithObjectAuthorizer(auth portal.Authorizer, who principal.Ref) Option {
 	return func(n *Navi) {
 		n.objectAuth = auth
@@ -431,9 +433,13 @@ func New(name string, opts ...Option) *Navi {
 		}
 	}
 	// The object surface serves the registered types: reads are projected
-	// against the descriptor, actions are authorized and dispatched, and the
-	// live path translates the observation fanout into deltas (ADR 0017).
-	n.objects = newObjectSurface(n.Types, n.objectAuth, n.objectWho)
+	// against the descriptor and authorized as the acting principal, actions
+	// are authorized and dispatched, and the live path translates the
+	// observation fanout into deltas (ADR 0017; ADR 0022 decision 1). The
+	// in-process surface acts as the console (the declared principal, else the
+	// navi's service principal); a network binding re-scopes it per
+	// connection.
+	n.objects = newObjectSurface(n.Types, n.objectGate(), n.objectActor())
 
 	// Trust sources are compiled declarations (ADR 0021 decision 6): the set is
 	// built here and its contents resolved at runtime. A nil declaration is a

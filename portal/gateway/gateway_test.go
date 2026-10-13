@@ -14,7 +14,7 @@ import (
 
 type allowAll struct{}
 
-func (allowAll) Authorize(pubportal.Action, principal.Ref) error { return nil }
+func (allowAll) Authorize(pubportal.Action, pubportal.Actor) error { return nil }
 
 func newQueue(t *testing.T) *thought.Queue {
 	t.Helper()

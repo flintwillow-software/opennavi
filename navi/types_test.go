@@ -19,7 +19,7 @@ import (
 func objectNavi(t *testing.T) (*Navi, *objectSurface) {
 	t.Helper()
 	n := New("objects", WithPlanCloseCheck(false))
-	return n, newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test"))
+	return n, newObjectSurface(n.Types, authorizerGate{portal.AllowAll()}, consoleActor(principal.MustParse("service:test")))
 }
 
 func enqueueThought(t *testing.T, n *Navi, id string, created time.Time) {
@@ -250,7 +250,7 @@ func TestToolStateTypesReadThroughTheBoundView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newObjectSurface(n.Types, portal.AllowAll(), principal.MustParse("service:test"))
+	s := newObjectSurface(n.Types, authorizerGate{portal.AllowAll()}, consoleActor(principal.MustParse("service:test")))
 	todos, _, err := s.List(TypeTodo, object.Query{})
 	if err != nil {
 		t.Fatalf("List(todo): %v", err)

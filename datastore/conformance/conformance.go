@@ -94,18 +94,26 @@ func Thoughts(t *testing.T, open OpenFunc) {
 		created := time.Now().UTC().Add(-2 * time.Hour)
 		updated := time.Now().UTC()
 		want := &thought.Thought{
-			ID:         "t-round-trip",
-			Prompt:     "deploy the thing",
-			Context:    "steering notes",
-			Result:     "done",
-			Metadata:   map[string]string{"origin": "self", "role": "verification"},
-			Priority:   2,
-			Status:     thought.ThoughtPending,
-			Provider:   "ollama",
-			Model:      "qwen3:8b",
-			Mode:       "execute",
-			Skills:     []string{"deploy_runbook", "core_tools"},
-			DependsOn:  []string{"t-predecessor"},
+			ID:        "t-round-trip",
+			Prompt:    "deploy the thing",
+			Context:   "steering notes",
+			Result:    "done",
+			Metadata:  map[string]string{"origin": "self", "role": "verification"},
+			Priority:  2,
+			Status:    thought.ThoughtPending,
+			Provider:  "ollama",
+			Model:     "qwen3:8b",
+			Mode:      "execute",
+			Skills:    []string{"deploy_runbook", "core_tools"},
+			DependsOn: []string{"t-predecessor"},
+			Origin:    principal.MustParse("user:alice"),
+			Lineage:   []string{"t-parent", "t-grandparent"},
+			OriginInfo: thought.OriginInfo{
+				Transport:  "lan",
+				Channel:    "console",
+				RemoteAddr: "10.0.0.7:51234",
+				At:         created,
+			},
 			Assembled:  "## Skill: core_thoughts\n…",
 			DeferUntil: due,
 			LogPath:    "/var/log/t.log",
@@ -395,6 +403,12 @@ func diffThought(want, got *thought.Thought) []string {
 	add("Mode", want.Mode == got.Mode)
 	add("Skills", reflect.DeepEqual(want.Skills, got.Skills))
 	add("DependsOn", reflect.DeepEqual(want.DependsOn, got.DependsOn))
+	add("Origin", want.Origin == got.Origin)
+	add("Lineage", reflect.DeepEqual(want.Lineage, got.Lineage))
+	add("OriginInfo.Transport", want.OriginInfo.Transport == got.OriginInfo.Transport)
+	add("OriginInfo.Channel", want.OriginInfo.Channel == got.OriginInfo.Channel)
+	add("OriginInfo.RemoteAddr", want.OriginInfo.RemoteAddr == got.OriginInfo.RemoteAddr)
+	add("OriginInfo.At", sameTime(want.OriginInfo.At, got.OriginInfo.At))
 	add("Assembled", want.Assembled == got.Assembled)
 	add("DeferUntil", sameTime(want.DeferUntil, got.DeferUntil))
 	add("LogPath", want.LogPath == got.LogPath)

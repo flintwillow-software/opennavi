@@ -151,8 +151,57 @@ never narrows what a principal may do — the subtractive moves are removing a
 role or group, or adding a deny, which wins across every layer.
 
 Portals never see any of this vocabulary; they ask the navi (ADR 0022 decision
-8), and enforcement — carrying an acting principal and the request facts to each
-of the four enforcement points — is NAVI-404.
+8).
+
+## Delegated authorization
+
+A thought runs as the navi. Its tools are the navi's tools, so without
+delegation a principal who may enqueue a thought can cause the navi to call a
+tool that principal could not call directly — the confused-deputy problem. The
+object surface has the same shape from the other side: a portal's write path
+and a tool's write path are the same mutation, so authorizing one and not the
+other leaves a bypass (ADR 0022).
+
+- **Four enforcement points, one engine, one acting principal.** Attachment,
+the object read, the object action, and the tool call all reach the same
+compiled policy about the same principal; `enqueue` is the fifth verb, checked
+at the portal boundary. The tool path and the object path cannot drift because
+they ask the same engine.
+- **The acting principal travels with the request facts.** `portal.Actor`
+carries the verified principal together with `portal.RequestInfo` — the
+transport and input channel the binding declares, the source address, and the
+time. A condition is evaluated against the facts the binding supplied, so a
+transport- or channel-scoped grant matches on the portal path rather than
+refusing for the wrong reason; a request with no binding context matches no
+such condition, which is the fail-closed direction. The navi maps an action and
+its facts onto a capability and a request context; the vocabulary never reaches
+a portal.
+- **A thought carries its originator and lineage.** The principal is recorded
+at the door, and a follow-up inherits it: a thought with no origin that declares
+a dependency takes that dependency's principal, request facts, and lineage, so
+`thoughts_create` chains a plan without the tool knowing who it acts for. A
+thought with neither is **system-originated** and acts as the navi's own
+service principal, `navi:<name>`, which holds the compiled ceiling by
+construction — that is what keeps fail-closed from disabling the runtime's own
+machinery (cron, the closing check, recovery).
+- **Every tool call is authorized per call, as the originator.** The check is
+per-call rather than a surface filtered once at thought creation, so a
+revocation takes effect on the next call and a long-running thought does not
+outlive it. A refusal is **loud**: the engine's reason travels back to the call
+site, so a refused `enqueue` or tool call cannot look like nothing happened.
+- **Authorization fails closed on a missing principal.** An action with no
+resolved principal is refused. The object surface's default actor is the
+in-process console (trusted structurally); a network binding re-scopes the
+surface to the connection's verified principal before every read and action, so
+the surface no longer acts as one declared principal for every connection.
+- **The mode chosen at enqueue is a session policy** that can only narrow (ADR
+0022 decision 4); the selectable set is derived from what the principal already
+holds. The session layer itself is NAVI-397.
+- **Read scoping and field sensitivity compose.** Projection becomes
+principal-aware, so a sensitive field is one a principal may see only with a
+grant rather than one the surface removes for everyone; that projection is
+NAVI-398. This slice gates the read (`read:<type>`, and a detail as its own
+type) as the acting principal.
 
 ## Thought modes
 

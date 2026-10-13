@@ -10,7 +10,6 @@ import (
 
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
-	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -41,12 +40,12 @@ func (g *Gateway) serveStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: not started", http.StatusServiceUnavailable)
 		return
 	}
-	who, aerr := g.authenticate(r)
+	actor, aerr := g.authenticate(r)
 	if aerr != nil {
 		g.refusal(w, aerr)
 		return
 	}
-	if err := g.Attach(who); err != nil {
+	if err := g.Attach(actor); err != nil {
 		g.refusal(w, err)
 		return
 	}
@@ -73,7 +72,7 @@ func (g *Gateway) serveStream(w http.ResponseWriter, r *http.Request) {
 		if _, next, _, err := g.objects.Watch(0); err == nil {
 			deltaCursor = next
 		}
-		if !g.writeSnapshot(w, flusher) {
+		if !g.writeSnapshot(w, flusher, actor) {
 			return
 		}
 	}
@@ -150,8 +149,9 @@ func (g *Gateway) flushStream(w http.ResponseWriter, flusher http.Flusher, delta
 // bounded first page per declared type. The delta cursor was captured before
 // the pages were read, so a change during the snapshot is replayed as a delta
 // afterwards rather than lost.
-func (g *Gateway) writeSnapshot(w http.ResponseWriter, flusher http.Flusher) bool {
-	types, err := g.objects.Types()
+func (g *Gateway) writeSnapshot(w http.ResponseWriter, flusher http.Flusher, actor portal.Actor) bool {
+	surface := g.surfaceFor(actor)
+	types, err := surface.Types()
 	if err != nil {
 		return writeSSE(w, flusher, portal.Frame{
 			Kind:   portal.FrameResult,
@@ -165,7 +165,7 @@ func (g *Gateway) writeSnapshot(w http.ResponseWriter, flusher http.Flusher) boo
 		return false
 	}
 	for _, t := range types {
-		objs, next, err := g.objects.List(t.Name, object.Query{})
+		objs, next, err := surface.List(t.Name, object.Query{})
 		if err != nil {
 			continue
 		}
@@ -232,12 +232,12 @@ func (g *Gateway) serveStreamCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: no object surface bound", http.StatusServiceUnavailable)
 		return
 	}
-	who, aerr := g.authenticate(r)
+	actor, aerr := g.authenticate(r)
 	if aerr != nil {
 		g.refusal(w, aerr)
 		return
 	}
-	if err := g.Attach(who); err != nil {
+	if err := g.Attach(actor); err != nil {
 		g.refusal(w, err)
 		return
 	}
@@ -251,44 +251,44 @@ func (g *Gateway) serveStreamCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway: body is not a call frame", http.StatusBadRequest)
 		return
 	}
-	res, status := g.dispatchCall(who, f.Call)
+	res, status := g.dispatchCall(actor, f.Call)
 	writeResultFrame(w, res, status)
 }
 
 // dispatchCall performs one Surface call (or creation) and maps the outcome
 // onto a result plus the HTTP status that classifies a failure.
-func (g *Gateway) dispatchCall(who principal.Ref, c *portal.Call) (portal.Result, int) {
+func (g *Gateway) dispatchCall(actor portal.Actor, c *portal.Call) (portal.Result, int) {
 	switch c.Method {
 	case portal.MethodTypes:
-		types, err := g.objects.Types()
+		types, err := g.surfaceFor(actor).Types()
 		if err != nil {
 			return errResult(err)
 		}
 		return portal.Result{Types: types}, http.StatusOK
 
 	case portal.MethodList:
-		objs, next, err := g.objects.List(c.Type, c.Query)
+		objs, next, err := g.surfaceFor(actor).List(c.Type, c.Query)
 		if err != nil {
 			return errResult(err)
 		}
 		return portal.Result{Objects: objs, Next: next}, http.StatusOK
 
 	case portal.MethodGet:
-		obj, err := g.objects.Get(c.Type, c.ID)
+		obj, err := g.surfaceFor(actor).Get(c.Type, c.ID)
 		if err != nil {
 			return errResult(err)
 		}
 		return portal.Result{Object: &obj}, http.StatusOK
 
 	case portal.MethodDetail:
-		objs, next, err := g.objects.Detail(c.Type, c.ID, c.Detail, c.Query)
+		objs, next, err := g.surfaceFor(actor).Detail(c.Type, c.ID, c.Detail, c.Query)
 		if err != nil {
 			return errResult(err)
 		}
 		return portal.Result{Objects: objs, Next: next}, http.StatusOK
 
 	case portal.MethodAct:
-		if err := g.objects.Act(c.Type, c.ID, c.Action, c.Args); err != nil {
+		if err := g.surfaceFor(actor).Act(c.Type, c.ID, c.Action, c.Args); err != nil {
 			return errResult(err)
 		}
 		return portal.Result{OK: true}, http.StatusOK
@@ -319,7 +319,7 @@ func (g *Gateway) dispatchCall(who principal.Ref, c *portal.Call) (portal.Result
 		if c.DeferUntil != nil {
 			t.DeferUntil = c.DeferUntil.UTC()
 		}
-		if err := g.control.Enqueue(who, t); err != nil {
+		if err := g.control.Enqueue(actor, t); err != nil {
 			return errResult(err)
 		}
 		return portal.Result{OK: true}, http.StatusOK

@@ -293,6 +293,18 @@ var migrations = []string{
 	// runner mutations to it. Drop the dead column; nothing indexes or
 	// references it.
 	`ALTER TABLE thoughts DROP COLUMN session_id`,
+	// 18-20: the thought's origin, lineage, and origin facts (NAVI-404, ADR
+	// 0022 decisions 2 and 3). `origin` is the verified principal that caused
+	// the thought, written at the door and never by the thought's author;
+	// `lineage` is the thought-to-thought chain as a JSON array like skills;
+	// `origin_info` is the request facts the binding supplied at enqueue
+	// (transport, channel, remote address, time) as JSON. Persisting them is
+	// what keeps a thought that survives a restart attributed to the
+	// principal that caused it rather than falling back to the runtime's own
+	// service principal.
+	`ALTER TABLE thoughts ADD COLUMN origin TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN lineage TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN origin_info TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

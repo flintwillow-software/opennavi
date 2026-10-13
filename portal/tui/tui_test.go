@@ -25,7 +25,7 @@ import (
 // seam (production wires nil and fails closed).
 type allowAllAuth struct{}
 
-func (a allowAllAuth) Authorize(portal.Action, principal.Ref) error {
+func (a allowAllAuth) Authorize(portal.Action, portal.Actor) error {
 	return nil
 }
 
@@ -1531,19 +1531,19 @@ func TestPortalControlGoesThroughTheSurface(t *testing.T) {
 	p := &Portal{done: make(chan error, 1)}
 	p.tr = tport // same package: the transport Start would have built
 
-	if err := p.Steer(principal.MustParse("service:test"), "pc1", "steered via portal"); err != nil {
+	if err := p.Steer(portal.Actor{Who: principal.MustParse("service:test")}, "pc1", "steered via portal"); err != nil {
 		t.Fatalf("Steer: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); !strings.Contains(got.Context, "steered via portal") {
 		t.Fatalf("steer did not land: %q", got.Context)
 	}
-	if err := p.BumpPriority(principal.MustParse("service:test"), "pc1", 2); err != nil {
+	if err := p.BumpPriority(portal.Actor{Who: principal.MustParse("service:test")}, "pc1", 2); err != nil {
 		t.Fatalf("BumpPriority: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); got.Priority != 2 {
 		t.Fatalf("priority = %d, want 2", got.Priority)
 	}
-	if err := p.Cancel(principal.MustParse("service:test"), "pc1"); err != nil {
+	if err := p.Cancel(portal.Actor{Who: principal.MustParse("service:test")}, "pc1"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if got, _ := q.GetThought("pc1"); got.Status != thought.ThoughtCancelled {
@@ -1556,7 +1556,7 @@ func TestPortalControlGoesThroughTheSurface(t *testing.T) {
 	}
 	// A missing surface is an error, not a silent no-op.
 	empty := &Portal{done: make(chan error, 1)}
-	if err := empty.Steer(principal.MustParse("service:test"), "pc1", "hi"); err == nil {
+	if err := empty.Steer(portal.Actor{Who: principal.MustParse("service:test")}, "pc1", "hi"); err == nil {
 		t.Fatal("control without a transport must fail")
 	}
 }

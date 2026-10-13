@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/flintwillow-software/opennavi/portal"
-	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -133,7 +132,7 @@ func (p *Portal) Stop() error {
 // transport, so it is trusted structurally rather than by a credential (ADR
 // 0021 decision 9). Its actions still carry the console principal the navi
 // supplied through Deps, so the record names an actor.
-func (p *Portal) Attach(principal.Ref) error { return nil }
+func (p *Portal) Attach(portal.Actor) error { return nil }
 
 func (p *Portal) transport() (Transport, error) {
 	p.mu.Lock()
@@ -157,37 +156,37 @@ func (p *Portal) act(thoughtID, action string, args map[string]any) error {
 }
 
 // Steer routes a message to a thought.
-func (p *Portal) Steer(_ principal.Ref, thoughtID, message string) error {
+func (p *Portal) Steer(_ portal.Actor, thoughtID, message string) error {
 	return p.act(thoughtID, "steer", map[string]any{"message": message})
 }
 
 // Pause parks a running thought.
-func (p *Portal) Pause(_ principal.Ref, thoughtID string) error {
+func (p *Portal) Pause(_ portal.Actor, thoughtID string) error {
 	return p.act(thoughtID, "pause", nil)
 }
 
 // Resume re-queues a paused thought.
-func (p *Portal) Resume(_ principal.Ref, thoughtID string) error {
+func (p *Portal) Resume(_ portal.Actor, thoughtID string) error {
 	return p.act(thoughtID, "resume", nil)
 }
 
 // Cancel removes queued/paused work.
-func (p *Portal) Cancel(_ principal.Ref, thoughtID string) error {
+func (p *Portal) Cancel(_ portal.Actor, thoughtID string) error {
 	return p.act(thoughtID, "cancel", nil)
 }
 
 // BumpPriority changes a queued thought's priority.
-func (p *Portal) BumpPriority(_ principal.Ref, thoughtID string, prio int) error {
+func (p *Portal) BumpPriority(_ portal.Actor, thoughtID string, prio int) error {
 	return p.act(thoughtID, "bump", map[string]any{"priority": prio})
 }
 
 // Retry re-queues a failed thought.
-func (p *Portal) Retry(_ principal.Ref, thoughtID string) error {
+func (p *Portal) Retry(_ portal.Actor, thoughtID string) error {
 	return p.act(thoughtID, "retry", nil)
 }
 
 // Enqueue schedules a thought.
-func (p *Portal) Enqueue(_ principal.Ref, t *thought.Thought) error {
+func (p *Portal) Enqueue(_ portal.Actor, t *thought.Thought) error {
 	tr, err := p.transport()
 	if err != nil {
 		return err

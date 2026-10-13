@@ -133,48 +133,48 @@ func (d *Dashboard) Start(ctx context.Context, deps portal.Deps) error { return 
 // Stop shuts the dashboard down.
 func (d *Dashboard) Stop() error { return nil }
 
-// Attach authorizes a principal for control. A zero reference is refused.
-func (d *Dashboard) Attach(who principal.Ref) error {
-	if err := who.Validate(); err != nil {
+// Attach authorizes a verified actor for control. A zero reference is refused.
+func (d *Dashboard) Attach(actor portal.Actor) error {
+	if err := actor.Who.Validate(); err != nil {
 		return fmt.Errorf("dashboard: %w", portal.ErrUnauthorized)
 	}
 	if d.attached == nil {
 		d.attached = map[principal.Ref]bool{}
 	}
-	d.attached[who] = true
+	d.attached[actor.Who] = true
 	return nil
 }
 
-func (d *Dashboard) authorize(who principal.Ref) error {
-	if !d.attached[who] {
+func (d *Dashboard) authorize(actor portal.Actor) error {
+	if !d.attached[actor.Who] {
 		return fmt.Errorf("dashboard: %w", portal.ErrUnauthorized)
 	}
 	return nil
 }
 
 // Steer injects a message into a running thought.
-func (d *Dashboard) Steer(who principal.Ref, thoughtID, message string) error {
-	return d.authorize(who)
+func (d *Dashboard) Steer(actor portal.Actor, thoughtID, message string) error {
+	return d.authorize(actor)
 }
 
 // Pause pauses a thought.
-func (d *Dashboard) Pause(who principal.Ref, thoughtID string) error { return d.authorize(who) }
+func (d *Dashboard) Pause(actor portal.Actor, thoughtID string) error { return d.authorize(actor) }
 
 // Resume resumes a paused thought.
-func (d *Dashboard) Resume(who principal.Ref, thoughtID string) error { return d.authorize(who) }
+func (d *Dashboard) Resume(actor portal.Actor, thoughtID string) error { return d.authorize(actor) }
 
 // Cancel cancels a thought.
-func (d *Dashboard) Cancel(who principal.Ref, thoughtID string) error { return d.authorize(who) }
+func (d *Dashboard) Cancel(actor portal.Actor, thoughtID string) error { return d.authorize(actor) }
 
 // BumpPriority changes a queued thought's priority.
-func (d *Dashboard) BumpPriority(who principal.Ref, thoughtID string, prio int) error {
-	return d.authorize(who)
+func (d *Dashboard) BumpPriority(actor portal.Actor, thoughtID string, prio int) error {
+	return d.authorize(actor)
 }
 
 // Retry re-queues a failed thought.
-func (d *Dashboard) Retry(who principal.Ref, thoughtID string) error { return d.authorize(who) }
+func (d *Dashboard) Retry(actor portal.Actor, thoughtID string) error { return d.authorize(actor) }
 
-// Enqueue schedules a new thought on behalf of who.
-func (d *Dashboard) Enqueue(who principal.Ref, t *thought.Thought) error {
-	return d.authorize(who)
+// Enqueue schedules a new thought on behalf of actor.
+func (d *Dashboard) Enqueue(actor portal.Actor, t *thought.Thought) error {
+	return d.authorize(actor)
 }
