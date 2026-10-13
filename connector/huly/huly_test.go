@@ -31,6 +31,10 @@ type fakeHuly struct {
 	statuses []map[string]any
 	persons  []map[string]any
 	project  map[string]any
+
+	tags          []map[string]any
+	tagRefs       []map[string]any
+	tagCategories []map[string]any
 }
 
 func newFakeHuly(t *testing.T) *fakeHuly {
@@ -51,6 +55,9 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 		},
 		persons: []map[string]any{
 			{"_id": "6aa2a3038376b1c099c0403d", "name": "bastilli"},
+		},
+		tagCategories: []map[string]any{
+			{"_id": "tracker:category:Other", "targetClass": classIssue, "default": true, "label": "Other"},
 		},
 	}
 	mux := http.NewServeMux()
@@ -114,7 +121,7 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, "find-all:"+class)
 
-	var data []map[string]any
+	data := []map[string]any{}
 	switch class {
 	case classIssue:
 		data = f.issues
@@ -126,6 +133,12 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 		if f.project != nil {
 			data = []map[string]any{f.project}
 		}
+	case classTagElement:
+		data = f.tags
+	case classTagReference:
+		data = f.tagRefs
+	case classTagCategory:
+		data = f.tagCategories
 	}
 	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": filterDocs(data, query)})
 }
@@ -187,7 +200,7 @@ func filterDocs(docs []map[string]any, query map[string]any) []map[string]any {
 	if len(query) == 0 {
 		return docs
 	}
-	var out []map[string]any
+	out := []map[string]any{}
 	for _, d := range docs {
 		if matches(d, query) {
 			out = append(out, d)
@@ -387,8 +400,8 @@ func TestEgressToolsRefuseBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTools: %v", err)
 	}
-	if len(tools) != 5 {
-		t.Fatalf("got %d tools, want 5", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("got %d tools, want 7", len(tools))
 	}
 	for _, tl := range tools {
 		if _, err := tl.Handler(context.Background(), nil); !errors.Is(err, connector.ErrNotStarted) {
