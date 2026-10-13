@@ -324,10 +324,16 @@ Watch(after) ([]Delta, int, bool, error)
                                   — the live path: deltas since a cursor
 ```
 
-The surface enforces the descriptor rather than trusting the portal: fields
-marked sensitive are omitted, undeclared fields are dropped, and a page is
-bounded. An in-process portal and the gateway's remote binding are two
-bindings of the same contract, so a portal is written once.
+The surface enforces the descriptor rather than trusting the portal: an
+undeclared field is dropped, a page is bounded, and a field marked
+**sensitive** is included only when the acting principal holds
+`read:<type>.<field>` — a `read:<type>` grant deliberately does not cover it, so
+projection is **principal-aware** and sensitivity is a grant rather than a
+static omission for everyone (ADR 0022 decision 7, ADR 0025). A field the
+principal may not read is absent, never null. A delta never carries a sensitive
+field: the live window is shared by every connection (ADR 0025 decision 4). An
+in-process portal and the gateway's remote binding are two bindings of the same
+contract, so a portal is written once.
 
 **Actions.** A type declares its actions — a thought steers, pauses, resumes,
 cancels, bumps, and retries; a todo completes, starts, and removes; a note

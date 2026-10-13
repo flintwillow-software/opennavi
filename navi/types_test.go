@@ -2,6 +2,7 @@ package navi
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,13 +14,26 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
+// operatorGate is the permissive test operator WITHOUT a field grant: it holds
+// `read:<type>` and `act:<type>.<action>` for everything but no
+// `read:<type>.<field>`, so projection omits every sensitive field — the
+// default (ADR 0022 decision 7).
+func operatorGate() objectGate {
+	return authorizerGate{portal.AuthorizerFunc(func(action portal.Action, _ portal.Actor) error {
+		if strings.HasPrefix(string(action), "read:") && strings.Contains(string(action), ".") {
+			return portal.ErrUnauthorized
+		}
+		return nil
+	})}
+}
+
 // objectNavi builds a navi with the built-in types exposed and no datastore
 // bound: the surface must serve live values from memory alone. The surface
 // acts as a permissive test operator so action tests exercise dispatch.
 func objectNavi(t *testing.T) (*Navi, *objectSurface) {
 	t.Helper()
 	n := New("objects", WithPlanCloseCheck(false))
-	return n, newObjectSurface(n.Types, authorizerGate{portal.AllowAll()}, consoleActor(principal.MustParse("service:test")))
+	return n, newObjectSurface(n.Types, operatorGate(), consoleActor(principal.MustParse("service:test")))
 }
 
 func enqueueThought(t *testing.T, n *Navi, id string, created time.Time) {
@@ -290,5 +304,60 @@ func TestObjectSurfaceExposesDerivedVerification(t *testing.T) {
 	}
 	if _, leaked := obj.Fields["metadata"]; leaked {
 		t.Fatal("the free-form metadata map must stay omitted")
+	}
+}
+
+// TestObjectSurfaceProjectsSensitiveFieldsByGrant is ADR 0022 decision 7: a
+// sensitive field is one a principal may see only with a grant, not one the
+// surface removes for everyone. A `read:<type>` grant does not cover a field,
+// so the same object reads differently for two principals and the descriptor's
+// Sensitive flag stays the declaration that a grant is required.
+func TestObjectSurfaceProjectsSensitiveFieldsByGrant(t *testing.T) {
+	aliceRef := principal.MustParse("user:alice")
+	alice, err := NewPrincipal(aliceRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principals, err := NewPrincipals(alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// alice may read the type and exactly ONE sensitive field.
+	role, err := NewRole("field-reader",
+		TrustPolicy{Principals: []principal.Ref{aliceRef}},
+		CapabilitySet{Allow: Allows(Read("thought"), ReadField("thought", "assembled"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := New("projection", WithPlanCloseCheck(false), WithTrustSource(principals), WithPersonality("be terse"))
+	if err := n.Roles.Add(role); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.compilePolicy(); err != nil {
+		t.Fatal(err)
+	}
+	enqueueThought(t, n, "t1", time.Now().UTC())
+
+	obj, err := n.objects.Scope(consoleActor(aliceRef)).Get(TypeThought, "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if obj.Fields["assembled"] != "be terse" {
+		t.Fatalf("the granted sensitive field = %v, want the assembled context", obj.Fields["assembled"])
+	}
+	for _, hidden := range []string{"checkpoint", "metadata", "log_path"} {
+		if _, present := obj.Fields[hidden]; present {
+			t.Fatalf("ungranted sensitive field %q was exposed: %v", hidden, obj.Fields)
+		}
+	}
+	if obj.Fields["prompt"] != "prompt t1" {
+		t.Fatalf("non-sensitive field missing: %v", obj.Fields)
+	}
+
+	// A principal with no role at all is refused the type read outright — the
+	// read gate is fail closed, and the field layer is above it.
+	bob := principal.MustParse("user:bob")
+	if _, _, err := n.objects.Scope(consoleActor(bob)).List(TypeThought, object.Query{}); !errors.Is(err, portal.ErrUnauthorized) {
+		t.Fatalf("a principal with no grant = %v, want a refusal on the type read", err)
 	}
 }

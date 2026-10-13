@@ -100,7 +100,7 @@ func (s *objectSurface) emitMemory(rec datastore.MemoryRecord, op object.Op) {
 	}
 	d := object.Delta{Type: TypeMemory, ID: rec.ID, Op: op}
 	if op != object.OpDelete {
-		d.Fields = project(reg.Type, memoryObject(rec)).Fields
+		d.Fields = project(reg.Type, memoryObject(rec), nil).Fields
 	}
 	s.push(d)
 }
@@ -123,7 +123,7 @@ func (s *objectSurface) emitObject(typeName, id string, at time.Time) {
 	}
 	s.push(object.Delta{
 		Type: typeName, ID: id, Op: object.OpUpdate,
-		Fields: project(reg.Type, obj).Fields, At: at,
+		Fields: project(reg.Type, obj, nil).Fields, At: at,
 	})
 }
 

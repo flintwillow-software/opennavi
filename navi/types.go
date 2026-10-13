@@ -65,7 +65,12 @@ func validateTypeRegistration(r TypeRegistration) error {
 // portal.Authorizer wired with WithObjectAuthorizer is adapted to it. A nil
 // gate refuses every read and action — fail closed.
 type objectGate interface {
+	// authorizeCapability returns nil when actor may do cap, or a refusal.
 	authorizeCapability(actor portal.Actor, cap Capability) error
+	// permitsCapability reports whether actor may do cap WITHOUT failing the
+	// whole operation. Projection asks it about one sensitive field, where a
+	// denial means "omit the field", not "refuse the read".
+	permitsCapability(actor portal.Actor, cap Capability) bool
 }
 
 // authorizerGate adapts an explicit portal.Authorizer (WithObjectAuthorizer)
@@ -79,6 +84,13 @@ func (g authorizerGate) authorizeCapability(actor portal.Actor, cap Capability) 
 		return fmt.Errorf("%w: %s (no authorizer wired — fail closed)", portal.ErrUnauthorized, cap)
 	}
 	return g.auth.Authorize(portal.Action(cap.String()), actor)
+}
+
+func (g authorizerGate) permitsCapability(actor portal.Actor, cap Capability) bool {
+	if g.auth == nil {
+		return false
+	}
+	return g.auth.Authorize(portal.Action(cap.String()), actor) == nil
 }
 
 // objectSurface is the navi's object.Surface: it resolves a type name to its
@@ -164,7 +176,7 @@ func (s *objectSurface) List(typeName string, q object.Query) ([]object.Object, 
 	if err != nil {
 		return nil, "", err
 	}
-	return projectAll(reg.Type, objs), next, nil
+	return projectAll(reg.Type, objs, s.allowedSensitive(reg.Type)), next, nil
 }
 
 // Get returns one object of one type, as the surface's actor.
@@ -180,7 +192,7 @@ func (s *objectSurface) Get(typeName, id string) (object.Object, error) {
 	if err != nil {
 		return object.Object{}, err
 	}
-	return project(reg.Type, obj), nil
+	return project(reg.Type, obj, s.allowedSensitive(reg.Type)), nil
 }
 
 // Detail returns a bounded page of a named detail collection's objects,
@@ -204,7 +216,7 @@ func (s *objectSurface) Detail(typeName, id, detail string, q object.Query) ([]o
 		return nil, "", err
 	}
 	if dt, ok := s.types.Get(d.Type); ok {
-		return projectAll(dt.Type, objs), next, nil
+		return projectAll(dt.Type, objs, s.allowedSensitive(dt.Type)), next, nil
 	}
 	return objs, next, nil
 }
@@ -279,13 +291,41 @@ func (s *objectSurface) registration(typeName string) (TypeRegistration, error) 
 	return reg, nil
 }
 
-// project strips fields the descriptor does not expose: sensitive fields are
-// omitted entirely (absent, never null), and undeclared fields are dropped so
-// a provider cannot widen the surface past its descriptor.
-func project(t object.Type, o object.Object) object.Object {
+// allowedSensitive returns the sensitive fields of t the surface's actor may
+// see (ADR 0022 decision 7): a sensitive field is one a principal may see only
+// with a grant, not one the surface removes for everyone. The descriptor's
+// Sensitive flag is the declaration that a grant is required; the grant is
+// read:<type>.<field>, which a read:<type> grant deliberately does not cover.
+// A nil set means no sensitive field is visible.
+func (s *objectSurface) allowedSensitive(t object.Type) map[string]bool {
+	if s.gate == nil || s.actor.IsZero() {
+		return nil
+	}
+	var allowed map[string]bool
+	for _, f := range t.Fields {
+		if !f.Sensitive {
+			continue
+		}
+		if s.gate.permitsCapability(s.actor, ReadField(t.Name, f.Name)) {
+			if allowed == nil {
+				allowed = map[string]bool{}
+			}
+			allowed[f.Name] = true
+		}
+	}
+	return allowed
+}
+
+// project strips fields the descriptor does not expose: undeclared fields are
+// dropped so a provider cannot widen the surface past its descriptor, and a
+// sensitive field is included only when allowedSensitive names it (ADR 0017
+// decision 5; ADR 0022 decision 7). A nil set excludes every sensitive field —
+// what the shared delta window uses, because a delta is read by every
+// connection and must not carry a field one of them may not see.
+func project(t object.Type, o object.Object, allowedSensitive map[string]bool) object.Object {
 	out := object.Object{Type: t.Name, ID: o.ID, Version: o.Version, Fields: map[string]any{}}
 	for _, f := range t.Fields {
-		if f.Sensitive {
+		if f.Sensitive && !allowedSensitive[f.Name] {
 			continue
 		}
 		if v, ok := o.Fields[f.Name]; ok {
@@ -295,10 +335,10 @@ func project(t object.Type, o object.Object) object.Object {
 	return out
 }
 
-func projectAll(t object.Type, objs []object.Object) []object.Object {
+func projectAll(t object.Type, objs []object.Object, allowedSensitive map[string]bool) []object.Object {
 	out := make([]object.Object, 0, len(objs))
 	for _, o := range objs {
-		out = append(out, project(t, o))
+		out = append(out, project(t, o, allowedSensitive))
 	}
 	return out
 }
