@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-13'
 supersedes: []
 amends: ./0025-principal-aware-reads.md
