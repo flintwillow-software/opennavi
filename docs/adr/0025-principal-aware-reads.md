@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-13'
 supersedes: []
 amends: ./0017-navi-state-as-typed-objects.md
