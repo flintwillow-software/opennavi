@@ -130,6 +130,30 @@ compiled, identity is resolved at runtime** (ADR 0021).
   trusts every connection, credential or none; the reference navi wires it only
   behind `--dev-allow-all`. It is never the shipped model.
 
+**Policy is compiled; identity is resolved.** The other half of the split above
+(ADR 0021 decisions 3–5 and 11). A *capability* is a closed verb — `connect`,
+`read`, `act`, `call`, `enqueue` — over a *referential* target, so it names a
+tool, a type, a field, or an action the navi already declares and nothing else.
+A *role* is a trust policy plus a permission policy; a *group* is the permission
+side of a collection whose membership comes from the trust source. Evaluation is
+default deny, explicit deny wins, allow required, intersected with the compiled
+ceiling and any session policy, with every condition passing — and the ceiling
+is *derived* from the declarations, so naming something undeclared is
+unreachable by construction rather than by a list somebody maintains.
+
+Conditions (`OnTransport`, `OnChannel`, `OnNetwork`, `Between`, `OnClaim`) are
+predicates on the **request**, which is where decision 9's "network is a
+condition, never an identity" is enforced: a mesh peer and a LAN client are
+told apart by a fact about the request, not by a principal that encodes
+transport. Note the asymmetry, because it reads backwards to anyone thinking in
+least-privilege terms: role and group grants **accumulate**, so adding a role
+never narrows what a principal may do — the subtractive moves are removing a
+role or group, or adding a deny, which wins across every layer.
+
+Portals never see any of this vocabulary; they ask the navi (ADR 0022 decision
+8), and enforcement — carrying an acting principal and the request facts to each
+of the four enforcement points — is NAVI-404.
+
 ## Thought modes
 
 Modes (ADR 0007) narrow capability per thought — e.g. `plan` is read-only.
