@@ -3,6 +3,8 @@ package navi
 import (
 	"errors"
 	"testing"
+
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 func TestCapabilityConstructors(t *testing.T) {
@@ -88,40 +90,40 @@ func TestCapabilityCovers(t *testing.T) {
 
 func TestCapabilitySetPermits(t *testing.T) {
 	set := CapabilitySet{
-		Allow: []Capability{Read("thought"), Call("todo_read"), Any(VerbEnqueue)},
-		Deny:  []Capability{ReadField("thought", "assembled"), Call("shell_exec")},
+		Allow: Allows(Read("thought"), Call("todo_read"), Any(VerbEnqueue)),
+		Deny:  Allows(ReadField("thought", "assembled"), Call("shell_exec")),
 	}
 
 	// Allow-required: what is listed is permitted, what is not is denied.
-	if !set.Permits(Read("thought")) {
+	if !set.Permits(Read("thought"), RequestContext{}) {
 		t.Error("an allowed capability must be permitted")
 	}
-	if !set.Permits(Enqueue()) {
+	if !set.Permits(Enqueue(), RequestContext{}) {
 		t.Error("a wildcard verb grant must permit the verb")
 	}
-	if set.Permits(Act("thought", "pause")) {
+	if set.Permits(Act("thought", "pause"), RequestContext{}) {
 		t.Error("an unlisted capability must be denied (allow-required)")
 	}
-	if set.Permits(ReadField("thought", "title")) {
+	if set.Permits(ReadField("thought", "title"), RequestContext{}) {
 		t.Error("a type grant must not permit a field read")
 	}
 
 	// Deny wins over allow.
-	if set.Permits(ReadField("thought", "assembled")) {
+	if set.Permits(ReadField("thought", "assembled"), RequestContext{}) {
 		t.Error("an explicit deny must win")
 	}
 
 	// The zero set permits nothing.
 	var zero CapabilitySet
-	if zero.Permits(Connect()) {
+	if zero.Permits(Connect(), RequestContext{}) {
 		t.Error("the zero set must permit nothing")
 	}
 }
 
 func TestCapabilitySetExceedsCeiling(t *testing.T) {
-	ceiling := CapabilitySet{Allow: []Capability{Read("thought"), Call("todo_read")}}
+	ceiling := CapabilitySet{Allow: Allows(Read("thought"), Call("todo_read"))}
 
-	within := CapabilitySet{Allow: []Capability{Read("thought")}, Deny: []Capability{Read("thought")}}
+	within := CapabilitySet{Allow: Allows(Read("thought")), Deny: Allows(Read("thought"))}
 	if err := within.Exceeds(ceiling); err != nil {
 		t.Errorf("narrowing must be allowed: %v", err)
 	}
@@ -129,27 +131,31 @@ func TestCapabilitySetExceedsCeiling(t *testing.T) {
 		t.Errorf("an empty set must be allowed: %v", err)
 	}
 
-	wider := CapabilitySet{Allow: []Capability{Call("shell_exec")}}
+	wider := CapabilitySet{Allow: Allows(Call("shell_exec"))}
 	if err := wider.Exceeds(ceiling); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a grant outside the ceiling = %v, want ErrInvalid", err)
 	}
 
 	// A deny can never widen, so it is never a violation even when it names
 	// something the ceiling does not carry.
-	denyOnly := CapabilitySet{Deny: []Capability{Call("shell_exec")}}
+	denyOnly := CapabilitySet{Deny: Allows(Call("shell_exec"))}
 	if err := denyOnly.Exceeds(ceiling); err != nil {
 		t.Errorf("a deny must not be an excess: %v", err)
 	}
 }
 
 func TestCapabilitySetValidate(t *testing.T) {
-	good := CapabilitySet{Allow: []Capability{Connect(), Act("todo", "complete")}}
+	good := CapabilitySet{Allow: Allows(Connect(), Act("todo", "complete"))}
 	if err := good.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
-	bad := CapabilitySet{Allow: []Capability{{Verb: "invoke", Target: "x"}}}
+	bad := CapabilitySet{Allow: []Grant{{Capability: Capability{Verb: "invoke", Target: "x"}}}}
 	if err := bad.Validate(); !errors.Is(err, ErrInvalid) {
 		t.Errorf("Validate = %v, want ErrInvalid", err)
+	}
+	badCondition := CapabilitySet{Allow: []Grant{When(Enqueue(), OnTransport(""))}}
+	if err := badCondition.Validate(); !errors.Is(err, ErrInvalid) {
+		t.Errorf("Validate with a malformed condition = %v, want ErrInvalid", err)
 	}
 }
 
@@ -164,4 +170,68 @@ func TestVerbsAreClosed(t *testing.T) {
 			t.Errorf("Verbs() carries %q, which is not in the closed set", v)
 		}
 	}
+}
+
+// TestGrantsCarryConditions is the worked shape ADR 0021 decision 9 needs: the
+// same verb permitted under different conditions, so a LAN client and a mesh
+// peer are told apart by a fact about the request rather than by putting
+// transport into the principal.
+func TestGrantsCarryConditions(t *testing.T) {
+	lan := CapabilitySet{Allow: []Grant{When(Enqueue(), OnTransport("lan"))}}
+	mesh := CapabilitySet{Allow: []Grant{
+		When(Enqueue(), OnTransport("lora"), OnClaim("role", "field")),
+	}}
+
+	alice := principalWithClaims(t, "user:alice", map[string]string{"role": "field"})
+
+	// The LAN grant applies only on the LAN transport.
+	if !lan.Permits(Enqueue(), RequestContext{Transport: "lan", Principal: alice}) {
+		t.Error("the LAN grant must permit enqueue on the LAN")
+	}
+	if lan.Permits(Enqueue(), RequestContext{Transport: "lora", Principal: alice}) {
+		t.Error("the LAN grant must not permit enqueue over LoRa")
+	}
+	// The mesh grant needs BOTH conditions.
+	if !mesh.Permits(Enqueue(), RequestContext{Transport: "lora", Principal: alice}) {
+		t.Error("the mesh grant must permit the field role over LoRa")
+	}
+	if mesh.Permits(Enqueue(), RequestContext{Transport: "lan", Principal: alice}) {
+		t.Error("the mesh grant must not permit the LAN")
+	}
+	notField := principalWithClaims(t, "user:bob", map[string]string{"role": "guest"})
+	if mesh.Permits(Enqueue(), RequestContext{Transport: "lora", Principal: notField}) {
+		t.Error("the mesh grant must not permit a principal without the claim")
+	}
+
+	// A condition only narrows, so a conditioned grant never exceeds the
+	// ceiling that permits the bare capability.
+	ceiling := CapabilitySet{Allow: Allows(Enqueue())}
+	if err := lan.Exceeds(ceiling); err != nil {
+		t.Errorf("a conditioned grant must not exceed a ceiling that permits the capability: %v", err)
+	}
+}
+
+// TestConditionedDenyWins pins that a deny's conditions are honoured too: a
+// conditional deny narrows only when its condition holds.
+func TestConditionedDenyWins(t *testing.T) {
+	set := CapabilitySet{
+		Allow: Allows(Enqueue()),
+		Deny:  []Grant{When(Enqueue(), OnTransport("lora"))},
+	}
+	if !set.Permits(Enqueue(), RequestContext{Transport: "lan"}) {
+		t.Error("the deny must not apply on the LAN")
+	}
+	if set.Permits(Enqueue(), RequestContext{Transport: "lora"}) {
+		t.Error("the deny must apply over LoRa")
+	}
+}
+
+// principalWithClaims builds a resolved principal carrying claims.
+func principalWithClaims(t *testing.T, ref string, claims map[string]string) *Principal {
+	t.Helper()
+	p, err := NewResolvedPrincipal(principal.MustParse(ref), claims, nil)
+	if err != nil {
+		t.Fatalf("NewResolvedPrincipal: %v", err)
+	}
+	return p
 }

@@ -203,27 +203,66 @@ func joinTarget(a, b string) string {
 	return a + "." + b
 }
 
+// Grant is one allowance or denial: a capability, and the conditions under
+// which it applies (ADR 0021 decision 11; ADR 0022 decision 6 — "every
+// condition must pass"). Conditions only ever narrow, so a grant with
+// conditions permits a subset of the same grant without them.
+type Grant struct {
+	// Capability is what the grant is about.
+	Capability Capability
+	// When lists the conditions that must all pass for the grant to apply.
+	// Empty means the grant applies whenever its capability matches.
+	When []Condition
+}
+
+// When builds a grant with conditions — the form a transport- or
+// network-scoped allowance takes:
+//
+//	When(Enqueue(), OnTransport("lan"))
+func When(c Capability, conds ...Condition) Grant {
+	return Grant{Capability: c, When: conds}
+}
+
+// Allows builds unconditioned grants, so the common case stays terse:
+//
+//	CapabilitySet{Allow: Allows(Read("thought"), Call("todo_read"))}
+func Allows(caps ...Capability) []Grant {
+	out := make([]Grant, 0, len(caps))
+	for _, c := range caps {
+		out = append(out, Grant{Capability: c})
+	}
+	return out
+}
+
+// applies reports whether the grant covers the request and every one of its
+// conditions passes.
+func (g Grant) applies(c Capability, ctx RequestContext) bool {
+	return g.Capability.covers(c) && conditionsPass(g.When, ctx)
+}
+
 // CapabilitySet is the permission side of a role or group (ADR 0021 decision
-// 5): what holding it permits. Deny wins over allow, and the set can only
-// narrow the navi's compiled ceiling — Run checks that with Exceeds.
+// 5): what holding it permits. Deny wins over allow, allow is required, every
+// condition must pass, and the set can only narrow the navi's compiled ceiling
+// — Run checks that with Exceeds.
 type CapabilitySet struct {
 	// Allow lists what the set permits. Empty permits nothing: the evaluation
 	// rule is allow-required, so an empty set is a denial, never "everything".
-	Allow []Capability
+	Allow []Grant
 	// Deny removes what Allow would otherwise permit. Deny wins.
-	Deny []Capability
+	Deny []Grant
 }
 
-// Permits reports whether the set authorizes c on its own: an explicit deny
-// wins, then an allow must match. The zero set permits nothing.
-func (s CapabilitySet) Permits(c Capability) bool {
+// Permits reports whether the set authorizes c for this request on its own: an
+// explicit deny whose conditions pass wins, then an allow whose conditions
+// pass must be present. The zero set permits nothing.
+func (s CapabilitySet) Permits(c Capability, ctx RequestContext) bool {
 	for _, d := range s.Deny {
-		if d.covers(c) {
+		if d.applies(c, ctx) {
 			return false
 		}
 	}
 	for _, a := range s.Allow {
-		if a.covers(c) {
+		if a.applies(c, ctx) {
 			return true
 		}
 	}
@@ -231,22 +270,27 @@ func (s CapabilitySet) Permits(c Capability) bool {
 }
 
 // Exceeds reports whether the set permits anything the ceiling does not, and
-// names the first violation. Only Allow can widen — a deny only narrows — so
-// narrowing by omission is always allowed, which is what makes a role's grants
-// composable with the compiled ceiling.
+// names the first violation. Only Allow can widen — a deny only narrows — and
+// a condition only narrows further, so the capability is checked and the
+// conditions are not: a conditioned grant can never exceed an unconditioned
+// one. That is what makes a role's grants composable with the compiled
+// ceiling, and it is the intersection rule enforced at assembly.
 func (s CapabilitySet) Exceeds(ceiling CapabilitySet) error {
 	for _, a := range s.Allow {
-		if !ceiling.Permits(a) {
-			return fmt.Errorf("%w: capability %s is not permitted by the compiled ceiling", ErrInvalid, a)
+		if !ceiling.Permits(a.Capability, RequestContext{}) {
+			return fmt.Errorf("%w: capability %s is not permitted by the compiled ceiling", ErrInvalid, a.Capability)
 		}
 	}
 	return nil
 }
 
-// Validate checks every capability in the set.
+// Validate checks every capability and condition in the set.
 func (s CapabilitySet) Validate() error {
-	for _, c := range append(append([]Capability(nil), s.Allow...), s.Deny...) {
-		if err := c.Validate(); err != nil {
+	for _, g := range append(append([]Grant(nil), s.Allow...), s.Deny...) {
+		if err := g.Capability.Validate(); err != nil {
+			return err
+		}
+		if err := validateConditions(g.When); err != nil {
 			return err
 		}
 	}
@@ -255,16 +299,24 @@ func (s CapabilitySet) Validate() error {
 
 // String renders a set for diagnostics.
 func (s CapabilitySet) String() string {
-	var allow, deny []string
-	for _, c := range s.Allow {
-		allow = append(allow, c.String())
+	render := func(grants []Grant) string {
+		out := make([]string, 0, len(grants))
+		for _, g := range grants {
+			if len(g.When) == 0 {
+				out = append(out, g.Capability.String())
+				continue
+			}
+			names := make([]string, 0, len(g.When))
+			for _, c := range g.When {
+				names = append(names, c.Name())
+			}
+			out = append(out, g.Capability.String()+" when "+strings.Join(names, "+"))
+		}
+		return "[" + strings.Join(out, ",") + "]"
 	}
-	for _, c := range s.Deny {
-		deny = append(deny, c.String())
-	}
-	parts := []string{"allow=[" + strings.Join(allow, ",") + "]"}
-	if len(deny) > 0 {
-		parts = append(parts, "deny=["+strings.Join(deny, ",")+"]")
+	parts := []string{"allow=" + render(s.Allow)}
+	if len(s.Deny) > 0 {
+		parts = append(parts, "deny="+render(s.Deny))
 	}
 	return strings.Join(parts, " ")
 }
