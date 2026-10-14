@@ -50,7 +50,7 @@ func issueCreateDef() tool.Def {
 		PromptGuidelines: []string{
 			"The project is its identifier (NAVI), not its name.",
 			"Give a status by its display name; an unknown status is refused rather than defaulted silently.",
-			"An issue's description is not set here — Huly keeps rich text on a separate service; put the detail in a comment after creating.",
+			"An issue's description is not set here — set it with huly_issue_description_set after creating (Huly keeps rich text on a separate service).",
 			"Never pass a token or credential as an argument — the connector resolves it itself.",
 		},
 	}

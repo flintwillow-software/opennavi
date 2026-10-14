@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +33,14 @@ type fakeHuly struct {
 	statuses []map[string]any
 	persons  []map[string]any
 	project  map[string]any
+
+	tags          []map[string]any
+	tagRefs       []map[string]any
+	tagCategories []map[string]any
+
+	collabRefs  map[string]string
+	collabDocs  map[string]string
+	collabCalls []map[string]any
 }
 
 func newFakeHuly(t *testing.T) *fakeHuly {
@@ -52,16 +62,25 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 		persons: []map[string]any{
 			{"_id": "6aa2a3038376b1c099c0403d", "name": "bastilli"},
 		},
+		tagCategories: []map[string]any{
+			{"_id": "tracker:category:Other", "targetClass": classIssue, "default": true, "label": "Other"},
+		},
+		collabRefs: map[string]string{},
+		collabDocs: map[string]string{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/config.json", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ACCOUNTS_URL": f.srv.URL + "/_accounts"})
+		writeJSON(w, map[string]any{
+			"ACCOUNTS_URL":     f.srv.URL + "/_accounts",
+			"COLLABORATOR_URL": f.srv.URL + "/_collaborator",
+		})
 	})
 	mux.HandleFunc("/_accounts", f.serveAccounts)
 	mux.HandleFunc("/_transactor/api/v1/find-all/", f.serveFindAll)
 	mux.HandleFunc("/_transactor/api/v1/account/", f.serveAccount)
 	mux.HandleFunc("/_transactor/api/v1/tx/", f.serveTx)
 	mux.HandleFunc("/_transactor/api/v1/search-fulltext/", f.serveSearch)
+	mux.HandleFunc("/_collaborator/rpc/", f.serveCollaborator)
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -114,7 +133,7 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, "find-all:"+class)
 
-	var data []map[string]any
+	data := []map[string]any{}
 	switch class {
 	case classIssue:
 		data = f.issues
@@ -126,8 +145,40 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 		if f.project != nil {
 			data = []map[string]any{f.project}
 		}
+	case classTagElement:
+		data = f.tags
+	case classTagReference:
+		data = f.tagRefs
+	case classTagCategory:
+		data = f.tagCategories
 	}
-	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": filterDocs(data, query)})
+	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": stripQueryFields(filterDocs(data, query), query)})
+}
+
+// stripQueryFields mimics the live server, which uses find-all's query as an
+// exclusion projection: every top-level scalar field named in the query is
+// absent from the returned documents. The connector compensates in
+// restoreQueryFields, and this makes the fake able to catch a regression.
+// Documents are copied, so the fake's own state is never mutated.
+func stripQueryFields(docs []map[string]any, query map[string]any) []map[string]any {
+	if len(query) == 0 {
+		return docs
+	}
+	out := make([]map[string]any, 0, len(docs))
+	for _, d := range docs {
+		clone := make(map[string]any, len(d))
+		for k, v := range d {
+			clone[k] = v
+		}
+		for k, v := range query {
+			if _, nested := v.(map[string]any); nested {
+				continue
+			}
+			delete(clone, k)
+		}
+		out = append(out, clone)
+	}
+	return out
 }
 
 // serveSearch answers the full-text search route with Huly's `{docs, total}`
@@ -144,6 +195,46 @@ func (f *fakeHuly) serveSearch(w http.ResponseWriter, r *http.Request) {
 			"doc": map[string]any{"_id": "6acd168268c57585aac3fa3f", "_class": "tracker:class:Issue"},
 		}},
 	})
+}
+
+// serveCollaborator is a stand-in for Huly's collaborator service: it stores one
+// ProseMirror document per object attribute and answers getContent,
+// createContent, and updateContent. The document id is
+// `<workspace>|<class>|<objectId>|<attr>`, and createContent mints the
+// `<objectId>-<attr>-<timestamp>` reference the issue stores.
+func (f *fakeHuly) serveCollaborator(w http.ResponseWriter, r *http.Request) {
+	documentID, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/_collaborator/rpc/"))
+	var req struct {
+		Method  string         `json:"method"`
+		Payload map[string]any `json:"payload"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.collabCalls = append(f.collabCalls, map[string]any{"method": req.Method, "documentId": documentID})
+
+	content, _ := req.Payload["content"].(map[string]any)
+	markup, _ := content[descriptionAttr].(string)
+	switch req.Method {
+	case "createContent":
+		parts := strings.Split(documentID, "|")
+		objectID := ""
+		if len(parts) >= 3 {
+			objectID = parts[2]
+		}
+		ref := fmt.Sprintf("%s-%s-%d", objectID, descriptionAttr, 1700000000000)
+		f.collabRefs[documentID] = ref
+		f.collabDocs[ref] = markup
+		writeJSON(w, map[string]any{"content": map[string]any{descriptionAttr: ref}})
+	case "updateContent":
+		f.collabDocs[f.collabRefs[documentID]] = markup
+		writeJSON(w, map[string]any{})
+	case "getContent":
+		source, _ := req.Payload["source"].(string)
+		writeJSON(w, map[string]any{"content": map[string]any{descriptionAttr: f.collabDocs[source]}})
+	default:
+		writeJSON(w, map[string]any{"error": "unknown method " + req.Method})
+	}
 }
 
 // serveAccount answers the account route, whose primarySocialId is the author
@@ -187,7 +278,7 @@ func filterDocs(docs []map[string]any, query map[string]any) []map[string]any {
 	if len(query) == 0 {
 		return docs
 	}
-	var out []map[string]any
+	out := []map[string]any{}
 	for _, d := range docs {
 		if matches(d, query) {
 			out = append(out, d)
@@ -387,8 +478,8 @@ func TestEgressToolsRefuseBeforeStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTools: %v", err)
 	}
-	if len(tools) != 5 {
-		t.Fatalf("got %d tools, want 5", len(tools))
+	if len(tools) != 9 {
+		t.Fatalf("got %d tools, want 9", len(tools))
 	}
 	for _, tl := range tools {
 		if _, err := tl.Handler(context.Background(), nil); !errors.Is(err, connector.ErrNotStarted) {
@@ -462,8 +553,7 @@ func TestIssueUpdateSetsStatusAssigneeAndPriority(t *testing.T) {
 	if tx["modifiedBy"] != "social-1" {
 		t.Errorf("author = %v, want the account's primary social id", tx["modifiedBy"])
 	}
-	ops, _ := tx["operations"].(map[string]any)
-	set, _ := ops["$set"].(map[string]any)
+	set, _ := tx["operations"].(map[string]any)
 	if set["status"] != "tracker:status:InProgress" {
 		t.Errorf("status = %v, want the resolved reference", set["status"])
 	}
@@ -487,8 +577,7 @@ func TestIssueUpdateClearsAssignee(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	ops, _ := f.txs[0]["operations"].(map[string]any)
-	set, _ := ops["$set"].(map[string]any)
+	set, _ := f.txs[0]["operations"].(map[string]any)
 	if v, present := set["assignee"]; !present || v != nil {
 		t.Errorf("assignee = %v (present %v), want an explicit null", v, present)
 	}

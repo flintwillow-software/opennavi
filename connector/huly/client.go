@@ -49,6 +49,10 @@ type session struct {
 	// `me.primarySocialId`, and a transaction carrying the uuid is refused with
 	// AccountMismatch.
 	socialID string
+	// collaborator is the http(s) root of the instance's collaborator service
+	// (config.json's COLLABORATOR_URL), where rich text such as an issue's
+	// description lives. Empty when the instance declares none.
+	collaborator string
 }
 
 // maxBody bounds how much of a response is read, so a hostile or broken server
@@ -129,7 +133,8 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	}
 
 	var conf struct {
-		AccountsURL string `json:"ACCOUNTS_URL"`
+		AccountsURL     string `json:"ACCOUNTS_URL"`
+		CollaboratorURL string `json:"COLLABORATOR_URL"`
 	}
 	if err := c.getJSON(ctx, base+"/config.json", "", &conf); err != nil {
 		return nil, fmt.Errorf("huly: read config.json: %w", err)
@@ -178,6 +183,7 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("huly: workspace %q answered with no endpoint or token", ws)
 	}
 	endpoint := strings.Replace(sel.Endpoint, "ws", "http", 1)
+	collaborator := strings.Replace(strings.TrimSpace(conf.CollaboratorURL), "ws", "http", 1)
 
 	// A transaction's author is the account's PRIMARY SOCIAL ID, not its uuid:
 	// Huly's own client builds its transaction factory from `me.primarySocialId`,
@@ -196,10 +202,11 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	return &session{
 		// Huly answers with the WebSocket endpoint; the REST routes live at the
 		// same host with the http scheme.
-		endpoint:  endpoint,
-		workspace: sel.Workspace,
-		token:     sel.Token,
-		socialID:  socialID,
+		endpoint:     endpoint,
+		workspace:    sel.Workspace,
+		token:        sel.Token,
+		socialID:     socialID,
+		collaborator: collaborator,
 	}, nil
 }
 
@@ -238,13 +245,41 @@ func (c *Client) findAll(ctx context.Context, class string, query, options map[s
 		Value []map[string]any `json:"value"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Value != nil {
+		restoreQueryFields(envelope.Value, query)
 		return envelope.Value, nil
 	}
 	var bare []map[string]any
 	if err := json.Unmarshal(body, &bare); err != nil {
 		return nil, fmt.Errorf("huly: decode find-all response: %w", err)
 	}
+	restoreQueryFields(bare, query)
 	return bare, nil
+}
+
+// restoreQueryFields puts back the scalar fields Huly's REST find-all omits
+// from the documents it returns. The server uses the query as an EXCLUSION
+// projection as well as a filter: a document fetched with
+// `{"identifier": "NAVI"}` comes back without `identifier`, and one fetched
+// with `{"_id": id}` comes back without `_id`, so a caller that needs the
+// matched field would read an empty string — which is how the create path lost
+// the project identifier and the label path lost the issue id. A document
+// matched the query, so the queried value is true of it. A nested value
+// (`{"$in": [...]}`) is left alone: the server does not strip it, and the
+// matching element is not known client-side.
+func restoreQueryFields(docs []map[string]any, query map[string]any) {
+	if len(query) == 0 {
+		return
+	}
+	for _, doc := range docs {
+		for key, want := range query {
+			if _, nested := want.(map[string]any); nested {
+				continue
+			}
+			if _, present := doc[key]; !present {
+				doc[key] = want
+			}
+		}
+	}
 }
 
 // tx applies one transaction. Huly's own client posts a single transaction
