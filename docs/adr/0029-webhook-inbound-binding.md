@@ -11,7 +11,7 @@ tags:
   - security
 ---
 
-# 0029 — The webhook inbound binding: a connector-owned endpoint, verified at the navi
+# 0029 — The webhook inbound binding: connector-owned endpoints behind one navi router
 
 ## Context
 
@@ -51,26 +51,42 @@ Three facts shape the decision:
 ## Decision
 
 1. **The webhook endpoint is connector-owned.** A connector declares a webhook
-   binding where it is composed and serves the handler that verifies and
+   binding where it is composed and provides the handler that verifies and
    processes it. The navi's **portal surface is not the webhook surface**: the
-   gateway does not serve, dispatch, route, or hold any provider vocabulary, and
-   a webhook request never passes through `portal.Authenticator`. The two
-   authentication models — a provider signature and a verified principal — do
-   not share a dispatcher. This is ADR 0014 decision 3 applied to inbound:
-   provider-specific semantics belong to the connector, and a navi-side
-   `/webhooks/{provider}` dispatcher would be the rejected standard envelope.
+   gateway does not serve webhook routes, hold provider vocabulary, or
+   authenticate a provider, and a webhook request never passes through
+   `portal.Authenticator`. The two authentication models — a provider signature
+   and a verified principal — do not share a dispatcher. This is ADR 0014
+   decision 3 applied to inbound: provider-specific semantics — the signature
+   scheme, the payload's shape — belong to the connector. What the navi supplies
+   is a **router** that maps a path to a connector-registered handler; the router
+   never parses, verifies, or interprets a payload, so it is plumbing rather than
+   the generic provider dispatcher ADR 0014 rejected.
 
-2. **The binding is a build-time declaration the connector owns end to end.** A
-   webhook transport — its listen address, its route, and its secret reference —
-   is declared where the connector is composed, visible in `main.go` the way
-   egress tools (ADR 0020) and subscriptions (ADR 0023 decision 1) are. Runtime
-   may **narrow** it (enable/disable, a repository allow-list); it never adds a
-   route, a provider, or an event kind. The connector owns the listener the way
-   a portal owns its transport (ADR 0019, ADR 0023 decision 3): it starts the
-   server in `Start` and shuts it down in `Stop`, so no `connector.Deps` field
-   is needed and the contract package is unchanged.
+2. **The navi owns one shared inbound listener with a router; the connector owns
+   the route.** Rather than each connector owning a listener, the navi composes
+   **one** inbound HTTP surface — one address, one certificate, one exposure —
+   and a router that dispatches a request by path to the handler a connector
+   registered. A connector declares its route and its secret reference where it
+   is composed, visible in `main.go` the way egress tools (ADR 0020) and
+   subscriptions (ADR 0023 decision 1) are, and registers its handler on the
+   router at `Start`; the navi removes it at `Stop`. Runtime may **narrow** a
+   binding (enable/disable, a repository allow-list); it never adds a route, a
+   provider, or an event kind. The seam is a handle the navi supplies through
+   `connector.Deps` (ADR 0004), so it stays contract-pure: the interface is
+   `net/http` and the standard library.
 
-3. **The navi verifies the signature over the raw body, before parsing.** The
+3. **The router is the inbound-events log's choke point.** One listener means
+   every delivery passes the same router, so the navi — not the connector —
+   records it: when, from where, which route (provider), the delivery id, the
+   verification outcome, and the outcome (a thought id, a duplicate, or a
+   refusal). A connector cannot bypass it, because it never owns the socket. The
+   log holds metadata and outcome — never the secret, and not the raw payload
+   body by default, since a delivery may carry private or untrusted content.
+   Whether it is structured log lines, a persisted bounded read-only type (the
+   trust ledger's shape, ADR 0027), or both is open (open question 1).
+
+4. **The navi verifies the signature over the raw body, before parsing.** The
    scheme is the provider's — for GitHub, HMAC-SHA256 over the exact received
    bytes (`X-Hub-Signature-256`), compared in constant time. Verification
    happens **at the navi**, never at the relay (ADR 0024 decision 4), and it
@@ -80,7 +96,7 @@ Three facts shape the decision:
    whole and bounded before it is parsed, and the signature is checked before
    any field is trusted.
 
-4. **The secret is a credential reference, resolved at the point of use, and it
+5. **The secret is a credential reference, resolved at the point of use, and it
    never leaves the navi.** It is an ADR 0008 reference (an environment variable
    name or a file path), not a literal, and is never written to the cluster
    (ADR 0024 decision 4), a log, a transcript, or the datastore (ADR 0023
@@ -89,7 +105,7 @@ Three facts shape the decision:
    the capability is inert, not fatal (ADR 0020 decision 7). It fails closed,
    and it fails loudly — a warning names the reference, never a value.
 
-5. **Idempotency is the provider's delivery identity, persisted.** The binding
+6. **Idempotency is the provider's delivery identity, persisted.** The binding
    dedupes on the provider's delivery id (`X-GitHub-Delivery`) — the webhook
    analogue of the polling binding's event id — in the **same persisted
    seen-set** (ADR 0023 decision 5), scoped by subscription. A redelivery is
@@ -100,7 +116,7 @@ Three facts shape the decision:
    after a successful enqueue**, so a failure is retried by the provider rather
    than lost.
 
-6. **The endpoint is a stimulus boundary, not an assembler input.** The payload
+7. **The endpoint is a stimulus boundary, not an assembler input.** The payload
    is untrusted and bounded: the body is size-limited before it is read, and a
    delivery is rejected before parsing if it is not a declared event. What it
    becomes is the thought's **stimulus** — the subscription's declared prompt
@@ -114,7 +130,7 @@ Three facts shape the decision:
    intended difference between *content* (allowed, bounded by capability) and
    *assembly* (build-time only).
 
-7. **A webhook is authenticated by signature, not by a principal; the thought it
+8. **A webhook is authenticated by signature, not by a principal; the thought it
    produces has one.** The endpoint is not a portal and does not authenticate a
    sender. The resulting thought acts as the subscription's **declared service
    principal** (ADR 0023 decision 2, ADR 0021 decision 10), so its capability
@@ -122,7 +138,7 @@ Three facts shape the decision:
    that names `navi:<name>` acts as the navi; one that names
    `connector:github` acts as the connector.
 
-8. **Acknowledgement is explicit and provider-correct.** The endpoint answers:
+9. **Acknowledgement is explicit and provider-correct.** The endpoint answers:
 
    | Outcome | Status |
    |---|---|
@@ -139,19 +155,20 @@ Three facts shape the decision:
    acknowledged and dropped. A `5xx` is reserved for the one case where a retry
    is the right response.
 
-9. **The webhook and polling bindings are one connector with two transports.**
-   They share the subscription declaration, the client, the credential, the
-   seen-set, and the enqueue path (ADR 0023 decisions 3 and 6). Polling stays the
-   reachability-free fallback (ADR 0023 decision 4); the webhook binding is an
-   addition, not a replacement, and a connector may offer one or both. A
-   declaration the binding cannot serve — an intent it does not implement, an
-   event kind it does not know — is refused at composition, not dropped at
-   runtime (the polling binding's `validateSubscription` pattern).
+10. **The webhook and polling bindings are one connector with two transports.**
+    They share the subscription declaration, the client, the credential, the
+    seen-set, and the enqueue path (ADR 0023 decisions 3 and 6). Polling stays
+    the reachability-free fallback (ADR 0023 decision 4); the webhook binding is
+    an addition, not a replacement, and a connector may offer one or both. A
+    declaration the binding cannot serve — an intent it does not implement, an
+    event kind it does not know — is refused at composition, not dropped at
+    runtime (the polling binding's `validateSubscription` pattern).
 
-10. **Relay and direct are one endpoint.** The same handler serves a direct post
-    and a relay-forwarded one; which is used is a deployment choice (ADR 0024
-    decisions 2 and 3). The relay forwards the raw body and the signature
-    headers and is not trusted for authenticity, so the two paths cannot drift.
+11. **Relay and direct are one endpoint.** The same router and the same handler
+    serve a direct post and a relay-forwarded one; which is used is a deployment
+    choice (ADR 0024 decisions 2 and 3). The relay forwards the raw body and the
+    signature headers to the navi's one inbound address and is not trusted for
+    authenticity, so the two paths cannot drift.
 
 ## Consequences
 
@@ -165,15 +182,20 @@ Three facts shape the decision:
 - **The portal's trust model is not diluted.** A webhook can never reach the
   portal or object routes, and a portal credential can never satisfy a webhook:
   they are separate endpoints with separate authentication.
-- **No new contract field.** The connector starts its own listener in `Start`
-  and stops it in `Stop`; `connector.Deps` is unchanged, and the connector
-  package stays stdlib-only (ADR 0004).
-- **A webhook binding adds a second thing to configure** — a listen address, a
-  route, and a secret reference — and a second thing to expose. Polling needs
-  none of it, which is why it remains the default.
+- **One exposed port, one certificate, one place to watch.** Every connector's
+  webhook route shares the navi's inbound listener, so exposing a navi to a
+  provider (directly or through the relay) is one address, and every delivery
+  passes one router — which is what makes the inbound-events log a single,
+  non-bypassable record.
+- **`connector.Deps` gains one handle.** The router is supplied through `Deps`
+  (ADR 0004), so the connector contract changes by one stdlib-typed field rather
+  than gaining a listener of its own; the package stays contract-pure.
+- **A webhook binding adds a thing to configure** — a route and a secret
+  reference (the address is the navi's, declared once) — and a thing to expose.
+  Polling needs none of it, which is why it remains the default.
 - **The relay's routing table names a navi destination per provider** (ADR 0024
-  decision 6); with a per-connector listener that destination is the connector's
-  declared address.
+  decision 6); with one navi inbound listener that destination is the navi's
+  address, and the provider is the route the router dispatches on.
 - **Replay is bounded by the delivery id, not by a timestamp.** GitHub's
   signature covers the body alone, so a captured request replayed verbatim has
   the same delivery id and is deduped; a re-signed body would require the secret,
@@ -188,6 +210,11 @@ Three facts shape the decision:
   provider knowledge, and it puts signature authentication and principal
   authentication behind one routing layer — exactly the conflation ADR 0014
   decision 3 and the trust model argue against.
+- **A listener per connector.** Each connector owning its own address is
+  symmetric with a portal owning its transport, but it multiplies exposed ports
+  and certificates and scatters inbound traffic across N places — which is
+  exactly what makes a single inbound-events log hard. Rejected in favour of one
+  navi listener and a router.
 - **A generic navi webhook component with a standard envelope.** Rejected in ADR
   0014 decision 3 and re-rejected here: real services do not share a payload, so
   the envelope is a shim every connector bypasses.
@@ -203,20 +230,16 @@ Three facts shape the decision:
   never happened. The endpoint returns `5xx` and lets the provider retry.
 - **Refuse an undeclared event kind.** Rejected: it makes the provider retry
   forever for an event the navi simply does not act on.
-- **A navi-owned shared webhook listener hosting every connector's route.**
-  Deferred, not rejected: one exposed port is operationally attractive, and it
-  does not change who owns the endpoint. See open question 1.
 - **A per-provider endpoint that parses the payload before verifying.** Rejected:
   parsing untrusted input before its signature is checked is the vulnerability
   the verification exists to prevent.
 
 ## Open questions
 
-1. **Listener topology.** This record gives each connector its own listener,
-   mirroring a portal's transport. Whether a deployment should instead mount
-   several connectors' handlers on one navi webhook listener (one exposed port,
-   per-provider paths) — and whether that listener may share the portal's
-   address — is a composition choice left to the binding and the relay.
+1. **The events log's shape and home.** Structured log lines, a persisted,
+   bounded, read-only type (the trust ledger's shape, ADR 0027), or both — and
+   whether a route may opt into capturing the raw body for debugging, bounded
+   and time-limited.
 2. **Rate limiting and abuse.** The endpoint is public and unauthenticated before
    verification; whether the navi rate-limits per source, and whether the relay
    does, is undecided.
@@ -230,6 +253,11 @@ Three facts shape the decision:
 5. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
    include a timestamp (replay window). The seam must admit them without
    assuming HMAC-SHA256.
+6. **Whether the router shares the portal's listener.** This record gives
+   webhooks their own navi-owned inbound listener, separate from the portal
+   gateway's, so the two trust models stay apart. A deployment that wants one
+   exposed port can front both with one ingress (the relay, a reverse proxy),
+   which is a deployment choice rather than a change to either surface.
 
 ## Related
 
