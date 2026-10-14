@@ -92,9 +92,11 @@ peer transport (NAVI-412).
    verification outcome, and the outcome (a thought id, a duplicate, or a
    refusal). A connector cannot bypass it, because it never owns the socket. The
    log holds metadata and outcome — never the secret, and not the raw payload
-   body by default, since a delivery may carry private or untrusted content.
-   Whether it is structured log lines, a persisted bounded read-only type (the
-   trust ledger's shape, ADR 0027), or both is open (open question 1).
+   body by default, since a delivery may carry private or untrusted content. It
+   starts as **structured log lines** written by the router; the persisted,
+   browsable form — a bounded, read-only object type with the trust ledger's
+   shape (ADR 0027) — is tracked separately (NAVI-433), so the binding can ship
+   before the aggregate does.
 
 4. **The navi verifies the signature over the raw body, before parsing.** The
    scheme is the provider's — for GitHub, HMAC-SHA256 over the exact received
@@ -115,16 +117,19 @@ peer transport (NAVI-412).
    the capability is inert, not fatal (ADR 0020 decision 7). It fails closed,
    and it fails loudly — a warning names the reference, never a value.
 
-6. **Idempotency is the provider's delivery identity, persisted.** The binding
-   dedupes on the provider's delivery id (`X-GitHub-Delivery`) — the webhook
-   analogue of the polling binding's event id — in the **same persisted
-   seen-set** (ADR 0023 decision 5), scoped by subscription. A redelivery is
-   acknowledged and spawns no thought. The **deterministic thought id**
-   (`github-<subscription>-<delivery-id>`) is the second backstop, so a
-   redelivery that slips past the seen-set collides on the queue rather than
-   duplicating (ADR 0023 decision 5, NAVI-394). The seen-set is marked **only
-   after a successful enqueue**, so a failure is retried by the provider rather
-   than lost.
+6. **Idempotency is the shared event identity, persisted, so the two transports
+   dedupe against each other.** The binding keys the **same persisted seen-set**
+   (ADR 0023 decision 5) on the event's **normalized identity** — the underlying
+   object the event is about (`comment-<id>`, `issue-<number>`), which the
+   polling binding already computes — so a delivery seen by one transport is not
+   reprocessed by the other when both run for one subscription. The provider's
+   delivery id (`X-GitHub-Delivery`) is recorded in the events log (decision 3)
+   rather than used as the dedupe key. A redelivery is acknowledged and spawns
+   no thought. The **deterministic thought id** (`github-<subscription>-<event
+   id>`) is the second backstop, so a redelivery that slips past the seen-set
+   collides on the queue rather than duplicating (ADR 0023 decision 5,
+   NAVI-394). The seen-set is marked **only after a successful enqueue**, so a
+   failure is retried by the provider rather than lost.
 
 7. **The endpoint is a stimulus boundary, not an assembler input.** The payload
    is untrusted and bounded: the body is size-limited before it is read, and a
@@ -207,10 +212,10 @@ peer transport (NAVI-412).
 - **The relay's routing table names a navi destination per provider** (ADR 0024
   decision 6); with one navi inbound listener that destination is the navi's
   address, and the provider is the route the router dispatches on.
-- **Replay is bounded by the delivery id, not by a timestamp.** GitHub's
-  signature covers the body alone, so a captured request replayed verbatim has
-  the same delivery id and is deduped; a re-signed body would require the secret,
-  which lives only with the navi.
+- **Replay is bounded by the event identity, not by a timestamp.** GitHub's
+  signature covers the body alone, so a captured request replayed verbatim names
+  the same underlying event and is deduped; a re-signed body would require the
+  secret, which lives only with the navi.
 - **A missing secret degrades one capability, not the navi** (ADR 0020 decision
   7), but it degrades to *refusing* rather than to accepting unverified input.
 
@@ -247,21 +252,13 @@ peer transport (NAVI-412).
 
 ## Open questions
 
-1. **The events log's shape and home.** Structured log lines, a persisted,
-   bounded, read-only type (the trust ledger's shape, ADR 0027), or both — and
-   whether a route may opt into capturing the raw body for debugging, bounded
-   and time-limited.
-2. **Rate limiting and abuse.** The endpoint is public and unauthenticated before
+1. **Rate limiting and abuse.** The endpoint is public and unauthenticated before
    verification; whether the navi rate-limits per source, and whether the relay
    does, is undecided.
-3. **Secret rotation.** How a webhook secret is rotated without dropping
+2. **Secret rotation.** How a webhook secret is rotated without dropping
    deliveries (a dual-secret window), and whether the binding accepts two
    references during rotation.
-4. **Provider-agnostic dedupe key.** This record uses the provider's delivery id.
-   Whether the seen-set should key on a normalized event identity shared with
-   polling (so a delivery seen by one transport is not reprocessed by the other)
-   is open.
-5. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
+3. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
    include a timestamp (replay window). The seam must admit them without
    assuming HMAC-SHA256.
 ## Related
@@ -275,3 +272,4 @@ peer transport (NAVI-412).
 - [ADR 0022](./0022-delegated-authorization.md) — the verified principal a portal presents
 - [ADR 0023](./0023-connector-inbound-subscriptions-and-transport.md) — the record this amends; resolves its open question 4
 - [ADR 0024](./0024-navi-relay.md) — the relay fabric; the navi verifies, the relay does not
+- [ADR 0030](./0030-navi-ingress-two-listeners.md) — the navi's two-listener ingress; the websockets listener this record does not decide
