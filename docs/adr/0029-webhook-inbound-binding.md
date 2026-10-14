@@ -11,7 +11,7 @@ tags:
   - security
 ---
 
-# 0029 — The webhook inbound binding: connector-owned endpoints behind one navi router
+# 0029 — The webhook inbound binding: connector-owned endpoints behind one navi webhook router
 
 ## Context
 
@@ -48,6 +48,15 @@ Three facts shape the decision:
   envelope.** Real services do not share a payload, so a common shim becomes a
   lowest-common-denominator every connector bypasses.
 
+The navi's ingress is **two listeners, not one**: a **webhooks listener** for
+third-party triggers and event streams (GitHub, Forgejo, and the like), and a
+**websockets listener** for portals, real-time connectors, and peer navi
+traffic. They have different trust models — a provider signature versus a
+verified principal — and different traffic shapes, so they do not share a
+socket. This record decides only the **webhooks** listener and the binding that
+serves it; the websockets listener is the portal transport (ADR 0019) and the
+peer transport (NAVI-412).
+
 ## Decision
 
 1. **The webhook endpoint is connector-owned.** A connector declares a webhook
@@ -63,22 +72,23 @@ Three facts shape the decision:
    never parses, verifies, or interprets a payload, so it is plumbing rather than
    the generic provider dispatcher ADR 0014 rejected.
 
-2. **The navi owns one shared inbound listener with a router; the connector owns
+2. **The navi owns one shared webhook listener with a router; the connector owns
    the route.** Rather than each connector owning a listener, the navi composes
-   **one** inbound HTTP surface — one address, one certificate, one exposure —
-   and a router that dispatches a request by path to the handler a connector
-   registered. A connector declares its route and its secret reference where it
-   is composed, visible in `main.go` the way egress tools (ADR 0020) and
-   subscriptions (ADR 0023 decision 1) are, and registers its handler on the
-   router at `Start`; the navi removes it at `Stop`. Runtime may **narrow** a
-   binding (enable/disable, a repository allow-list); it never adds a route, a
-   provider, or an event kind. The seam is a handle the navi supplies through
-   `connector.Deps` (ADR 0004), so it stays contract-pure: the interface is
-   `net/http` and the standard library.
+   **one** webhook ingress — one address, one certificate, one exposure, and one
+   of the navi's two ingress listeners (the other is the websockets listener for
+   portals and peers) — and a router that dispatches a webhook request by path to
+   the handler a connector registered. A connector declares its route and its
+   secret reference where it is composed, visible in `main.go` the way egress
+   tools (ADR 0020) and subscriptions (ADR 0023 decision 1) are, and registers
+   its handler on the router at `Start`; the navi removes it at `Stop`. Runtime
+   may **narrow** a binding (enable/disable, a repository allow-list); it never
+   adds a route, a provider, or an event kind. The seam is a handle the navi
+   supplies through `connector.Deps` (ADR 0004), so it stays contract-pure: the
+   interface is `net/http` and the standard library.
 
-3. **The router is the inbound-events log's choke point.** One listener means
-   every delivery passes the same router, so the navi — not the connector —
-   records it: when, from where, which route (provider), the delivery id, the
+3. **The router is the webhook-events log's choke point.** One webhook listener
+   means every delivery passes the same router, so the navi — not the connector
+   — records it: when, from where, which route (provider), the delivery id, the
    verification outcome, and the outcome (a thought id, a duplicate, or a
    refusal). A connector cannot bypass it, because it never owns the socket. The
    log holds metadata and outcome — never the secret, and not the raw payload
@@ -182,11 +192,12 @@ Three facts shape the decision:
 - **The portal's trust model is not diluted.** A webhook can never reach the
   portal or object routes, and a portal credential can never satisfy a webhook:
   they are separate endpoints with separate authentication.
-- **One exposed port, one certificate, one place to watch.** Every connector's
-  webhook route shares the navi's inbound listener, so exposing a navi to a
+- **One webhook port, one certificate, one place to watch.** Every connector's
+  webhook route shares the navi's webhook listener, so exposing a navi to a
   provider (directly or through the relay) is one address, and every delivery
-  passes one router — which is what makes the inbound-events log a single,
-  non-bypassable record.
+  passes one router — which is what makes the webhook-events log a single,
+  non-bypassable record. The websockets listener is a separate ingress with its
+  own trust model.
 - **`connector.Deps` gains one handle.** The router is supplied through `Deps`
   (ADR 0004), so the connector contract changes by one stdlib-typed field rather
   than gaining a listener of its own; the package stays contract-pure.
@@ -213,8 +224,8 @@ Three facts shape the decision:
 - **A listener per connector.** Each connector owning its own address is
   symmetric with a portal owning its transport, but it multiplies exposed ports
   and certificates and scatters inbound traffic across N places — which is
-  exactly what makes a single inbound-events log hard. Rejected in favour of one
-  navi listener and a router.
+  exactly what makes a single webhook-events log hard. Rejected in favour of one
+  navi webhook listener and a router.
 - **A generic navi webhook component with a standard envelope.** Rejected in ADR
   0014 decision 3 and re-rejected here: real services do not share a payload, so
   the envelope is a shim every connector bypasses.
@@ -253,12 +264,6 @@ Three facts shape the decision:
 5. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
    include a timestamp (replay window). The seam must admit them without
    assuming HMAC-SHA256.
-6. **Whether the router shares the portal's listener.** This record gives
-   webhooks their own navi-owned inbound listener, separate from the portal
-   gateway's, so the two trust models stay apart. A deployment that wants one
-   exposed port can front both with one ingress (the relay, a reverse proxy),
-   which is a deployment choice rather than a change to either surface.
-
 ## Related
 
 - [ADR 0008](./0008-secrets-interpolated-never-literal.md) — credentials as references
