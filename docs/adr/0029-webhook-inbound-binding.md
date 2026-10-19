@@ -115,7 +115,12 @@ peer transport (NAVI-412).
    decision 7). A binding whose secret cannot be resolved **refuses every
    request** rather than accepting unverified input, and the navi still runs:
    the capability is inert, not fatal (ADR 0020 decision 7). It fails closed,
-   and it fails loudly — a warning names the reference, never a value.
+   and it fails loudly — a warning names the reference, never a value. The
+   binding takes an **array** of references and verifies against each, so a
+   rotation can overlap: a delivery is accepted if it matches **any** configured
+   secret. One secret is the common case; the array shape is what makes rotating
+   one a config change rather than a cutover, and it costs nothing when the
+   array has a single entry.
 
 6. **Idempotency is the shared event identity, persisted, so the two transports
    dedupe against each other.** The binding keys the **same persisted seen-set**
@@ -161,6 +166,7 @@ peer transport (NAVI-412).
    | missing or bad signature | `401` |
    | non-POST method | `405` |
    | body over the bound | `413` |
+   | rate-limited (shed) | `429` |
    | malformed body | `400` |
    | undeclared event kind | `2xx` (acknowledged and ignored) |
    | enqueue failed (not marked seen) | `5xx` (provider retries) |
@@ -184,6 +190,19 @@ peer transport (NAVI-412).
     choice (ADR 0024 decisions 2 and 3). The relay forwards the raw body and the
     signature headers to the navi's one inbound address and is not trusted for
     authenticity, so the two paths cannot drift.
+
+12. **Rate limiting is layered: the navi and the relay both enforce it.** The
+    endpoint is public and unauthenticated before its signature is checked, so
+    neither layer is trusted to be the only defense — the platform expects
+    people to expose navis, and one missing limit must not be an open door. The
+    **navi** rate-limits inbound webhooks — per source and per route — and sheds
+    load rather than queueing unbounded work; the **relay** (ADR 0024)
+    rate-limits at the fleet edge, before traffic reaches any navi, and its
+    limits cover every navi behind it (implemented with the relay, NAVI-411). A
+    single-tenant homelab navi may set a generous limit and lean on the relay,
+    but a navi exposed directly must enforce its own. The limits are runtime
+    configuration that may only narrow what the compiled declaration allows
+    (ADR 0006), and a shed request is refused `429` rather than processed late.
 
 ## Consequences
 
@@ -218,6 +237,10 @@ peer transport (NAVI-412).
   secret, which lives only with the navi.
 - **A missing secret degrades one capability, not the navi** (ADR 0020 decision
   7), but it degrades to *refusing* rather than to accepting unverified input.
+- **Two rate-limit configurations, deliberately.** The navi's limits and the
+  relay's are separate; a deployment that exposes a navi directly must set the
+  navi's, and one behind the relay gets the fleet edge as well. The redundancy is
+  the point, and the cost is that neither can be assumed to cover the other.
 
 ## Alternatives considered
 
@@ -252,13 +275,7 @@ peer transport (NAVI-412).
 
 ## Open questions
 
-1. **Rate limiting and abuse.** The endpoint is public and unauthenticated before
-   verification; whether the navi rate-limits per source, and whether the relay
-   does, is undecided.
-2. **Secret rotation.** How a webhook secret is rotated without dropping
-   deliveries (a dual-secret window), and whether the binding accepts two
-   references during rotation.
-3. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
+1. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
    include a timestamp (replay window). The seam must admit them without
    assuming HMAC-SHA256.
 ## Related
