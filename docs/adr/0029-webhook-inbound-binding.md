@@ -98,29 +98,44 @@ peer transport (NAVI-412).
    shape (ADR 0027) — is tracked separately (NAVI-433), so the binding can ship
    before the aggregate does.
 
-4. **The navi verifies the signature over the raw body, before parsing.** The
-   scheme is the provider's — for GitHub, HMAC-SHA256 over the exact received
-   bytes (`X-Hub-Signature-256`), compared in constant time. Verification
-   happens **at the navi**, never at the relay (ADR 0024 decision 4), and it
-   happens **even when the request arrived through the relay**: the relay is a
-   trust boundary, not a trust authority (ADR 0024 decision 5), so a
-   compromised or misconfigured relay cannot inject an event. The body is read
-   whole and bounded before it is parsed, and the signature is checked before
-   any field is trusted.
+4. **The navi verifies the provider's signature over the raw body, before
+   parsing, and the scheme is the provider's.** Verification happens **at the
+   navi**, never at the relay (ADR 0024 decision 4), and it happens **even when
+   the request arrived through the relay**: the relay is a trust boundary, not a
+   trust authority (ADR 0024 decision 5), so a compromised or misconfigured
+   relay cannot inject an event. The body is read whole and bounded before it is
+   parsed, and the signature is checked before any field is trusted. Two schemes
+   are in scope from the start, because two providers are:
 
-5. **The secret is a credential reference, resolved at the point of use, and it
-   never leaves the navi.** It is an ADR 0008 reference (an environment variable
-   name or a file path), not a literal, and is never written to the cluster
-   (ADR 0024 decision 4), a log, a transcript, or the datastore (ADR 0023
-   decision 7). A binding whose secret cannot be resolved **refuses every
-   request** rather than accepting unverified input, and the navi still runs:
-   the capability is inert, not fatal (ADR 0020 decision 7). It fails closed,
-   and it fails loudly — a warning names the reference, never a value. The
-   binding takes an **array** of references and verifies against each, so a
-   rotation can overlap: a delivery is accepted if it matches **any** configured
-   secret. One secret is the common case; the array shape is what makes rotating
-   one a config change rather than a cutover, and it costs nothing when the
-   array has a single entry.
+   - **HMAC-SHA256 over the exact received bytes** — GitHub's
+     `X-Hub-Signature-256` and Forgejo/Gitea's equivalent — compared in constant
+     time. There is no signed timestamp, so replay is bounded by the dedupe
+     (decision 6), not by a clock.
+   - **Ed25519 over a signed payload that includes a timestamp** — Discord's
+     interactions (`X-Signature-Ed25519` + `X-Signature-Timestamp`, signed over
+     `timestamp + body`). The timestamp is checked against a short window, which
+     is the replay bound, in addition to the dedupe.
+
+   The scheme and its material are **typed in the binding**, not assumed: HMAC
+   takes a **shared secret**, Ed25519 takes the provider's **public key**. The
+   connector owns the verification function; the router and the events log never
+   see it.
+
+5. **The binding's credential is typed, resolved at the point of use, and never
+   leaves the navi.** A credential is an ADR 0008 reference (an environment
+   variable name or a file path), not a literal, and is never written to the
+   cluster (ADR 0024 decision 4), a log, a transcript, or the datastore (ADR
+   0023 decision 7). Its **type follows the scheme** (decision 4): HMAC takes a
+   **shared secret**, which is genuinely secret; Ed25519 takes the provider's
+   **public key**, which is not, so it may be pinned in the binary or resolved
+   like any other reference. A binding whose material cannot be resolved
+   **refuses every request** rather than accepting unverified input, and the
+   navi still runs: the capability is inert, not fatal (ADR 0020 decision 7).
+   It fails closed, and it fails loudly — a warning names the reference, never a
+   value. HMAC's secret is an **array** of references verified against each, so
+   a rotation can overlap: a delivery is accepted if it matches **any**
+   configured secret. One secret is the common case; the array shape is what
+   makes rotating one a config change rather than a cutover.
 
 6. **Idempotency is the shared event identity, persisted, so the two transports
    dedupe against each other.** The binding keys the **same persisted seen-set**
@@ -231,12 +246,19 @@ peer transport (NAVI-412).
 - **The relay's routing table names a navi destination per provider** (ADR 0024
   decision 6); with one navi inbound listener that destination is the navi's
   address, and the provider is the route the router dispatches on.
-- **Replay is bounded by the event identity, not by a timestamp.** GitHub's
-  signature covers the body alone, so a captured request replayed verbatim names
-  the same underlying event and is deduped; a re-signed body would require the
-  secret, which lives only with the navi.
+- **Replay is bounded by the event identity, and by a clock where the provider
+  signs one.** GitHub's signature covers the body alone, so a captured request
+  replayed verbatim names the same underlying event and is deduped; a re-signed
+  body would require the secret, which lives only with the navi. A provider that
+  signs a timestamp (Discord) gets a window as well, so a replay outside it is
+  refused before the dedupe is consulted.
 - **A missing secret degrades one capability, not the navi** (ADR 0020 decision
   7), but it degrades to *refusing* rather than to accepting unverified input.
+- **A provider with a different signature scheme is an addition, not a
+  rewrite.** Verification lives in the connector and the material is typed, so
+  Discord's Ed25519 — or a future timestamped HMAC — is that connector's binding
+  rather than a change to the router or the events log, and Ed25519 reuses the
+  principal machinery the navi already has (ADR 0021).
 - **Two rate-limit configurations, deliberately.** The navi's limits and the
   relay's are separate; a deployment that exposes a navi directly must set the
   navi's, and one behind the relay gets the fleet edge as well. The redundancy is
@@ -275,9 +297,11 @@ peer transport (NAVI-412).
 
 ## Open questions
 
-1. **Signature schemes other than HMAC.** Some providers sign with Ed25519 or
-   include a timestamp (replay window). The seam must admit them without
-   assuming HMAC-SHA256.
+1. **The replay window for timestamped schemes.** Ed25519 (Discord) and
+   timestamped HMAC both need a clock window. Its default, and whether it is
+   runtime configuration, is undecided: too tight refuses deliveries that were
+   valid under a skewed clock (fail-closed, but operationally painful), too loose
+   widens the replay window the dedupe then has to cover.
 ## Related
 
 - [ADR 0008](./0008-secrets-interpolated-never-literal.md) — credentials as references

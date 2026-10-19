@@ -65,14 +65,24 @@ against it.
    0019 decision 4) — the stream is the contract, the transport is a binding,
    and a deployment chooses.
 
-3. **Real-time connectors gain a websocket inbound binding.** ADR 0023 decision
-   3's transport set grows from {webhook, poll} to {webhook, poll, websocket}: a
-   connector whose service offers a long-lived connection, or that needs push,
-   binds it through the websockets listener, with the same build-time
-   subscription declaration and the same persisted dedupe (ADR 0023 decisions 1
-   and 5) as the other transports. Polling stays the reachability-free fallback
-   and the webhook listener the third-party-trigger binding; a connector may
-   offer one or more, declared at composition.
+3. **Real-time connectors gain a websocket binding — and the direction is part
+   of the declaration.** ADR 0023 decision 3's transport set grows from
+   {webhook, poll} to {webhook, poll, websocket}, but there are two shapes and
+   they are not the same thing:
+
+   - **Inbound** — a service or connector connects *to* the navi's websockets
+     listener and streams; the navi hosts the socket. This is the listener this
+     record decides, and it is the portal and peer endpoint.
+   - **Outbound** — the connector dials *out* to a service's websocket (Discord's
+     gateway is the case) and receives a stream on a long-lived connection the
+     navi does not host. It is an inbound *source* like polling — push instead of
+     pull — not a listener, and it does not use the websockets listener.
+
+   Both are build-time declarations with the same subscription and the same
+   persisted dedupe (ADR 0023 decisions 1 and 5); only the inbound shape uses
+   the websockets listener. Polling stays the reachability-free fallback and the
+   webhook listener the third-party-trigger binding; a connector may offer one
+   or more, declared at composition.
 
 4. **The websockets listener is the peer endpoint.** Navi-to-navi transport
    (NAVI-412) terminates here, authenticated by the principal keypair (ADR
