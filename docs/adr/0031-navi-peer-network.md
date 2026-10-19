@@ -78,12 +78,27 @@ The constraints that shaped this record:
    adopted only if the fleet outgrows floodsub. Topic scope matches the tiers:
    `team/<id>/*` floods within a team; `fleet/*` is bridged relay-to-relay.
 
-7. **Topics are authorized by the permission system.** The navi enforces a **declared**
-   `topic → {publish, subscribe}` ACL against the peer's principal, reusing roles and
-   groups (ADR 0021). libp2p's `StrictSign` binds each message to its sender, so a
-   message cannot be spoofed. Connection gating (PeerID + fleet PSK) is the coarse
-   layer; topic ACLs are the fine layer; group-key encryption is an optional
+7. **Topics and peer messages are authorized by the permission system, by
+   capability.** A topic is **declared** at composition like a type or a tool, so
+   the ceiling derives `pub:<topic>` and `sub:<topic>`; a role or group grants
+   them (ADR 0021), and evaluation is unchanged — default deny, explicit deny
+   wins, every condition passing, intersected with the ceiling and the session
+   policy. `pub` and `sub` are **separate grants at independent granularity**, so
+   one peer may hold `sub` on a namespace and `pub` only on one topic inside it. A
+   grant may name a **declared namespace**, which matches by prefix — the
+   namespace is a declaration, not a wildcard expression — so
+   `Sub("ns:team/alpha")` covers every topic under it while
+   `Pub("topic:team/alpha/notices")` covers exactly one. Enforcement is at both
+   points: **subscribe** checks `sub:<topic>` for the peer's principal, and
+   **publish** checks `pub:<topic>` with `StrictSign` binding the message to its
+   sender. Connection gating (PeerID + fleet PSK) is the coarse layer; the
+   capability grants are the fine layer; group-key encryption is an optional
    confidentiality layer for sensitive topics, not the default.
+
+   **A point-to-point message is authorized the same way.** It is a capability,
+   not an open door: the envelope (NAVI-412) carries the sender's principal, and
+   the receiver checks a `send:<peer>` grant before accepting or mailboxing it.
+   One engine, one vocabulary, for topics and messages alike.
 
 8. **Delivery is durable: store-and-forward.** libp2p provides none — circuit relay v2
    relays a live stream and does not buffer, and pubsub is best-effort. The navi's
@@ -168,18 +183,16 @@ The constraints that shaped this record:
 
 ## Open questions
 
-1. **The topic ACL declaration shape** — `topic → {publish, subscribe}` on the navi,
-   narrowed at runtime, reusing roles/groups. Confirm the exact form.
-2. **Whether the relay's mailbox is on by default** for a relay-enabled navi, or opt-in
+1. **Whether the relay's mailbox is on by default** for a relay-enabled navi, or opt-in
    (it stores ciphertext, but it is state).
-3. **The tier-1 relay topology** — how relay navis find each other (declared list vs
+2. **The tier-1 relay topology** — how relay navis find each other (declared list vs
    rendezvous), and whether a team may have more than one relay.
-4. **Peer message envelope** — the signed, timestamped message shape and the clock
+3. **Peer message envelope** — the signed, timestamped message shape and the clock
    agreement NAVI-412 requires.
-5. **Whether portals and peers share one libp2p protocol or use separate ones** (a
+4. **Whether portals and peers share one libp2p protocol or use separate ones** (a
    portal stream vs a peer message), and whether a portal's libp2p identity is the user
    principal's device key.
-6. **mDNS on a LAN** — whether local discovery is automatic (mDNS) or stays off with
+5. **mDNS on a LAN** — whether local discovery is automatic (mDNS) or stays off with
    discovery.
 
 ## Related
