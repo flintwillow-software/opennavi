@@ -46,19 +46,22 @@ against it.
 
 ## Decision
 
-1. **Two listeners, one per trust model.** A **webhooks listener** for
+1. **Two ingress surfaces, one per trust model.** A **webhooks listener** for
    third-party provider events — untrusted input, authenticated by a provider
    signature, connector-owned routes behind one router (ADR 0029). A
-   **websockets listener** for principals and peers — authenticated as a
-   verified principal (ADR 0021/0022), carrying a long-lived bidirectional
-   stream. They do **not** share a socket: a webhook cannot reach a portal or
-   peer route, and a portal credential cannot satisfy a webhook. This is the
-   separation ADR 0029 decision 1 states from the webhook side, made symmetric.
+   **real-time surface** for principals and peers — authenticated as a verified
+   principal (ADR 0021/0022), carrying a long-lived bidirectional stream over a
+   **direct binding** (HTTP/WS) and, per ADR 0031, a **p2p binding** (the
+   navi's libp2p host). They do **not** share a socket: a webhook cannot reach a
+   portal or peer route, and a portal credential cannot satisfy a webhook. This
+   is the separation ADR 0029 decision 1 states from the webhook side, made
+   symmetric.
 
 2. **Websockets are adopted for the stream.** ADR 0019 decision 4 deferred a
    websocket until a named consumer needed a low-latency upstream stream; the
    consumers are named — portals, real-time connectors, and peer navis — so the
-   websockets listener carries ADR 0019's **one stream**. The stream contract is
+   real-time surface carries ADR 0019's **one stream** — over the direct binding
+   and, per ADR 0031, the p2p binding. The stream contract is
    unchanged: a frame is a `Surface` call or result, or an observation
    event/delta, never a new dialect. Websockets are a transport under that
    contract, not a second ABI. **SSE + POST remains a supported binding** (ADR
@@ -71,8 +74,9 @@ against it.
    they are not the same thing:
 
    - **Inbound** — a service or connector connects *to* the navi's websockets
-     listener and streams; the navi hosts the socket. This is the listener this
-     record decides, and it is the portal and peer endpoint.
+     listener and streams; the navi hosts the socket. This is the binding this
+     record decides, and it is the portal endpoint; peers use the libp2p binding
+     (ADR 0031).
    - **Outbound** — the connector dials *out* to a service's websocket (Discord's
      gateway is the case) and receives a stream on a long-lived connection the
      navi does not host. It is an inbound *source* like polling — push instead of
@@ -84,31 +88,30 @@ against it.
    webhook listener the third-party-trigger binding; a connector may offer one
    or more, declared at composition.
 
-4. **The websockets listener is the first peer endpoint, and a peer-to-peer
-   transport is an additive real-time shape.** Navi-to-navi transport (NAVI-412)
-   terminates here first, authenticated by the principal keypair (ADR 0021). A
-   **peer-to-peer** connection is a second, additive real-time transport for the
-   same consumer — a protocol in the shape of IPFS's, or at least a connection
-   with **allow/deny lists** — and NAVI-412 decides it. Whichever shape is used,
-   a navi must be able to **allow or deny** a peer: who may connect is a trust
-   decision (ADR 0021), and an allow/deny list is the minimum expression of it,
-   not an afterthought. Peer **delivery** semantics — ACK, store-and-forward,
-   presence, group addressing, and the clock agreement timestamped signed
-   requests need — belong to NAVI-412, not to this record. This record fixes
-   only the endpoint and the trust model, so the peer protocol can be designed
-   deliberately rather than grown out of another transport's path (ADR 0024
-   decision 8).
+4. **The peer transport is libp2p, carried by the real-time surface alongside
+   the direct binding.** Navi-to-navi traffic terminates on the navi's **libp2p
+   host** (ADR 0031), authenticated by the principal keypair (ADR 0021): peers,
+   portals, and real-time connectors are libp2p peers. The navi must be able to
+   **allow or deny** a peer — connection gating by PeerID plus a fleet PSK,
+   with topic ACLs from the permission system — because who may connect is a
+   trust decision, not an afterthought. Peer **delivery** semantics — ACK,
+   store-and-forward, presence, group addressing, and the clock agreement
+   timestamped signed requests need — belong to NAVI-412, not to this record.
+   What this record fixes is that the peer endpoint is the **libp2p host**, not
+   the portal websocket: the real-time surface keeps a **direct binding**
+   (HTTP/WS, no p2p required, for a single navi or a LAN) and gains a **p2p
+   binding**, both serving the portal stream (ADR 0019).
 
 5. **The relay routes to both, and the address spaces stay separate.** ADR
    0024's relay forwards provider webhooks to the webhooks listener and peer
-   traffic to the websockets listener, by its declared routing table (ADR 0024
+   traffic to the real-time surface, by its declared routing table (ADR 0024
    decisions 6 and 7). It is a dumb pipe for both (ADR 0024 decision 4): the
    navi verifies a webhook signature, and it authenticates a peer as a
    principal, regardless of which listener the relay reached.
 
 6. **Each listener is declared and exposed independently.** A deployment may
    expose the webhooks listener publicly (or through the relay) while keeping
-   the websockets listener on the tailnet or mesh, or the reverse; each has its
+   the real-time surface on the tailnet or mesh, or the reverse; each has its
    own address, certificate, and exposure, and neither implies the other. This
    is what lets a navi receive provider events without exposing its portal or
    peer surface, and vice versa.
@@ -179,12 +182,9 @@ against it.
    + POST indefinitely, and what evidence would decide it.
 6. **Whether the websockets listener also serves an operator console** (a
    browser portal), or that stays a separate deployment concern.
-7. **A peer-to-peer transport.** Whether the peer consumer uses the websockets
-   listener, a peer-to-peer protocol (IPFS-shaped, or a simpler allow/deny-listed
-   connection), or both — and whether such a transport bypasses the relay (ADR
-   0024) or still rendezvouses through it. NAVI-412's to decide; this record only
-   says the endpoint is the websockets listener *first* and that allow/deny is
-   required either way.
+7. **The peer network's shape** is decided in [ADR 0031](./0031-navi-peer-network.md)
+   (libp2p, tiers, discovery opt-in, the relay as a role); its delivery semantics
+   remain NAVI-412's.
 
 ## Related
 
@@ -195,3 +195,4 @@ against it.
 - [ADR 0023](./0023-connector-inbound-subscriptions-and-transport.md) — the inbound transport set this extends with a websocket binding
 - [ADR 0024](./0024-navi-relay.md) — the relay, which routes to both listeners
 - [ADR 0029](./0029-webhook-inbound-binding.md) — the webhooks listener and the binding that serves it
+- [ADR 0031](./0031-navi-peer-network.md) — the peer network this hands the peer transport to
