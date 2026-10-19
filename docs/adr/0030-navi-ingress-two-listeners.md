@@ -84,13 +84,20 @@ against it.
    webhook listener the third-party-trigger binding; a connector may offer one
    or more, declared at composition.
 
-4. **The websockets listener is the peer endpoint.** Navi-to-navi transport
-   (NAVI-412) terminates here, authenticated by the principal keypair (ADR
-   0021). Peer **delivery** semantics — ACK, store-and-forward, presence, group
-   addressing, and the clock agreement timestamped signed requests need — belong
-   to NAVI-412, not to this record. This record fixes only the endpoint and the
-   trust model, so the peer protocol can be designed deliberately rather than
-   grown out of another transport's path (ADR 0024 decision 8).
+4. **The websockets listener is the first peer endpoint, and a peer-to-peer
+   transport is an additive real-time shape.** Navi-to-navi transport (NAVI-412)
+   terminates here first, authenticated by the principal keypair (ADR 0021). A
+   **peer-to-peer** connection is a second, additive real-time transport for the
+   same consumer — a protocol in the shape of IPFS's, or at least a connection
+   with **allow/deny lists** — and NAVI-412 decides it. Whichever shape is used,
+   a navi must be able to **allow or deny** a peer: who may connect is a trust
+   decision (ADR 0021), and an allow/deny list is the minimum expression of it,
+   not an afterthought. Peer **delivery** semantics — ACK, store-and-forward,
+   presence, group addressing, and the clock agreement timestamped signed
+   requests need — belong to NAVI-412, not to this record. This record fixes
+   only the endpoint and the trust model, so the peer protocol can be designed
+   deliberately rather than grown out of another transport's path (ADR 0024
+   decision 8).
 
 5. **The relay routes to both, and the address spaces stay separate.** ADR
    0024's relay forwards provider webhooks to the webhooks listener and peer
@@ -172,6 +179,12 @@ against it.
    + POST indefinitely, and what evidence would decide it.
 6. **Whether the websockets listener also serves an operator console** (a
    browser portal), or that stays a separate deployment concern.
+7. **A peer-to-peer transport.** Whether the peer consumer uses the websockets
+   listener, a peer-to-peer protocol (IPFS-shaped, or a simpler allow/deny-listed
+   connection), or both — and whether such a transport bypasses the relay (ADR
+   0024) or still rendezvouses through it. NAVI-412's to decide; this record only
+   says the endpoint is the websockets listener *first* and that allow/deny is
+   required either way.
 
 ## Related
 
