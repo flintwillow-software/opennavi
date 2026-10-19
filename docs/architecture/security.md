@@ -259,6 +259,27 @@ The residual risk is accepted and named: content *inside* a thought's context
 the model. That is bounded by the capability surface, not by the assembler —
 which is exactly why the capability surface is the thing kept small.
 
+## Self-improvement and the capability barrier
+
+A navi may **learn** and it may **propose**, but it may not **widen its own
+capability**.
+
+- **Learning is the navi's.** Short-term and long-term memory, notes, and
+  thoughts are the navi's own state; it may develop and keep them freely.
+- **Capability is the operator's.** Adding a tool, a connector, or a service —
+  or changing what a navi can reach — is a **human act**: a rebuild and
+  redeploy, or a config change (ADR 0006, ADR 0013).
+- **A navi may propose.** It may explain a change to its operator, or open a PR
+  against a repository it can reach, for a human to review. It may not *effect*
+  the change itself.
+- **Nothing on the network adds capability.** A peer, a discovered service, or
+  a rendezvous point cannot hand a navi a new tool; discovery only points at a
+  provider, and a human grants access (ADR 0032).
+
+Without the barrier, the compiled ceiling (ADR 0006) would be advisory: a navi
+that could add its own tools, or accept one a stranger offered, would have a
+capability surface decided at runtime by whatever it met.
+
 ## Provenance and audit
 
 Every tool declares its origin (`builtin`, `sdk`, `author`, `extension`) and,
