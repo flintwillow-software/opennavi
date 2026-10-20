@@ -28,8 +28,10 @@ package huly
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector"
@@ -61,6 +63,12 @@ type Config struct {
 	HTTPClient *http.Client
 	// Env resolves a credential reference. Nil = os.Getenv.
 	Env func(string) string
+	// Subscriptions are the build-time inbound declarations (ADR 0023). Empty
+	// = the connector has no inbound half and Start launches no poll loop.
+	Subscriptions []Subscription
+	// PollInterval is how often the inbound loop polls. Zero =
+	// DefaultPollInterval.
+	PollInterval time.Duration
 }
 
 // Connector is the Huly connector component. It satisfies connector.Connector:
@@ -70,12 +78,50 @@ type Config struct {
 type Connector struct {
 	cfg  Config
 	live *connector.Live[*Client]
+
+	// stateDB persists the inbound seen-set and last-known issue statuses
+	// (ADR 0023 decision 5). Nil = in-memory dedupe only.
+	stateDB *sql.DB
+	// now overrides the poll clock (tests). Nil = time.Now.
+	now func() time.Time
+
+	// pollCancel / pollWG control the inbound poll loop.
+	pollCancel context.CancelFunc
+	pollWG     sync.WaitGroup
+}
+
+// Option configures the connector.
+func (c *Connector) apply(opts []Option) {
+	for _, o := range opts {
+		o(c)
+	}
+}
+
+// Option configures the connector.
+type Option func(*Connector)
+
+// WithStateStore persists the inbound seen-set in the shared SQLite
+// connection, so a redelivered event is suppressed across a restart (ADR 0023
+// decision 5). Without it the seen-set is in memory only, and a restart may
+// replay a redelivery.
+func WithStateStore(db *sql.DB) Option {
+	return func(c *Connector) { c.stateDB = db }
 }
 
 // New builds the connector. It performs no I/O: the workspace session is
 // established at Start (or lazily at the first call).
-func New(cfg Config) *Connector {
-	return &Connector{cfg: cfg, live: connector.NewLive[*Client]()}
+func New(cfg Config, opts ...Option) *Connector {
+	c := &Connector{cfg: cfg, live: connector.NewLive[*Client]()}
+	c.apply(opts)
+	return c
+}
+
+// clock is the poll clock, overridable in tests.
+func (c *Connector) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 // Start connects to Huly and publishes the client. A connection failure is
@@ -88,12 +134,19 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 		deps.Log.Warn("huly connector could not connect; its egress tools will retry", "err", err)
 	}
 	c.live.Set(client)
-	return nil
+	// The inbound half (ADR 0023) reuses this same client; it starts no second
+	// connection and resolves no second credential.
+	return c.startInbound(ctx, deps)
 }
 
 // Stop releases the client, so a call after Stop fails the same way a call
 // before Start does.
 func (c *Connector) Stop() error {
+	if c.pollCancel != nil {
+		c.pollCancel()
+		c.pollCancel = nil
+		c.pollWG.Wait()
+	}
 	c.live.Clear()
 	return nil
 }

@@ -249,3 +249,81 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	t.Log("relation remove applied")
 }
+
+// TestLiveSmokeInbound is the live check for the inbound half (NAVI-561): it
+// creates a scratch issue, assigns it to this account's Huly user, runs one
+// poll against a recording thought system, and removes the issue. It is gated
+// the same way as TestLiveSmoke, and it is what proves the "assign an issue to
+// a navi and it picks it up" path end to end rather than against a fake.
+//
+//	HULY_LIVE_SMOKE=1 go test -run TestLiveSmokeInbound -v ./connector/huly/
+func TestLiveSmokeInbound(t *testing.T) {
+	if os.Getenv("HULY_LIVE_SMOKE") == "" {
+		t.Skip("set HULY_LIVE_SMOKE=1 to run the live Huly smoke test (it writes to the real workspace)")
+	}
+	ctx := context.Background()
+	c := New(Config{URL: smokeURL, Workspace: smokeWS, Credential: "HULY_TOKEN"})
+	if err := c.Start(ctx, connector.Deps{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = c.Stop() }()
+	cl, err := c.live.Get()
+	if err != nil {
+		t.Fatalf("live client: %v", err)
+	}
+
+	// The pick-up path keys on this account's Person document id.
+	personID, err := cl.myPersonID(ctx)
+	if err != nil {
+		t.Fatalf("myPersonID: %v", err)
+	}
+	if personID == "" {
+		t.Fatal("this account resolves to no Huly Person; the pick-up path cannot work for it")
+	}
+	t.Logf("account person id = %s", personID)
+
+	out, err := cl.issueCreate(ctx, map[string]any{
+		"project": "NAVI", "title": "smoke: inbound — delete me", "status": "Backlog",
+	})
+	if err != nil {
+		t.Fatalf("issueCreate: %v", err)
+	}
+	res := smokeDecode(t, out)
+	id, _ := res["id"].(string)
+	identifier, _ := res["identifier"].(string)
+	issue, err := cl.findIssue(ctx, id)
+	if err != nil {
+		t.Fatalf("findIssue: %v", err)
+	}
+	space := stringField(issue, "space")
+	defer func() {
+		smokeRemove(t, cl, classIssue, space, id)
+		t.Logf("removed %s", identifier)
+	}()
+
+	// Assign it to this navi's Huly user: the stimulus the poll must notice.
+	if _, err := cl.issueUpdate(ctx, map[string]any{"issue": id, "assignee": personID}); err != nil {
+		t.Fatalf("issueUpdate assignee: %v", err)
+	}
+	t.Logf("created and assigned %s (%s)", identifier, id)
+
+	// One poll over a subscription that declares the pick-up path.
+	c.cfg.Subscriptions = []Subscription{{
+		Name: "live", Project: "NAVI", Events: []EventKind{EventIssueAssigned},
+	}}
+	ts := &fakeTS{}
+	seen, err := newSeenStore(nil)
+	if err != nil {
+		t.Fatalf("newSeenStore: %v", err)
+	}
+	since := time.Unix(0, 0)
+	c.pollOnce(ctx, connector.Deps{ThoughtSystem: ts}, seen, &since)
+
+	for _, th := range ts.GetThoughts() {
+		if th.Metadata["identifier"] == identifier && th.Metadata["event"] == string(EventIssueAssigned) {
+			t.Logf("picked up %s as thought %s", identifier, th.ID)
+			return
+		}
+	}
+	t.Fatalf("the assigned issue %s produced no issue_assigned thought", identifier)
+}

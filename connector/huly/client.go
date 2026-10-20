@@ -49,6 +49,11 @@ type session struct {
 	// `me.primarySocialId`, and a transaction carrying the uuid is refused with
 	// AccountMismatch.
 	socialID string
+	// personID is the account's `contact:class:Person` document id — the id an
+	// issue's `assignee` field references. It is neither the account uuid nor
+	// the social id, so the inbound half resolves it once at connect. Empty when
+	// the instance has no Person for the account.
+	personID string
 	// collaborator is the http(s) root of the instance's collaborator service
 	// (config.json's COLLABORATOR_URL), where rich text such as an issue's
 	// description lives. Empty when the instance declares none.
@@ -189,6 +194,7 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	// Huly's own client builds its transaction factory from `me.primarySocialId`,
 	// and a transaction carrying the uuid is refused with AccountMismatch.
 	var account struct {
+		UUID            string `json:"uuid"`
 		PrimarySocialID string `json:"primarySocialId"`
 	}
 	accountURL := fmt.Sprintf("%s/api/v1/account/%s", strings.TrimRight(endpoint, "/"), url.PathEscape(sel.Workspace))
@@ -199,6 +205,10 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 	if socialID == "" {
 		return nil, fmt.Errorf("huly: account has no primary social id")
 	}
+	personID, err := c.lookupPersonID(ctx, endpoint, sel.Workspace, sel.Token, strings.TrimSpace(account.UUID))
+	if err != nil {
+		return nil, fmt.Errorf("huly: resolve the account's person: %w", err)
+	}
 	return &session{
 		// Huly answers with the WebSocket endpoint; the REST routes live at the
 		// same host with the http scheme.
@@ -206,8 +216,41 @@ func (c *Client) open(ctx context.Context) (*session, error) {
 		workspace:    sel.Workspace,
 		token:        sel.Token,
 		socialID:     socialID,
+		personID:     personID,
 		collaborator: collaborator,
 	}, nil
+}
+
+// lookupPersonID resolves the account's Person document id — the id an issue's
+// `assignee` references — by matching the Person's `personUuid` against the
+// account's uuid. It is a direct REST call rather than findAll because `open`
+// runs under the client lock, before a session exists. It returns "" when the
+// instance has no Person for the account (a service account with no contact
+// record), and the inbound half then has no "my issues" to poll.
+func (c *Client) lookupPersonID(ctx context.Context, endpoint, workspace, token, personUUID string) (string, error) {
+	if strings.TrimSpace(personUUID) == "" {
+		return "", nil
+	}
+	params := url.Values{}
+	params.Set("class", classPerson)
+	params.Set("query", fmt.Sprintf(`{"personUuid":%q}`, personUUID))
+	params.Set("options", `{"limit":1}`)
+	target := fmt.Sprintf("%s/api/v1/find-all/%s?%s",
+		strings.TrimRight(endpoint, "/"), url.PathEscape(workspace), params.Encode())
+	body, err := c.getRaw(ctx, target, token)
+	if err != nil {
+		return "", err
+	}
+	var envelope struct {
+		Value []map[string]any `json:"value"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", fmt.Errorf("decode person lookup: %w", err)
+	}
+	if len(envelope.Value) == 0 {
+		return "", nil
+	}
+	return stringField(envelope.Value[0], "_id"), nil
 }
 
 // findAll reads documents of one class. Huly answers with a TotalArray envelope

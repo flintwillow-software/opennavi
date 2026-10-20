@@ -32,6 +32,7 @@ type fakeHuly struct {
 	issues   []map[string]any
 	statuses []map[string]any
 	persons  []map[string]any
+	comments []map[string]any
 	project  map[string]any
 
 	tags          []map[string]any
@@ -60,7 +61,7 @@ func newFakeHuly(t *testing.T) *fakeHuly {
 			{"_id": "tracker:status:InProgress", "name": "In Progress", "category": "task:statusCategory:Active"},
 		},
 		persons: []map[string]any{
-			{"_id": "6aa2a3038376b1c099c0403d", "name": "bastilli"},
+			{"_id": "6aa2a3038376b1c099c0403d", "name": "bastilli", "personUuid": "acct-uuid"},
 		},
 		tagCategories: []map[string]any{
 			{"_id": "tracker:category:Other", "targetClass": classIssue, "default": true, "label": "Other"},
@@ -141,6 +142,8 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 		data = f.statuses
 	case classPerson:
 		data = f.persons
+	case classChatMessage:
+		data = f.comments
 	case classProject:
 		if f.project != nil {
 			data = []map[string]any{f.project}
@@ -291,19 +294,25 @@ func matches(doc, query map[string]any) bool {
 	for k, v := range query {
 		switch want := v.(type) {
 		case map[string]any:
-			in, ok := want["$in"].([]any)
-			if !ok {
-				return false
-			}
-			found := false
-			for _, cand := range in {
-				if doc[k] == cand {
-					found = true
+			if in, ok := want["$in"].([]any); ok {
+				found := false
+				for _, cand := range in {
+					if doc[k] == cand {
+						found = true
+					}
 				}
+				if !found {
+					return false
+				}
+				continue
 			}
-			if !found {
-				return false
+			if gt, ok := want["$gt"]; ok {
+				if num(doc[k]) <= num(gt) {
+					return false
+				}
+				continue
 			}
+			return false
 		default:
 			if doc[k] != want {
 				return false
@@ -311,6 +320,23 @@ func matches(doc, query map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// num coerces a JSON-decoded or in-process number to float64 for a `$gt`
+// comparison.
+func num(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
+	case json.Number:
+		f, _ := t.Float64()
+		return f
+	}
+	return 0
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
