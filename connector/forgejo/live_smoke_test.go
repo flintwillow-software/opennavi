@@ -57,8 +57,15 @@ func TestLiveSmoke(t *testing.T) {
 	}
 
 	// ── reads ──────────────────────────────────────────────────────────
-	if _, err := cl.repoGet(ctx, nil); err != nil {
+	repoOut, err := cl.repoGet(ctx, nil)
+	if err != nil {
 		t.Fatalf("repoGet: %v", err)
+	}
+	var repoInfo struct {
+		Empty bool `json:"empty"`
+	}
+	if err := json.Unmarshal([]byte(repoOut), &repoInfo); err != nil {
+		t.Fatalf("repoGet output %q: %v", repoOut, err)
 	}
 	labelsOut, err := cl.labelList(ctx, nil)
 	if err != nil {
@@ -74,7 +81,12 @@ func TestLiveSmoke(t *testing.T) {
 		t.Fatalf("labelList output %q: %v", labelsOut, err)
 	}
 	t.Logf("repository %s has %d label(s)", repo, len(labels.Labels))
-	if _, err := cl.pullList(ctx, nil); err != nil {
+	if repoInfo.Empty {
+		// Forgejo answers 404 for /pulls on a repository with no commits, so a
+		// pull-list smoke needs a populated repository; the issue paths below
+		// work regardless.
+		t.Log("repository is empty; skipping pullList (Forgejo 404s /pulls on an empty repo)")
+	} else if _, err := cl.pullList(ctx, nil); err != nil {
 		t.Fatalf("pullList: %v", err)
 	}
 

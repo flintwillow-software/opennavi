@@ -74,6 +74,7 @@ type apiRepo struct {
 	Description   string `json:"description"`
 	Private       bool   `json:"private"`
 	Fork          bool   `json:"fork"`
+	Empty         bool   `json:"empty"`
 	HTMLURL       string `json:"html_url"`
 	DefaultBranch string `json:"default_branch"`
 	Stars         int    `json:"stars_count"`
@@ -704,6 +705,7 @@ func (c *client) repoGet(ctx context.Context, args map[string]any) (string, erro
 		"description":    r.Description,
 		"private":        r.Private,
 		"fork":           r.Fork,
+		"empty":          r.Empty,
 		"default_branch": r.DefaultBranch,
 		"url":            r.HTMLURL,
 		"stars":          r.Stars,
