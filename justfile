@@ -28,12 +28,16 @@ workspace:
     # so this is safe to run repeatedly and never commits anything.
     set -euo pipefail
     go work init . 2>/dev/null || true
-    go work use ./templates/navi-code ./templates/navi-daemon ./templates/navi-sqlite
+    go work use ./templates/navi-code ./templates/navi-daemon ./templates/navi-sqlite ./templates/navi-fleet
     go work edit -replace=github.com/flintwillow-software/opennavi@v0.1.0=.
 
 # Build the navi-code starter template into bin/
 build-navi-code: workspace
     cd templates/navi-code && go build -o ../../var/bin/navi-code ./cmd/navi-code
+
+# Build the full-fat navi-fleet template into bin/
+build-navi-fleet: workspace
+    cd templates/navi-fleet && go build -o ../../var/bin/navi-fleet ./cmd/navi-fleet
 
 # Build, vet, and test every starter template (what CI's template job runs)
 templates: workspace
@@ -41,7 +45,7 @@ templates: workspace
     # Separate from `ci`: the templates are nested modules, so they need the
     # workspace above and are not part of the root module's ./...
     set -euo pipefail
-    for t in navi-code navi-daemon navi-sqlite; do
+    for t in navi-code navi-daemon navi-sqlite navi-fleet; do
         echo "--- $t"
         (cd "templates/$t" && go build ./... && go vet ./... && go test ./...)
     done

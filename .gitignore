@@ -4,6 +4,7 @@
 /templates/navi-code/navi-code
 /templates/navi-daemon/navi-daemon
 /templates/navi-sqlite/navi-sqlite
+/templates/navi-fleet/navi-fleet
 /cmd/navi/navi.db
 /cmd/navi/navi.log
 /cmd/navi/state/
