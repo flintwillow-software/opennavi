@@ -78,6 +78,7 @@ jobs:
           	./templates/navi-code
           	./templates/navi-daemon
           	./templates/navi-sqlite
+          	./templates/navi-fleet
           )
 
           replace github.com/flintwillow-software/opennavi v0.1.0 => .
@@ -85,6 +86,7 @@ jobs:
           (cd templates/navi-code && go build ./... && go vet ./... && go test ./...)
           (cd templates/navi-daemon && go build ./... && go vet ./... && go test ./...)
           (cd templates/navi-sqlite && go build ./... && go vet ./... && go test ./...)
+          (cd templates/navi-fleet && go build ./... && go vet ./... && go test ./...)
 
   external-consumer:
     name: external modules — out-of-repo navi + component + backend
