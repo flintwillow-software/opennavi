@@ -161,6 +161,11 @@ type Navi struct {
 	// override replaces provider resolution entirely (test/embedding seam).
 	override llm.Provider
 
+	// healthRecorder receives the start-time connector-health view, and
+	// health is that view (NAVI-329). Set at serve; read through Health().
+	healthRecorder HealthRecorder
+	health         []ConnectorHealth
+
 	// Execution.
 	runner   Runner
 	workers  int
@@ -708,15 +713,22 @@ func (n *Navi) serve(ctx context.Context) error {
 			started[i]()
 		}
 	}
+	// health accumulates each door's start-time state for the health view
+	// (NAVI-329). A failed Start is recorded and the run continues.
+	var health []ConnectorHealth
+
 	for _, c := range n.Connectors.All() {
+		name, addr := describeHealth(c)
 		if err := c.Start(ctx, cdeps); err != nil {
 			// Non-fatal by design (NAVI-329): connectors are auxiliary in a
 			// one-assembly navi, so a door that cannot open must not take the
-			// run down. Log and carry on; Stop is not called for a component
-			// whose Start failed.
-			n.log.Error("connector start failed; continuing", "connector", describe(c), "err", err)
+			// run down. Record the degradation for the health view and carry
+			// on; Stop is not called for a component whose Start failed.
+			n.log.Error("connector start failed; continuing", "connector", name, "err", err)
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorFailed, Addr: addr, Reason: err.Error()})
 			continue
 		}
+		health = append(health, ConnectorHealth{Name: name, State: ConnectorOK, Addr: addr})
 		c := c
 		started = append(started, func() {
 			if err := c.Stop(); err != nil {
@@ -725,16 +737,27 @@ func (n *Navi) serve(ctx context.Context) error {
 		})
 	}
 	for _, p := range n.Portals.All() {
+		name, addr := describeHealth(p)
 		if err := p.Start(ctx, pdeps); err != nil {
-			n.log.Error("portal start failed; continuing", "portal", describe(p), "err", err)
+			n.log.Error("portal start failed; continuing", "portal", name, "err", err)
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorFailed, Addr: addr, Reason: err.Error()})
 			continue
 		}
+		health = append(health, ConnectorHealth{Name: name, State: ConnectorOK, Addr: addr})
 		p := p
 		started = append(started, func() {
 			if err := p.Stop(); err != nil {
 				n.log.Error("portal stop", "portal", describe(p), "err", err)
 			}
 		})
+	}
+
+	// Record the start-time connector health before blocking (NAVI-329).
+	n.mu.Lock()
+	n.health = append([]ConnectorHealth(nil), health...)
+	n.mu.Unlock()
+	if n.healthRecorder != nil {
+		n.healthRecorder(append([]ConnectorHealth(nil), health...))
 	}
 
 	// Background persistence loops (memory-first flusher + external-writer

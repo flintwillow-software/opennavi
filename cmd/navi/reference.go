@@ -126,6 +126,10 @@ func serveReferenceNavi(p runParams) error {
 		navi.WithWorkers(p.workers),
 		navi.WithQueueConfig(queueConfig(rc, !p.daemonMode)),
 		navi.WithShortTermMemory(),
+		// Record the start-time connector health so a later `navi health`
+		// sees a degraded metrics or portal listener without reading logs
+		// (NAVI-329).
+		navi.WithHealthRecorder(connectorHealthRecorder(rc, p)),
 	}
 
 	// The compiled policy (ADR 0021 decisions 3-5). connector:github may
@@ -422,6 +426,59 @@ func addPortals(n *navi.Navi, p runParams, auth portal.Authorizer) error {
 		}()
 	}
 	return nil
+}
+
+// referenceDoors is the reference navi's operator-facing connector
+// health view (NAVI-329): the doors a human checks with `navi health`.
+// The navi records every component's health; the in-process TUI and
+// control portals are not part of this view.
+var referenceDoors = []string{"scheduler", "metrics", "portal"}
+
+// connectorHealthRecorder persists the start-time connector health and
+// warns about degraded doors. It runs once, at serve start.
+func connectorHealthRecorder(rc config.RuntimeConfig, p runParams) navi.HealthRecorder {
+	return func(reported []navi.ConnectorHealth) {
+		view := referenceConnectorHealth(reported)
+		if err := writeHealthSnapshot(healthSnapshotPath(rc.SessionDB), view); err != nil && p.logger != nil {
+			p.logger.Warn("connector health snapshot not written", map[string]any{"error": err.Error()})
+		}
+		for _, h := range view {
+			if h.State != navi.ConnectorFailed {
+				continue
+			}
+			if p.logger != nil {
+				p.logger.Warn("connector degraded", map[string]any{
+					"connector": h.Name, "addr": h.Addr, "error": h.Reason,
+				})
+			}
+			// A human-readable line alongside the structured log; only in
+			// daemon mode, where stderr is the console (in TUI mode the
+			// alt-screen owns the terminal).
+			if p.daemonMode {
+				fmt.Fprintf(os.Stderr, "navi: WARNING: connector %s is degraded: %s\n", h.Name, h.Reason)
+			}
+		}
+	}
+}
+
+// referenceConnectorHealth projects the navi's full component-health
+// view onto the reference navi's three doors, filling in `disabled` for
+// a door that declares no component (metrics/portal absent, no cron
+// schedules).
+func referenceConnectorHealth(reported []navi.ConnectorHealth) []navi.ConnectorHealth {
+	byName := make(map[string]navi.ConnectorHealth, len(reported))
+	for _, h := range reported {
+		byName[h.Name] = h
+	}
+	view := make([]navi.ConnectorHealth, 0, len(referenceDoors))
+	for _, name := range referenceDoors {
+		if h, ok := byName[name]; ok {
+			view = append(view, h)
+			continue
+		}
+		view = append(view, navi.ConnectorHealth{Name: name, State: navi.ConnectorDisabled})
+	}
+	return view
 }
 
 // readSession drives the headless session: the first line becomes a

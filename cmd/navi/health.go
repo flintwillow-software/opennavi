@@ -11,6 +11,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/navi"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -20,6 +21,14 @@ type healthResult struct {
 	Store    string      `json:"store"`
 	NaviID   string      `json:"navi_id,omitempty"`
 	Todos    *todoHealth `json:"todos,omitempty"`
+
+	// Connectors is the start-time connector-health view the host wrote
+	// beside the database (NAVI-329): each door's ok/disabled/failed state
+	// and, for a failure, the reason (e.g. "listen :9090: address in use").
+	// Present only after the navi has started against this database.
+	Connectors          []navi.ConnectorHealth `json:"connectors,omitempty"`
+	ConnectorsUpdatedAt *time.Time             `json:"connectors_updated_at,omitempty"`
+	ConnectorsError     string                 `json:"connectors_error,omitempty"`
 }
 
 // todoHealth is the navi's current todo state: counts
@@ -67,19 +76,32 @@ func runHealth(args []string) error {
 		hr.Store = fmt.Sprintf("fail: %v", serr)
 		failed = true
 	} else {
+		defer store.Close()
 		if serr := storeProbe(ctx, store); serr != nil {
 			hr.Store = fmt.Sprintf("fail: %v", serr)
 			failed = true
 		}
-		store.Close()
+		// Todo state: counts by status for the navi. A probe failure is
+		// reported but does not fail the health command — todo storage may
+		// legitimately be untouched (no tool activity yet); only store-level
+		// failures surface. The probe reads through the still-open store.
+		hr.Todos = todoProbe(store, *naviID)
 	}
 
-	// Todo state: counts by status for the navi. A
-	// probe failure is reported but does not fail the health command —
-	// todo storage may legitimately be untouched (no tool activity
-	// yet); only store-level failures surface.
-	if store != nil {
-		hr.Todos = todoProbe(store, *naviID)
+	// Connector health (NAVI-329): the start-time view the host wrote
+	// beside the database. A missing snapshot means the navi has not
+	// started against this DB; report that rather than guessing states.
+	// A connector failure is informational — it does not fail the probe.
+	snap, ok, herr := readHealthSnapshot(healthSnapshotPath(*dbPath))
+	switch {
+	case herr != nil:
+		hr.ConnectorsError = herr.Error()
+	case ok:
+		hr.Connectors = snap.Connectors
+		at := snap.UpdatedAt
+		hr.ConnectorsUpdatedAt = &at
+	default:
+		hr.ConnectorsError = "no connector health snapshot (navi not started against this database?)"
 	}
 
 	blob, _ := json.MarshalIndent(hr, "", "  ")
