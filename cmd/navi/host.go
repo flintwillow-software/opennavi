@@ -29,7 +29,7 @@ func runHost(args []string) error {
 	workDir := fs.String("workdir", ".", "working directory for file/shell tools")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool storage (todos/notes)")
 	workers := fs.Int("workers", 2, "thought worker count")
-	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address (not yet wired on the reference navi)")
+	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address, e.g. :9090 (default: disabled)")
 	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
 	trustStore := fs.String("trust-store", "", "path (or env var name holding a path) of a keyed trust store declaring principals and their keys; ADR 0021 decision 6")
 	oidcIssuer := fs.String("oidc-issuer", "", "OIDC identity-provider issuer URL; humans authenticate through it (ADR 0021 decisions 6-8)")
@@ -75,9 +75,6 @@ func runHost(args []string) error {
 	if openedLogFile != "" {
 		fmt.Printf("navi: logs → %s\n", openedLogFile)
 	}
-	if *metricsAddr != "" {
-		fmt.Fprintln(os.Stderr, "navi: --metrics-addr is not wired on the reference navi yet")
-	}
 
 	return serveReferenceNavi(runParams{
 		ctx:          ctx,
@@ -88,6 +85,7 @@ func runHost(args []string) error {
 		workDir:      *workDir,
 		naviID:       *naviID,
 		workers:      *workers,
+		metricsAddr:  *metricsAddr,
 		portalAddr:   *portalAddr,
 		trustStore:   *trustStore,
 		oidcIssuer:   *oidcIssuer,

@@ -171,8 +171,9 @@ authoring stub is retired, and the out-of-repo extension path is guarded by CI
 (`internal/testdata/external-navi`, `internal/testdata/external-component`). The old `internal/daemon`
 run path and its `internal/portal` compatibility shim are now retired (NAVI-354); cron tick state
 persists and missed ticks coalesce across restarts via `connector/cron`'s
-`WithStateStore` seam (NAVI-358); the thought-queue metrics collector is parked
-pending wiring onto the reference navi (NAVI-357); portal state access —
+`WithStateStore` seam (NAVI-358); the thought-queue metrics collector ships as
+the public `connector/metrics` component, wired onto the reference navi behind
+`--metrics-addr`/`metrics_addr` (NAVI-357); portal state access —
 thought history, transcripts, and the eventual unified navi stream — is
 specified by [ADR 0011](../adr/0011-persistence-is-a-datastore-component.md) and
 [ADR 0012](../adr/0012-portals-attach-to-one-navi-stream.md) and tracked as

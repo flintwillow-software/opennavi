@@ -43,7 +43,7 @@ func valueOf(t *testing.T, body, name string) float64 {
 }
 
 func newTestCollector() *Collector {
-	c := New()
+	c := NewCollector()
 	c.now = func() time.Time { return fakeNow() }
 	return c
 }

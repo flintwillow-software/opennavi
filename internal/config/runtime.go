@@ -131,6 +131,10 @@ type RuntimeConfig struct {
 	Datastore *DatastoreConfig `yaml:"datastore,omitempty"`
 	// Cron declares the daemon's cron schedules (nil = none).
 	Cron *CronConfig `yaml:"cron,omitempty"`
+	// MetricsAddr is the Prometheus metrics listen address ("" =
+	// disabled). It mirrors the --metrics-addr flag, so the YAML can turn
+	// the same knob (NAVI-357).
+	MetricsAddr string `yaml:"metrics_addr,omitempty"`
 }
 
 // DefaultRuntimeConfig is the baked-in baseline of the merge chain.
@@ -268,6 +272,9 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	if src.Cron != nil {
 		c := *src.Cron
 		dst.Cron = &c
+	}
+	if src.MetricsAddr != "" {
+		dst.MetricsAddr = src.MetricsAddr
 	}
 	if src.ToolCaps != nil {
 		tc := *src.ToolCaps

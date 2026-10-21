@@ -426,6 +426,20 @@ consumer needs a low-latency upstream. Both bindings **push**: the TUI's pump
 idle portal is never blind. A slow UI loses only its own events (bounded,
 drop-oldest mailbox) and reports a gap rather than stalling the queue.
 
+## Observability
+
+A running navi exposes its thought-queue metrics as a component, not
+host-only plumbing.
+
+- **Metrics** — `connector/metrics` is a `connector.Connector` that wires the
+  Prometheus collector to the thought system and serves the `opennavi_*` text
+  exposition at `/metrics` (pure Go — no OTel SDK, no `client_golang`). The
+  reference navi declares it when a listen address is configured: the
+  `--metrics-addr` flag or the runtime YAML's `metrics_addr` (the flag wins
+  per the merge chain), so the address is the only switch. Gauges are seeded
+  from a queue snapshot at wire time, so crash-recovered thoughts are visible
+  at the first scrape.
+
 ## Agent and tools
 
 Each thought run resolves an agent run: mode-selected tool surface → registry

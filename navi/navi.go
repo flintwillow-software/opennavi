@@ -708,11 +708,14 @@ func (n *Navi) serve(ctx context.Context) error {
 			started[i]()
 		}
 	}
-
 	for _, c := range n.Connectors.All() {
 		if err := c.Start(ctx, cdeps); err != nil {
-			stopAll()
-			return fmt.Errorf("navi: connector %s: start: %w", describe(c), err)
+			// Non-fatal by design (NAVI-329): connectors are auxiliary in a
+			// one-assembly navi, so a door that cannot open must not take the
+			// run down. Log and carry on; Stop is not called for a component
+			// whose Start failed.
+			n.log.Error("connector start failed; continuing", "connector", describe(c), "err", err)
+			continue
 		}
 		c := c
 		started = append(started, func() {
@@ -723,8 +726,8 @@ func (n *Navi) serve(ctx context.Context) error {
 	}
 	for _, p := range n.Portals.All() {
 		if err := p.Start(ctx, pdeps); err != nil {
-			stopAll()
-			return fmt.Errorf("navi: portal %s: start: %w", describe(p), err)
+			n.log.Error("portal start failed; continuing", "portal", describe(p), "err", err)
+			continue
 		}
 		p := p
 		started = append(started, func() {

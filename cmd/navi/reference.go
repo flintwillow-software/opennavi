@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/flintwillow-software/opennavi/connector/cron"
+	"github.com/flintwillow-software/opennavi/connector/metrics"
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/fs"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
@@ -50,6 +51,7 @@ type runParams struct {
 	workDir     string
 	naviID      string
 	workers     int
+	metricsAddr string
 	portalAddr  string
 	daemonMode  bool
 	// noThinking turns a reasoning model's hidden reasoning off (Ollama's
@@ -195,6 +197,9 @@ func serveReferenceNavi(p runParams) error {
 	if err := addCron(n, rc, store.DB()); err != nil {
 		return err
 	}
+	if err := addMetrics(n, rc); err != nil {
+		return err
+	}
 	if err := addPortals(n, p, n); err != nil {
 		return err
 	}
@@ -240,6 +245,9 @@ func mergeRuntime(p runParams) (config.RuntimeConfig, error) {
 	if p.noThinking {
 		f := false
 		flags.Provider.Thinking = &f
+	}
+	if p.metricsAddr != "" {
+		flags.MetricsAddr = p.metricsAddr
 	}
 	rc := config.MergeRuntime(fileRC, flags)
 	if err := rc.Validate(); err != nil {
@@ -373,6 +381,19 @@ func addCron(n *navi.Navi, rc config.RuntimeConfig, db *sql.DB) error {
 		})
 	}
 	return n.Connectors.Add(cron.New(cron.Config{Schedules: schedules}, cron.WithStateStore(db)))
+}
+
+// addMetrics wires the thought-queue metrics connector when a listen
+// address is configured (NAVI-357). The address comes from the merged
+// runtime config: the --metrics-addr flag (top layer) over the YAML's
+// metrics_addr, so the config turns the same knob as the flag. Absent,
+// the collector is not declared at all — zero cost unset.
+func addMetrics(n *navi.Navi, rc config.RuntimeConfig) error {
+	addr := strings.TrimSpace(rc.MetricsAddr)
+	if addr == "" {
+		return nil
+	}
+	return n.Connectors.Add(metrics.New(addr))
 }
 
 // addPortals wires the TUI (in-process) and, when configured, the HTTP
