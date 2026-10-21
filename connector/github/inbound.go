@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,13 @@ const DefaultPollInterval = 60 * time.Second
 
 // maxPollBody bounds how much of a poll response is read.
 const maxPollBody = 1 << 20
+
+// maxPollPages bounds how many pages one subscription poll follows, so a
+// pathological Link chain cannot make a single cycle unbounded. Exceeding it is
+// an error rather than a silent truncation: the subscription's watermark does
+// not advance, so the next cycle re-reads the same window instead of dropping
+// the tail.
+const maxPollPages = 100
 
 // EventKind is a declared inbound event kind (ADR 0023 decision 1). Only the
 // kinds a subscription names are ever polled; runtime cannot add one.
@@ -185,7 +193,7 @@ func (c *Connector) startInbound(ctx context.Context, deps connector.Deps) error
 		return err
 	}
 	if c.stateDB == nil && deps.Log != nil {
-		deps.Log.Warn("github: inbound dedupe is in-memory only; a restart may replay a redelivery (wire WithStateStore)")
+		deps.Log.Warn("github: inbound dedupe and poll watermark are in-memory only; a restart may replay a redelivery (wire WithStateStore)")
 	}
 	interval := c.cfg.PollInterval
 	if interval <= 0 {
@@ -203,10 +211,7 @@ func (c *Connector) startInbound(ctx context.Context, deps connector.Deps) error
 
 // pollLoop polls immediately, then on the interval, until ctx is cancelled.
 func (c *Connector) pollLoop(ctx context.Context, deps connector.Deps, seen *seenStore, interval time.Duration) {
-	// The first window looks back one interval so work that arrived while the
-	// navi was down is picked up, not skipped.
-	since := c.clock().Add(-interval)
-	c.pollOnce(ctx, deps, seen, &since)
+	c.pollOnce(ctx, deps, seen, interval)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -214,32 +219,55 @@ func (c *Connector) pollLoop(ctx context.Context, deps connector.Deps, seen *see
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.pollOnce(ctx, deps, seen, &since)
+			c.pollOnce(ctx, deps, seen, interval)
 		}
 	}
 }
 
 // pollOnce runs one poll over every declared subscription and event kind.
-func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *seenStore, since *time.Time) {
+//
+// The watermark advances per subscription only when that subscription's whole
+// cycle succeeded: a failed fetch or a failed enqueue leaves it in place, so
+// the next poll re-reads the same window and a transient failure does not drop
+// it (a failed event is not marked seen either, so it is retried). interval is
+// the fallback lookback for a subscription that has never polled successfully —
+// a first run, or a restart whose persisted watermark is absent — so downtime
+// longer than one interval is recovered from the stored watermark, not lost.
+func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *seenStore, interval time.Duration) {
 	now := c.clock()
 	cl, err := c.live.Get()
 	if err != nil {
 		return // not serving; the loop stops when the connector stops
 	}
+	self := c.selfLogin(ctx, cl, deps)
 	for _, sub := range c.cfg.Subscriptions {
+		since := seen.watermark(sub.Name, now.Add(-interval))
+		ok := true
 		for _, kind := range sub.Events {
-			events, perr := c.pollSubscription(ctx, cl, sub, kind, *since)
+			events, perr := c.pollSubscription(ctx, cl, sub, kind, since)
 			if perr != nil {
+				ok = false
 				if deps.Log != nil {
 					deps.Log.Warn("github: poll failed", "subscription", sub.Name, "event", string(kind), "err", perr.Error())
 				}
 				continue
 			}
 			for _, ev := range events {
+				if self != "" && strings.EqualFold(ev.Author, self) {
+					continue // the navi's own egress cannot re-enter as an event
+				}
 				if seen.has(sub.Name, ev.ID) {
 					continue
 				}
 				if eerr := c.enqueueEvent(deps, sub, kind, ev, now); eerr != nil {
+					if errors.Is(eerr, thought.ErrDuplicateID) {
+						// The deterministic thought id already exists: the seen-set
+						// was lost but the queue survived, so the event has been
+						// handled. Mark it seen rather than retrying it every poll.
+						seen.mark(sub.Name, ev.ID, now)
+						continue
+					}
+					ok = false
 					if deps.Log != nil {
 						deps.Log.Error("github: enqueue failed", "subscription", sub.Name, "event_id", ev.ID, "err", eerr.Error())
 					}
@@ -248,8 +276,48 @@ func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *see
 				seen.mark(sub.Name, ev.ID, now)
 			}
 		}
+		if ok {
+			seen.setWatermark(sub.Name, now)
+		}
 	}
-	*since = now
+}
+
+// selfLogin resolves the login this connector posts as, so a comment the navi
+// itself wrote (via egress) that mentions the watched login cannot re-enter as
+// an event and loop. Config.SelfLogin wins; otherwise the account's own login
+// is read from GET /user once and cached. A resolution failure is not fatal —
+// polling continues with the filter off, warned once — and is retried on the
+// next poll so a transient failure does not disable the filter for the run.
+func (c *Connector) selfLogin(ctx context.Context, cl *client, deps connector.Deps) string {
+	c.selfMu.Lock()
+	if c.selfResolved {
+		login := c.selfLoginVal
+		c.selfMu.Unlock()
+		return login
+	}
+	c.selfMu.Unlock()
+
+	if login := strings.TrimSpace(c.cfg.SelfLogin); login != "" {
+		c.selfMu.Lock()
+		c.selfLoginVal, c.selfResolved = login, true
+		c.selfMu.Unlock()
+		return login
+	}
+	resolved, err := cl.myLogin(ctx)
+	if err != nil {
+		c.selfMu.Lock()
+		warn := !c.selfWarned
+		c.selfWarned = true
+		c.selfMu.Unlock()
+		if warn && deps.Log != nil {
+			deps.Log.Warn("github: cannot resolve the connector's own login; self-filter is off until it resolves (set Config.SelfLogin)", "err", err.Error())
+		}
+		return ""
+	}
+	c.selfMu.Lock()
+	c.selfLoginVal, c.selfResolved = resolved, true
+	c.selfMu.Unlock()
+	return resolved
 }
 
 // pollSubscription fetches the events of one kind for one subscription.
@@ -299,12 +367,112 @@ func (c *Connector) pollSubscription(ctx context.Context, cl *client, sub Subscr
 	}
 }
 
-// mentions reports whether a comment body names login (case-insensitively).
+// mentions reports whether a comment body names login as a word: `@alice`
+// matches `@alice` and `@alice,` but not `@alice-bot` or `bob@alice`, and a
+// mention inside a fenced code block, an inline code span, or a block quote is
+// not a mention at all (it is quoted text, not a request to the navi).
 func mentions(body, login string) bool {
+	login = strings.ToLower(strings.TrimSpace(login))
 	if login == "" {
 		return false
 	}
-	return strings.Contains(strings.ToLower(body), "@"+strings.ToLower(login))
+	text := strings.ToLower(stripMentionNoise(body))
+	for i := 0; ; {
+		j := strings.IndexByte(text[i:], '@')
+		if j < 0 {
+			return false
+		}
+		i += j
+		// The @ must start a word: an @ preceded by a login character is an
+		// email address or a longer handle, not a mention.
+		if i > 0 && isLoginChar(text[i-1]) {
+			i++
+			continue
+		}
+		rest := text[i+1:]
+		if !strings.HasPrefix(rest, login) {
+			i++
+			continue
+		}
+		// The login must end at a word boundary: a following login character
+		// means this is a longer handle (`@alice-bot`).
+		if len(rest) > len(login) && isLoginChar(rest[len(login)]) {
+			i++
+			continue
+		}
+		return true
+	}
+}
+
+// isLoginChar reports whether b can appear in a GitHub login. A mention ends at
+// any other byte, which is what makes the match word-bounded.
+func isLoginChar(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '-'
+}
+
+// stripMentionNoise blanks the regions of a Markdown comment where an @-token
+// is not a mention: fenced code blocks (``` or ~~~), inline code spans, and
+// block quotes. Removed regions are replaced with spaces so the words around
+// them stay separated.
+func stripMentionNoise(body string) string {
+	var b strings.Builder
+	b.Grow(len(body))
+	inFence := false
+	fence := ""
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if inFence {
+			if strings.HasPrefix(trimmed, fence) {
+				inFence = false
+			}
+			b.WriteByte('\n')
+			continue
+		}
+		if marker := fenceMarker(trimmed); marker != "" {
+			inFence, fence = true, marker
+			b.WriteByte('\n')
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			b.WriteByte('\n') // a quoted mention is not a mention
+			continue
+		}
+		b.WriteString(stripInlineCode(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// fenceMarker returns the fence marker a line opens a code block with ("```"
+// or "~~~"), or "" when the line is not a fence.
+func fenceMarker(trimmed string) string {
+	switch {
+	case strings.HasPrefix(trimmed, "```"):
+		return "```"
+	case strings.HasPrefix(trimmed, "~~~"):
+		return "~~~"
+	}
+	return ""
+}
+
+// stripInlineCode blanks `code spans` in one line.
+func stripInlineCode(line string) string {
+	var b strings.Builder
+	b.Grow(len(line))
+	inCode := false
+	for i := 0; i < len(line); i++ {
+		if line[i] == '`' {
+			inCode = !inCode
+			b.WriteByte(' ')
+			continue
+		}
+		if inCode {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	return b.String()
 }
 
 // enqueueEvent turns one stimulus into a thought (ADR 0023 decision 8) and
@@ -353,17 +521,22 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 
 // ── the persisted seen-set (ADR 0023 decision 5) ────────────────────────
 
-// seenStore dedupes redelivered events. With a state store it is a SQLite table
-// shared with the navi's session DB (the cron connector's pattern); without one
-// it is an in-memory set, and a restart may replay a redelivery.
+// seenStore dedupes redelivered events and remembers each subscription's
+// watermark. With a state store it is a SQLite table shared with the navi's
+// session DB (the cron connector's pattern); without one it is an in-memory
+// set, and a restart resumes from the last interval rather than from the
+// watermark.
 type seenStore struct {
 	db  *sql.DB
 	mu  sync.Mutex
 	mem map[string]struct{}
+	// watermarks remembers each subscription's last successful poll time so a
+	// restart resumes from it instead of re-scanning a fixed lookback window.
+	watermarks map[string]time.Time
 }
 
 func newSeenStore(db *sql.DB) (*seenStore, error) {
-	s := &seenStore{db: db, mem: map[string]struct{}{}}
+	s := &seenStore{db: db, mem: map[string]struct{}{}, watermarks: map[string]time.Time{}}
 	if db != nil {
 		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS github_seen_events (
 			subscription TEXT NOT NULL,
@@ -372,6 +545,12 @@ func newSeenStore(db *sql.DB) (*seenStore, error) {
 			PRIMARY KEY (subscription, event_id)
 		)`); err != nil {
 			return nil, fmt.Errorf("github: create github_seen_events: %w", err)
+		}
+		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS github_poll_watermark (
+			subscription TEXT PRIMARY KEY,
+			since DATETIME NOT NULL
+		)`); err != nil {
+			return nil, fmt.Errorf("github: create github_poll_watermark: %w", err)
 		}
 	}
 	return s, nil
@@ -400,6 +579,52 @@ func (s *seenStore) mark(sub, id string, at time.Time) {
 		sub, id, at.UTC().Format(time.RFC3339Nano))
 }
 
+// watermark returns the subscription's last successful poll time, or fallback
+// when it has never polled successfully (a first run, or a restart before the
+// first success).
+func (s *seenStore) watermark(sub string, fallback time.Time) time.Time {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if at, ok := s.watermarks[sub]; ok {
+			return at
+		}
+		return fallback
+	}
+	var raw any
+	if err := s.db.QueryRow(`SELECT since FROM github_poll_watermark WHERE subscription = ?`, sub).Scan(&raw); err != nil {
+		return fallback
+	}
+	switch v := raw.(type) {
+	case time.Time:
+		return v.UTC()
+	case string:
+		if at, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return at.UTC()
+		}
+	case []byte:
+		if at, err := time.Parse(time.RFC3339Nano, string(v)); err == nil {
+			return at.UTC()
+		}
+	}
+	return fallback
+}
+
+// setWatermark records a successful poll. A write failure is not fatal to the
+// poll: the next cycle falls back to the lookback window rather than losing
+// events.
+func (s *seenStore) setWatermark(sub string, at time.Time) {
+	at = at.UTC()
+	if s.db == nil {
+		s.mu.Lock()
+		s.watermarks[sub] = at
+		s.mu.Unlock()
+		return
+	}
+	_, _ = s.db.Exec(`INSERT OR REPLACE INTO github_poll_watermark (subscription, since) VALUES (?, ?)`,
+		sub, at.Format(time.RFC3339Nano))
+}
+
 // ── read-side API calls (the shared client, ADR 0023 decision 6) ────────
 
 type githubUser struct {
@@ -422,54 +647,114 @@ type githubIssue struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
-// listIssueComments returns repository comments updated since t (one page).
+// listIssueComments returns repository comments updated since t, following
+// pagination so a burst larger than one page is not silently truncated.
 func (c *client) listIssueComments(ctx context.Context, repo string, since time.Time) ([]githubComment, error) {
-	u := fmt.Sprintf("%s/repos/%s/issues/comments?per_page=100&sort=updated&direction=asc&since=%s",
+	next := fmt.Sprintf("%s/repos/%s/issues/comments?per_page=100&sort=updated&direction=asc&since=%s",
 		c.base, repo, url.QueryEscape(since.UTC().Format(time.RFC3339)))
 	var out []githubComment
-	if err := c.getJSON(ctx, u, &out); err != nil {
-		return nil, err
+	for page := 0; next != ""; page++ {
+		if page >= maxPollPages {
+			return nil, fmt.Errorf("github: poll %s: more than %d pages of comments since %s",
+				repo, maxPollPages, since.UTC().Format(time.RFC3339))
+		}
+		var chunk []githubComment
+		link, err := c.getJSONPage(ctx, next, &chunk)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, chunk...)
+		next = link
 	}
 	return out, nil
 }
 
-// listIssues returns repository issues updated since t (one page), newest last.
+// listIssues returns repository issues updated since t, newest last, following
+// pagination so a burst larger than one page is not silently truncated.
 func (c *client) listIssues(ctx context.Context, repo string, since time.Time) ([]githubIssue, error) {
-	u := fmt.Sprintf("%s/repos/%s/issues?per_page=100&state=all&sort=updated&direction=asc&since=%s",
+	next := fmt.Sprintf("%s/repos/%s/issues?per_page=100&state=all&sort=updated&direction=asc&since=%s",
 		c.base, repo, url.QueryEscape(since.UTC().Format(time.RFC3339)))
 	var out []githubIssue
-	if err := c.getJSON(ctx, u, &out); err != nil {
-		return nil, err
+	for page := 0; next != ""; page++ {
+		if page >= maxPollPages {
+			return nil, fmt.Errorf("github: poll %s: more than %d pages of issues since %s",
+				repo, maxPollPages, since.UTC().Format(time.RFC3339))
+		}
+		var chunk []githubIssue
+		link, err := c.getJSONPage(ctx, next, &chunk)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, chunk...)
+		next = link
 	}
 	return out, nil
 }
 
-// getJSON performs an authenticated GET and decodes the response. The token is
+// myLogin is the login the connector's credential authenticates as. It is the
+// self-filter signal: an event this account authored is the navi's own egress,
+// not a new stimulus.
+func (c *client) myLogin(ctx context.Context) (string, error) {
+	var u githubUser
+	if _, err := c.getJSONPage(ctx, c.base+"/user", &u); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(u.Login) == "" {
+		return "", errors.New("github: GET /user returned no login")
+	}
+	return u.Login, nil
+}
+
+// getJSONPage performs an authenticated GET and decodes one page, returning the
+// Link header's rel="next" URL (empty when this is the last page). The token is
 // sent as a header and never appears in the URL or an error; the response body
 // is not echoed into an error, since it may contain repository content.
-func (c *client) getJSON(ctx context.Context, url string, out any) error {
+func (c *client) getJSONPage(ctx context.Context, url string, out any) (string, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("github: build poll request: %w", err)
+		return "", fmt.Errorf("github: build poll request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "opennavi")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("github: poll: %w", err)
+		return "", fmt.Errorf("github: poll: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxPollBody))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("github: poll: http %d", resp.StatusCode)
+		return "", fmt.Errorf("github: poll: http %d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("github: decode poll response: %w", err)
+		return "", fmt.Errorf("github: decode poll response: %w", err)
 	}
-	return nil
+	return linkNext(resp.Header.Get("Link")), nil
+}
+
+// linkNext returns the rel="next" URL from a GitHub Link header, or "" when
+// there is no next page. The header is a comma-separated list of
+// `<url>; rel="name"` entries.
+func linkNext(header string) string {
+	for _, entry := range strings.Split(header, ",") {
+		parts := strings.Split(entry, ";")
+		if len(parts) < 2 {
+			continue
+		}
+		target := strings.TrimSpace(parts[0])
+		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		for _, attr := range parts[1:] {
+			attr = strings.TrimSpace(attr)
+			if attr == `rel="next"` || attr == "rel=next" {
+				return target[1 : len(target)-1]
+			}
+		}
+	}
+	return ""
 }

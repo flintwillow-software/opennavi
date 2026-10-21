@@ -235,6 +235,11 @@ var (
 	// ErrThoughtProtected wraps delete rejections for thoughts whose
 	// lifecycle forbids removal (running, terminal). Check errors.Is.
 	ErrThoughtProtected = errors.New("thought protected from deletion")
+	// ErrDuplicateID is returned by Enqueue when a thought with the same id
+	// already exists. An idempotent producer that derives a deterministic id
+	// from an external event (a connector's poll loop) treats it as
+	// already-handled rather than as a failure. Check errors.Is.
+	ErrDuplicateID = errors.New("duplicate ID")
 )
 
 // validTransitions is the lifecycle state machine.
