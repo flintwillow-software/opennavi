@@ -70,6 +70,35 @@ func smokeRemove(t *testing.T, c *Client, class, space, id string) {
 	}
 }
 
+// smokeKeysetCursor asserts that a bounded find-all page carries the sort key
+// the keyset walk reads back to advance (NAVI-564). A server-side projection
+// change that dropped createdOn/modifiedOn would leave the cursor unreadable —
+// loud for the ascending comment walk, but a silent truncation for the
+// descending assigned-issue walk. It issues one bounded request rather than a
+// full walk, so it stays cheap against a large workspace.
+func smokeKeysetCursor(t *testing.T, cl *Client, class, key, op string, bound int64) {
+	t.Helper()
+	docs, err := cl.findAll(context.Background(), class,
+		map[string]any{key: map[string]any{op: bound}},
+		map[string]any{"limit": 5, "sort": map[string]any{key: 1}})
+	if err != nil {
+		t.Fatalf("find-all %s with a nested %s bound: %v", class, key, err)
+	}
+	if len(docs) == 0 {
+		t.Logf("no %s documents at %s %d; cursor readability not exercised", class, op, bound)
+		return
+	}
+	for _, doc := range docs {
+		if _, ok := doc[key]; !ok {
+			t.Fatalf("%s page with a nested %s bound is missing the %s field; the keyset cursor cannot advance", class, op, key)
+		}
+		if intField(doc, key) == 0 {
+			t.Fatalf("%s page returned %s = 0; the keyset cursor cannot advance", class, key)
+		}
+	}
+	t.Logf("cursor key %s present on %d %s documents (nested %s bound)", key, len(docs), class, op)
+}
+
 func TestLiveSmoke(t *testing.T) {
 	if os.Getenv("HULY_LIVE_SMOKE") == "" {
 		t.Skip("set HULY_LIVE_SMOKE=1 to run the live Huly smoke test (it writes to the real workspace)")
@@ -281,6 +310,13 @@ func TestLiveSmokeInbound(t *testing.T) {
 		t.Fatal("this account resolves to no Huly Person; the pick-up path cannot work for it")
 	}
 	t.Logf("account person id = %s", personID)
+
+	// NAVI-564: the keyset walk advances by reading the sort key back from each
+	// page, so a bounded page must carry it. Assert both shapes — the ascending
+	// comment window and the descending assigned-issue set — against the real
+	// server, since a projection change would otherwise truncate silently.
+	smokeKeysetCursor(t, cl, classChatMessage, "createdOn", "$gte", 0)
+	smokeKeysetCursor(t, cl, classIssue, "modifiedOn", "$lte", time.Now().UnixMilli())
 
 	out, err := cl.issueCreate(ctx, map[string]any{
 		"project": "NAVI", "title": "smoke: inbound — delete me", "status": "Backlog",
