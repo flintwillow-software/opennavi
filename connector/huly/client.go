@@ -299,6 +299,102 @@ func (c *Client) findAll(ctx context.Context, class string, query, options map[s
 	return bare, nil
 }
 
+// maxKeysetPages bounds a keyset walk. Huly's find-all has no offset or cursor
+// (FindOptions carries only limit, sort, lookup, projection and total), so
+// reading past one page means re-querying with the sort key tightened. The walk
+// stops here with an error rather than truncating: a window that needs more
+// pages is either genuinely huge or not draining, and silently dropping the
+// tail is the bug this exists to prevent.
+const maxKeysetPages = 100
+
+// findAllKeyset reads every document matching query by walking the sort key.
+//
+// The endpoint cannot be paged by offset, so each page is fetched with the sort
+// key bounded inclusively at the last key read — the newest for an ascending
+// walk, the oldest for a descending one — and documents already read are dropped
+// by id. An inclusive bound with local dedupe is what makes a page boundary that
+// lands inside a group sharing one key value (a millisecond, for createdOn or
+// modifiedOn) safe: `$gt` would skip the rest of the group. A full page that
+// yields nothing new means more than one page shares a single key value, which
+// find-all cannot page past; that is an error, not a truncation. start bounds
+// the first page (nil = unbounded), and the page size comes from options' limit.
+func (c *Client) findAllKeyset(ctx context.Context, class, key string, descending bool, start *int64, query, options map[string]any) ([]map[string]any, error) {
+	pageSize := intField(options, "limit")
+	if pageSize <= 0 {
+		pageSize = 200
+	}
+	opts := make(map[string]any, len(options)+1)
+	for k, v := range options {
+		opts[k] = v
+	}
+	order := 1
+	if descending {
+		order = -1
+	}
+	opts["sort"] = map[string]any{key: order}
+
+	bounded := start != nil
+	var cursor int64
+	if start != nil {
+		cursor = *start
+	}
+	read := map[string]bool{}
+	var out []map[string]any
+	for page := 0; ; page++ {
+		if page >= maxKeysetPages {
+			return nil, fmt.Errorf("huly: find-all %s: more than %d pages; the %s window did not drain", class, maxKeysetPages, key)
+		}
+		q := make(map[string]any, len(query)+1)
+		for k, v := range query {
+			q[k] = v
+		}
+		if bounded {
+			op := "$gte"
+			if descending {
+				op = "$lte"
+			}
+			q[key] = map[string]any{op: cursor}
+		}
+		batch, err := c.findAll(ctx, class, q, opts)
+		if err != nil {
+			return nil, err
+		}
+		fresh := 0
+		for _, doc := range batch {
+			id := stringField(doc, "_id")
+			if read[id] {
+				continue
+			}
+			read[id] = true
+			out = append(out, doc)
+			fresh++
+		}
+		if len(batch) < pageSize {
+			return out, nil
+		}
+		if fresh == 0 {
+			return nil, fmt.Errorf("huly: find-all %s: a full page of %d documents shares %s %d; find-all has no offset to page past them", class, pageSize, key, cursor)
+		}
+		cursor = edgeKey(batch, key, descending)
+		bounded = true
+	}
+}
+
+// edgeKey returns the value a keyset walk advances to: the largest key in the
+// page for an ascending walk, the smallest for a descending one.
+func edgeKey(docs []map[string]any, key string, descending bool) int64 {
+	var edge int64
+	first := true
+	for _, doc := range docs {
+		v := int64(intField(doc, key))
+		if first || (!descending && v > edge) || (descending && v < edge) {
+			edge = v
+			first = false
+		}
+	}
+	return edge
+}
+
 // restoreQueryFields puts back the scalar fields Huly's REST find-all omits
 // from the documents it returns. The server uses the query as an EXCLUSION
 // projection as well as a filter: a document fetched with

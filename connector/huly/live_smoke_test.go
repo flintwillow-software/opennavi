@@ -316,8 +316,7 @@ func TestLiveSmokeInbound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSeenStore: %v", err)
 	}
-	since := time.Unix(0, 0)
-	c.pollOnce(ctx, connector.Deps{ThoughtSystem: ts}, seen, &since)
+	c.pollOnce(ctx, connector.Deps{ThoughtSystem: ts}, seen, time.Hour)
 
 	for _, th := range ts.GetThoughts() {
 		if th.Metadata["identifier"] == identifier && th.Metadata["event"] == string(EventIssueAssigned) {

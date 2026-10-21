@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,10 @@ type fakeHuly struct {
 	persons  []map[string]any
 	comments []map[string]any
 	project  map[string]any
+
+	// failChatMessages makes the chat-message find-all fail, so a test can
+	// prove a failed poll window does not advance the watermark.
+	failChatMessages bool
 
 	tags          []map[string]any
 	tagRefs       []map[string]any
@@ -130,9 +135,17 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("query"); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &query)
 	}
+	var options map[string]any
+	if raw := r.URL.Query().Get("options"); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &options)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, "find-all:"+class)
+	if class == classChatMessage && f.failChatMessages {
+		http.Error(w, "find-all unavailable", http.StatusInternalServerError)
+		return
+	}
 
 	data := []map[string]any{}
 	switch class {
@@ -155,7 +168,35 @@ func (f *fakeHuly) serveFindAll(w http.ResponseWriter, r *http.Request) {
 	case classTagCategory:
 		data = f.tagCategories
 	}
-	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": stripQueryFields(filterDocs(data, query), query)})
+	matched := sortDocs(filterDocs(data, query), options)
+	if limit := intField(options, "limit"); limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	writeJSON(w, map[string]any{"dataType": "TotalArray", "total": -1, "value": stripQueryFields(matched, query)})
+}
+
+// sortDocs applies a find-all `sort` map (field → 1 ascending / -1 descending),
+// so a test pages against the same keyset the live server would. The connector
+// sorts on one numeric key, which is all this models.
+func sortDocs(docs []map[string]any, options map[string]any) []map[string]any {
+	sortMap, _ := options["sort"].(map[string]any)
+	if len(sortMap) == 0 {
+		return docs
+	}
+	var key string
+	var order float64
+	for k, v := range sortMap {
+		key, order = k, num(v)
+		break
+	}
+	out := append([]map[string]any(nil), docs...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if order < 0 {
+			return num(out[i][key]) > num(out[j][key])
+		}
+		return num(out[i][key]) < num(out[j][key])
+	})
+	return out
 }
 
 // stripQueryFields mimics the live server, which uses find-all's query as an
@@ -308,6 +349,18 @@ func matches(doc, query map[string]any) bool {
 			}
 			if gt, ok := want["$gt"]; ok {
 				if num(doc[k]) <= num(gt) {
+					return false
+				}
+				continue
+			}
+			if gte, ok := want["$gte"]; ok {
+				if num(doc[k]) < num(gte) {
+					return false
+				}
+				continue
+			}
+			if lte, ok := want["$lte"]; ok {
+				if num(doc[k]) > num(lte) {
 					return false
 				}
 				continue
