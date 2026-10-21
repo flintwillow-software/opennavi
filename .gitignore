@@ -7,9 +7,11 @@
 /templates/navi-fleet/navi-fleet
 /cmd/navi/navi.db
 /cmd/navi/navi.log
+/cmd/navi/navi.health.json
 /cmd/navi/state/
 /internal/testdata/external-navi/external-navi
 /internal/testdata/external-component/check
 /navi.db
 /navi.log
+/navi.health.json
 /state/

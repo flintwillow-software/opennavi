@@ -440,7 +440,7 @@ drop-oldest mailbox) and reports a gap rather than stalling the queue.
 
 ## Observability
 
-A running navi exposes its thought-queue metrics as a component, not
+Two doors report how a running navi is doing; both are components, not
 host-only plumbing.
 
 - **Metrics** — `connector/metrics` is a `connector.Connector` that wires the
@@ -451,6 +451,13 @@ host-only plumbing.
   per the merge chain), so the address is the only switch. Gauges are seeded
   from a queue snapshot at wire time, so crash-recovered thoughts are visible
   at the first scrape.
+- **Connector health** — the one-assembly design makes a connector's failed
+  `Start` non-fatal: a headless run without a free metrics or portal port
+  still processes work. `serve` records each door's start-time state (`ok`, or
+  `failed` with the reason; `disabled` is supplied by the host for an
+  undeclared door) and hands the view to a `navi.HealthRecorder`. The
+  reference navi persists it beside the database, so `navi health` reports a
+  degraded listener without reading logs.
 
 ## Agent and tools
 
