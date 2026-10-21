@@ -364,7 +364,8 @@ func TestRunEndToEndEventsFlow(t *testing.T) {
 func TestRunRecordsFailedConnectorStartAndContinues(t *testing.T) {
 	first := newFakeConnector()
 	bad := &failingConnector{}
-	n := New("t")
+	recorded := make(chan []ConnectorHealth, 1)
+	n := New("t", WithHealthRecorder(func(h []ConnectorHealth) { recorded <- h }))
 	if err := n.Connectors.Add(first); err != nil {
 		t.Fatal(err)
 	}
@@ -377,9 +378,30 @@ func TestRunRecordsFailedConnectorStartAndContinues(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- n.Run(ctx) }()
 
-	// The healthy connector still starts, and the run does not abort: a
-	// failed Start is logged and the navi keeps serving (NAVI-329).
+	// The healthy connector still starts, and the run does not abort.
 	waitFor(t, first.started, "first connector start")
+
+	var got []ConnectorHealth
+	select {
+	case got = <-recorded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("health recorder was not called")
+	}
+	if len(got) != 2 {
+		t.Fatalf("health entries = %d, want 2: %+v", len(got), got)
+	}
+	var failed *ConnectorHealth
+	for i := range got {
+		if got[i].State == ConnectorFailed {
+			failed = &got[i]
+		}
+	}
+	if failed == nil {
+		t.Fatalf("no failed entry in %+v", got)
+	}
+	if failed.Reason != "boom" {
+		t.Fatalf("failed reason = %q, want boom", failed.Reason)
+	}
 	// The one whose Start failed cleans up after itself; Stop is not
 	// called on it (the documented convention on connector.Connector).
 	if bad.stopCalled {
