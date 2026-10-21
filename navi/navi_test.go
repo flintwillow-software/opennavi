@@ -361,23 +361,41 @@ func TestRunEndToEndEventsFlow(t *testing.T) {
 	waitFor(t, p.stopped, "portal stop")
 }
 
-func TestRunAbortsAndStopsAlreadyStartedComponents(t *testing.T) {
+func TestRunRecordsFailedConnectorStartAndContinues(t *testing.T) {
 	first := newFakeConnector()
 	bad := &failingConnector{}
 	n := New("t")
-	n.Connectors.Add(first)
-	n.Connectors.Add(bad)
-
-	if err := n.Run(context.Background()); err == nil {
-		t.Fatal("want a start error")
+	if err := n.Connectors.Add(first); err != nil {
+		t.Fatal(err)
 	}
-	// The component that was already serving must be shut down.
-	waitFor(t, first.stopped, "already-started connector stop")
+	if err := n.Connectors.Add(bad); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Run(ctx) }()
+
+	// The healthy connector still starts, and the run does not abort: a
+	// failed Start is logged and the navi keeps serving (NAVI-329).
+	waitFor(t, first.started, "first connector start")
 	// The one whose Start failed cleans up after itself; Stop is not
 	// called on it (the documented convention on connector.Connector).
 	if bad.stopCalled {
 		t.Fatal("Stop called on a connector whose Start failed")
 	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned %v, want nil on cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancellation")
+	}
+	waitFor(t, first.stopped, "already-started connector stop")
 }
 
 type failingConnector struct{ stopCalled bool }

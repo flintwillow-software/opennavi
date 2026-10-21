@@ -3,12 +3,13 @@
 // no client_golang, no new dependencies (repo convention; the text
 // format is hand-rolled at this scale).
 //
-// PARKED (NAVI-354): the package has no in-repo consumer at present.
-// It was wired only by the retired `internal/daemon` run path;
-// NAVI-357 tracks wiring it onto the reference navi behind
-// `--metrics-addr` (the flag is accepted but currently only warns).
-// It is deliberately kept — not dead code — because that ticket
-// consumes the collector and its tests unchanged.
+// Collector is the exposition itself; Connector is the public component
+// that wires it to a navi (NAVI-357): it subscribes to the thought
+// system's event fanout, serves opennavi_* at /metrics on its listen
+// address, and shuts the listener down with the run. It was promoted
+// out of `internal/ops/metrics` so an out-of-repo navi gets the same
+// metrics by adding the component (ADR 0004/0010) rather than the
+// reference navi owning the plumbing.
 //
 // The collector rides the existing event seam
 // (thought.Queue.OnEvent — the same fanout the runtime logger uses):
@@ -95,8 +96,8 @@ type histogram struct {
 	count   float64
 }
 
-// New creates an empty collector.
-func New() *Collector {
+// NewCollector creates an empty collector.
+func NewCollector() *Collector {
 	return &Collector{
 		histogram:   &histogram{buckets: make([]float64, len(Buckets))},
 		started:     make(map[string]time.Time),
@@ -107,20 +108,29 @@ func New() *Collector {
 	}
 }
 
-// WireQueue subscribes the collector to the queue's event fanout and
-// seeds the gauges from a one-time snapshot of current queue state —
-// thoughts recovered by crash recovery (kill-9 → restart) are visible
-// immediately, before any event fires. The seed reads the queue
+// WireQueue subscribes the collector to the thought system's event
+// fanout and seeds the gauges from a one-time snapshot of current queue
+// state — thoughts recovered by crash recovery (kill-9 → restart) are
+// visible immediately, before any event fires. The seed reads the queue
 // outside any event emission; event handlers themselves never re-enter
 // the queue (several queue emits hold q.mu).
-func (c *Collector) WireQueue(q *thought.Queue) {
+//
+// It takes the component-facing ThoughtSystem handle rather than the
+// concrete *thought.Queue (NAVI-357): both needs — GetThoughts (seed)
+// and OnEvent (stream) — are on that interface, which is what a
+// component receives through connector.Deps, so the collector can be a
+// component instead of reference-navi-local plumbing.
+func (c *Collector) WireQueue(q thought.ThoughtSystem) {
+	if q == nil {
+		return
+	}
 	c.seed(q)
 	q.OnEvent(c.observeEvent)
 }
 
 // seed takes a one-time snapshot and sets the gauge families to the
 // queue's current distribution.
-func (c *Collector) seed(q *thought.Queue) {
+func (c *Collector) seed(q thought.ThoughtSystem) {
 	if q == nil {
 		return
 	}

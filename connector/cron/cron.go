@@ -73,6 +73,10 @@ func New(cfg Config, opts ...Option) *Connector {
 	return c
 }
 
+// Name identifies the connector in diagnostics and the health view
+// (NAVI-329).
+func (c *Connector) Name() string { return "scheduler" }
+
 // Start binds the scheduler to the navi's thought system and launches the
 // tick loop. Invalid cron expressions or timezones fail Start (and thus
 // the navi's run) rather than silently dropping a schedule.

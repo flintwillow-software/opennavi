@@ -119,6 +119,10 @@ func Handler(control portal.Portal, obs portal.Observer, objects object.Surface,
 // composition root uses it to detect port conflicts before serving.
 func (g *Gateway) Addr() string { return g.addr }
 
+// Name identifies the portal in diagnostics and the health view
+// (NAVI-329).
+func (g *Gateway) Name() string { return "portal" }
+
 // BoundAddr reports the actual bound address after Start (useful when the
 // configured address used port 0).
 func (g *Gateway) BoundAddr() string {
@@ -138,8 +142,6 @@ func (g *Gateway) Start(ctx context.Context, deps portal.Deps) error {
 	if deps.Log != nil {
 		g.log = deps.Log
 	}
-	g.obs = deps.Observation
-	g.sub = deps.Observation.Subscribe(DefaultSubscriptionCap)
 	// The object surface is handed in the same Deps (ADR 0017): the gateway
 	// serves whatever the navi exposes, exactly as the in-process portal does.
 	g.objects = deps.Objects
@@ -147,10 +149,17 @@ func (g *Gateway) Start(ctx context.Context, deps portal.Deps) error {
 	// gateway presents the credential and acts on the answer.
 	g.auth = deps.Authenticator
 
+	// Bind before subscribing: a failed Start must release everything it
+	// acquired (the Connector/Portal Start contract), and the observation
+	// subscription cannot be unsubscribed, so a bind failure must not leave
+	// one behind — a failed listener no longer aborts the run, so the leak
+	// would otherwise survive it.
 	ln, err := net.Listen("tcp", g.addr)
 	if err != nil {
 		return fmt.Errorf("gateway: listen %s: %w", g.addr, err)
 	}
+	g.obs = deps.Observation
+	g.sub = deps.Observation.Subscribe(DefaultSubscriptionCap)
 	g.ln = ln
 	// The goroutine keeps its OWN reference: Stop nils g.srv, and reading the
 	// field from the serve goroutine raced that write — a fast shutdown

@@ -272,6 +272,18 @@ reason a connector does — observation arrives through `Deps.Observation`, a
 bounded subscription a slow surface drains (and may fall behind) without ever
 slowing the queue.
 
+**A component's failed `Start` is logged and does not take the run down.** A
+connector or portal that cannot start is auxiliary to the queue: `serve` logs
+the failure and keeps serving the components that did start, rather than
+aborting a run that could still process work. A component whose `Start` failed
+must release whatever it acquired before failing, and `Stop` is not called for
+it (the `Start`/`Stop` convention on the interfaces). The one-assembly design
+made this the contract — the retired `internal/daemon`'s `startConnectors`
+documented it verbatim — and it has already regressed silently once, when the
+composition root replaced that path and the rule lived only in a comment on
+the code being deleted. It is stated here so it cannot regress a third time;
+surfacing a degraded door to an operator is the companion view (NAVI-329).
+
 - **Connectors** are **bidirectional service integrations** ([ADR 0014](../adr/0014-connectors-are-bidirectional-service-integrations.md)). Inbound, they turn external stimuli into thoughts and manage their lifecycles (spawn/attach/route) — how a service gets the navi's attention. Outbound, they supply the tools that let the navi act on that service: egress tools (`github_issue_reply`, `discord_send`) close over the connector's live client and are added **explicitly** by the author via `connector.SendTool()` — never auto-registered, so the capability surface stays visible in `main.go`. The mechanism is contract-pure: `SendTool` builds an ordinary `tool.Tool` and references only the `tool` package, so an out-of-repo connector author inherits no implementation dependency (ADR 0020). Lifecycle gating is structural rather than a rule each author remembers — the connector publishes its client into a `connector.Live[C]` handle in `Start` and clears it in `Stop`, and a call outside that window returns `connector.ErrNotStarted` instead of dereferencing a nil client. Both halves share one connection, config, and credential. There is no generic egress payload: what is sent is service-specific. Role separation between navis is therefore **structural** — a function of which components and tools exist, not of what a prompt says. `connector/github` is the worked example — wired into the `navi-code` template, where the tool is added explicitly and the credential is an environment reference. A credential may be static (a reference resolved per call), read from the developer's `gh` login, or **minted**: `github.AppInstallation` signs an RS256 JWT with the app's private key and exchanges it for an installation token, caching and re-minting it — before the hour is up and on a 401 — so the token is never per-call (ADR 0020 decision 8). Its inbound half is the build-time subscription declaration and the poll loop (ADR 0023): a declared event becomes a thought, deduped so a redelivery does not spawn a second one.
 - **Portals** are human-facing; they list, schedule, and steer, and stream the
   same queue and running-agent events a connector can observe — through
@@ -425,6 +437,20 @@ consumer needs a low-latency upstream. Both bindings **push**: the TUI's pump
 `Program.Send`, so the 150 ms active / 1 s idle poll cadences are gone and an
 idle portal is never blind. A slow UI loses only its own events (bounded,
 drop-oldest mailbox) and reports a gap rather than stalling the queue.
+
+## Observability
+
+A running navi exposes its thought-queue metrics as a component, not
+host-only plumbing.
+
+- **Metrics** — `connector/metrics` is a `connector.Connector` that wires the
+  Prometheus collector to the thought system and serves the `opennavi_*` text
+  exposition at `/metrics` (pure Go — no OTel SDK, no `client_golang`). The
+  reference navi declares it when a listen address is configured: the
+  `--metrics-addr` flag or the runtime YAML's `metrics_addr` (the flag wins
+  per the merge chain), so the address is the only switch. Gauges are seeded
+  from a queue snapshot at wire time, so crash-recovered thoughts are visible
+  at the first scrape.
 
 ## Agent and tools
 
