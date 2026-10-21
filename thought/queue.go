@@ -434,7 +434,7 @@ func (q *Queue) Enqueue(t *Thought) error {
 	q.mu.Lock()
 	if _, exists := q.findByID(t.ID); exists {
 		q.mu.Unlock()
-		return fmt.Errorf("thought: duplicate ID %s", t.ID)
+		return fmt.Errorf("thought: %w %s", ErrDuplicateID, t.ID)
 	}
 	if err := q.validateDeps(t); err != nil {
 		q.mu.Unlock()

@@ -130,6 +130,14 @@ type Config struct {
 	// PollInterval is how often the inbound loop polls. Zero =
 	// DefaultPollInterval.
 	PollInterval time.Duration
+	// SelfLogin is the GitHub login this connector posts as. An inbound event
+	// that login authored is the navi's own egress (its own comment), not a
+	// new stimulus, so it is ignored — otherwise a comment mentioning the
+	// watched login re-enters as an event and loops. Empty = the account's own
+	// login is resolved from GET /user (retried each poll until it succeeds,
+	// warned once); an unresolvable login leaves the self-filter off rather
+	// than stopping inbound.
+	SelfLogin string
 }
 
 // Connector is the GitHub integration. It implements connector.Connector for
@@ -143,6 +151,15 @@ type Connector struct {
 	stateDB *sql.DB
 	// now overrides the poll clock (tests). Nil = time.Now.
 	now func() time.Time
+
+	// selfLoginVal is the login the credential posts as, resolved once from
+	// Config.SelfLogin or GET /user so the connector's own egress comments
+	// cannot re-enter as inbound events. selfResolved guards the once;
+	// selfWarned keeps a resolution failure to one log line while it retries.
+	selfMu       sync.Mutex
+	selfLoginVal string
+	selfResolved bool
+	selfWarned   bool
 
 	// pollCancel / pollWG control the inbound poll loop.
 	pollCancel context.CancelFunc
