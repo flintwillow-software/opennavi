@@ -3,6 +3,8 @@ package huly
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -210,7 +212,7 @@ func (c *Connector) startInbound(ctx context.Context, deps connector.Deps) error
 		return err
 	}
 	if c.stateDB == nil && deps.Log != nil {
-		deps.Log.Warn("huly: inbound dedupe is in-memory only; a restart may replay a redelivery (wire WithStateStore)")
+		deps.Log.Warn("huly: inbound dedupe and poll watermark are in-memory only; a restart may replay a redelivery (wire WithStateStore)")
 	}
 	// An account with no Person record has no "my issues" to poll; surface it
 	// once rather than as a silent no-op every cycle.
@@ -235,10 +237,7 @@ func (c *Connector) startInbound(ctx context.Context, deps connector.Deps) error
 
 // pollLoop polls immediately, then on the interval, until ctx is cancelled.
 func (c *Connector) pollLoop(ctx context.Context, deps connector.Deps, seen *seenStore, interval time.Duration) {
-	// The first comment window looks back one interval so work that arrived
-	// while the navi was down is picked up, not skipped.
-	since := c.clock().Add(-interval)
-	c.pollOnce(ctx, deps, seen, &since)
+	c.pollOnce(ctx, deps, seen, interval)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -246,39 +245,64 @@ func (c *Connector) pollLoop(ctx context.Context, deps connector.Deps, seen *see
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.pollOnce(ctx, deps, seen, &since)
+			c.pollOnce(ctx, deps, seen, interval)
 		}
 	}
 }
 
 // pollOnce runs one poll over every declared subscription.
-func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *seenStore, since *time.Time) {
+//
+// The watermark advances per subscription only when that subscription's whole
+// cycle succeeded: a failed fetch or enqueue leaves it in place, so the next
+// poll re-reads the same window and a transient failure does not drop it (a
+// failed event is not marked seen either, so it is retried). interval is the
+// fallback lookback for a subscription that has never polled successfully — a
+// first run, or a restart whose persisted watermark is absent — so downtime
+// longer than one interval is recovered from the stored watermark, not lost.
+func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *seenStore, interval time.Duration) {
 	now := c.clock()
 	cl, err := c.live.Get()
 	if err != nil {
 		return // not serving; the loop stops when the connector stops
 	}
-	personID, err := cl.myPersonID(ctx)
-	if err != nil || personID == "" {
+	sess, err := cl.session(ctx)
+	if err != nil {
+		return // reported at start; the next poll retries
+	}
+	personID, self := sess.personID, sess.socialID
+	if personID == "" {
 		return // reported at start; nothing to poll
 	}
 	for _, sub := range c.cfg.Subscriptions {
-		events, perr := c.pollSubscription(ctx, cl, seen, sub, personID, *since)
+		since := seen.watermark(sub.Name, now.Add(-interval))
+		events, perr := c.pollSubscription(ctx, cl, seen, sub, personID, since)
 		if perr != nil {
 			if deps.Log != nil {
 				deps.Log.Warn("huly: poll failed", "subscription", sub.Name, "err", perr.Error())
 			}
 			continue
 		}
+		ok := true
 		for _, ev := range events {
 			if !sub.declares(ev.Kind) {
 				continue
+			}
+			if self != "" && ev.Author == self {
+				continue // the navi's own egress cannot re-enter as an event
 			}
 			key := ev.dedupeKey()
 			if seen.has(sub.Name, key) {
 				continue
 			}
 			if eerr := c.enqueueEvent(deps, sub, ev, now); eerr != nil {
+				if errors.Is(eerr, thought.ErrDuplicateID) {
+					// The deterministic thought id already exists: the seen-set was
+					// lost but the queue survived, so the event has been handled.
+					// Mark it seen rather than retrying it every poll.
+					seen.mark(sub.Name, key, now)
+					continue
+				}
+				ok = false
 				if deps.Log != nil {
 					deps.Log.Error("huly: enqueue failed", "subscription", sub.Name, "event", string(ev.Kind), "err", eerr.Error())
 				}
@@ -286,8 +310,10 @@ func (c *Connector) pollOnce(ctx context.Context, deps connector.Deps, seen *see
 			}
 			seen.mark(sub.Name, key, now)
 		}
+		if ok {
+			seen.setWatermark(sub.Name, now)
+		}
 	}
-	*since = now
 }
 
 // pollSubscription fetches the events of one subscription. Assigned issues are
@@ -368,14 +394,81 @@ func commentEvent(kind EventKind, cm map[string]any, text, author string) inboun
 }
 
 // mentionsPerson reports whether a comment's raw ProseMirror markup names the
-// person. A Huly mention embeds the person's document id in the markup (the UI
-// resolves it from there), so the id is the reliable signal — the display name
-// is not, and the exact node shape is not part of the contract.
+// person outside code and quoted text. A Huly mention embeds the person's
+// document id in the markup (the UI resolves it from there), so the id is the
+// reliable signal — the display name is not, and the exact node shape is not
+// part of the contract. A code block, a block quote, or inline code carries the
+// id too but is not a request to the navi, so those subtrees are dropped before
+// the search. Markup that is not the JSON object Huly stores falls back to a
+// whole-string search rather than dropping a possible mention.
 func mentionsPerson(raw, personID string) bool {
 	if strings.TrimSpace(personID) == "" {
 		return false
 	}
+	if stripped, ok := stripMarkupNoise(raw); ok {
+		return strings.Contains(stripped, personID)
+	}
 	return strings.Contains(raw, personID)
+}
+
+// stripMarkupNoise removes ProseMirror code-block, block-quote, and inline-code
+// subtrees from a comment's markup, returning the remaining JSON. ok is false
+// when the markup is not the JSON object Huly stores.
+func stripMarkupNoise(raw string) (string, bool) {
+	var doc any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return "", false
+	}
+	blob, err := json.Marshal(pruneNoiseNodes(doc))
+	if err != nil {
+		return "", false
+	}
+	return string(blob), true
+}
+
+// pruneNoiseNodes drops the node subtrees a mention must not be read from:
+// code blocks, block quotes, and text carrying a `code` mark. It returns nil
+// for a dropped node (or a JSON null), and the parent omits it.
+func pruneNoiseNodes(node any) any {
+	switch v := node.(type) {
+	case map[string]any:
+		switch stringField(v, "type") {
+		case "codeBlock", "code_block", "blockquote":
+			return nil
+		case "text":
+			if hasCodeMark(v) {
+				return nil
+			}
+		}
+		out := make(map[string]any, len(v))
+		for k, child := range v {
+			if pruned := pruneNoiseNodes(child); pruned != nil {
+				out[k] = pruned
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, child := range v {
+			if pruned := pruneNoiseNodes(child); pruned != nil {
+				out = append(out, pruned)
+			}
+		}
+		return out
+	default:
+		return node
+	}
+}
+
+// hasCodeMark reports whether a ProseMirror text node is inline code.
+func hasCodeMark(node map[string]any) bool {
+	marks, _ := node["marks"].([]any)
+	for _, mark := range marks {
+		if m, ok := mark.(map[string]any); ok && stringField(m, "type") == "code" {
+			return true
+		}
+	}
+	return false
 }
 
 // enqueueEvent turns one stimulus into a thought (ADR 0023 decision 8) and
@@ -442,9 +535,10 @@ func defaultPrompt(ev inboundEvent) string {
 
 // ── the persisted seen-set and status baseline (ADR 0023 decision 5) ────
 
-// seenStore dedupes redelivered events and remembers the last status seen for
-// an issue. With a state store it is SQLite shared with the navi's session DB;
-// without one it is in memory, and a restart may replay a redelivery.
+// seenStore dedupes redelivered events, remembers the last status seen for an
+// issue, and remembers each subscription's poll watermark. With a state store it
+// is SQLite shared with the navi's session DB; without one it is in memory, and
+// a restart replays the last interval rather than resuming from the watermark.
 type seenStore struct {
 	db  *sql.DB
 	mu  sync.Mutex
@@ -452,10 +546,13 @@ type seenStore struct {
 	// statuses remembers each issue's last-seen status so a change is a
 	// transition, not a first sighting.
 	statuses map[string]string
+	// watermarks remembers each subscription's last successful poll time so a
+	// restart resumes from it instead of re-scanning a fixed lookback window.
+	watermarks map[string]time.Time
 }
 
 func newSeenStore(db *sql.DB) (*seenStore, error) {
-	s := &seenStore{db: db, mem: map[string]struct{}{}, statuses: map[string]string{}}
+	s := &seenStore{db: db, mem: map[string]struct{}{}, statuses: map[string]string{}, watermarks: map[string]time.Time{}}
 	if db != nil {
 		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS huly_seen_events (
 			subscription TEXT NOT NULL,
@@ -471,6 +568,12 @@ func newSeenStore(db *sql.DB) (*seenStore, error) {
 			updated_at DATETIME NOT NULL
 		)`); err != nil {
 			return nil, fmt.Errorf("huly: create huly_issue_status: %w", err)
+		}
+		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS huly_poll_watermark (
+			subscription TEXT PRIMARY KEY,
+			since DATETIME NOT NULL
+		)`); err != nil {
+			return nil, fmt.Errorf("huly: create huly_poll_watermark: %w", err)
 		}
 	}
 	return s, nil
@@ -525,6 +628,52 @@ func (s *seenStore) setStatus(issueID, status string, at time.Time) {
 		issueID, status, at.UTC().Format(time.RFC3339Nano))
 }
 
+// watermark returns the subscription's last successful poll time, or fallback
+// when it has never polled successfully (a first run, or a restart before the
+// first success).
+func (s *seenStore) watermark(sub string, fallback time.Time) time.Time {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if at, ok := s.watermarks[sub]; ok {
+			return at
+		}
+		return fallback
+	}
+	var raw any
+	if err := s.db.QueryRow(`SELECT since FROM huly_poll_watermark WHERE subscription = ?`, sub).Scan(&raw); err != nil {
+		return fallback
+	}
+	switch v := raw.(type) {
+	case time.Time:
+		return v.UTC()
+	case string:
+		if at, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return at.UTC()
+		}
+	case []byte:
+		if at, err := time.Parse(time.RFC3339Nano, string(v)); err == nil {
+			return at.UTC()
+		}
+	}
+	return fallback
+}
+
+// setWatermark records a successful poll. A write failure is not fatal to the
+// poll: the next cycle falls back to the lookback window rather than losing
+// events.
+func (s *seenStore) setWatermark(sub string, at time.Time) {
+	at = at.UTC()
+	if s.db == nil {
+		s.mu.Lock()
+		s.watermarks[sub] = at
+		s.mu.Unlock()
+		return
+	}
+	_, _ = s.db.Exec(`INSERT OR REPLACE INTO huly_poll_watermark (subscription, since) VALUES (?, ?)`,
+		sub, at.Format(time.RFC3339Nano))
+}
+
 // ── read-side API calls (the shared client, ADR 0023 decision 6) ────────
 
 // myPersonID is the Person document id the account resolves to.
@@ -536,10 +685,19 @@ func (c *Client) myPersonID(ctx context.Context) (string, error) {
 	return s.personID, nil
 }
 
-// listAssignedIssues returns the issues assigned to personID, optionally
-// narrowed to one project. It is polled in full (no `since` window) because the
-// persisted seen-set and status baseline are what make it idempotent: an issue
-// assigned while the navi was down is picked up, not skipped.
+// commentPageSize and issuePageSize bound one find-all request, not the result:
+// findAllKeyset follows the sort key past them so a burst is read whole.
+const (
+	commentPageSize = 100
+	issuePageSize   = 200
+)
+
+// listAssignedIssues returns every issue assigned to personID, optionally
+// narrowed to one project, walking the keyset so a set larger than one page is
+// read whole rather than truncated. It is polled in full (no `since` window)
+// because the persisted seen-set and status baseline are what make it
+// idempotent: an issue assigned while the navi was down is picked up, not
+// skipped.
 func (c *Client) listAssignedIssues(ctx context.Context, personID, project string) ([]map[string]any, error) {
 	query := map[string]any{"assignee": personID}
 	if p := strings.TrimSpace(project); p != "" {
@@ -549,15 +707,16 @@ func (c *Client) listAssignedIssues(ctx context.Context, personID, project strin
 		}
 		query["space"] = stringField(proj, "_id")
 	}
-	return c.findAll(ctx, classIssue, query, map[string]any{
-		"limit": 200,
-		"sort":  map[string]any{"modifiedOn": -1},
-	})
+	return c.findAllKeyset(ctx, classIssue, "modifiedOn", true, nil, query,
+		map[string]any{"limit": issuePageSize})
 }
 
-// listCommentsSince returns comments created after t, oldest first.
+// listCommentsSince returns every comment created at or after t, oldest first,
+// walking the keyset so a burst larger than one page is read whole rather than
+// truncated. The bound is inclusive so a comment written in the same millisecond
+// as the watermark is re-read (and deduped) rather than skipped.
 func (c *Client) listCommentsSince(ctx context.Context, since time.Time) ([]map[string]any, error) {
-	return c.findAll(ctx, classChatMessage,
-		map[string]any{"createdOn": map[string]any{"$gt": since.UnixMilli()}},
-		map[string]any{"limit": 100, "sort": map[string]any{"createdOn": 1}})
+	start := since.UnixMilli()
+	return c.findAllKeyset(ctx, classChatMessage, "createdOn", false, &start, nil,
+		map[string]any{"limit": commentPageSize})
 }
