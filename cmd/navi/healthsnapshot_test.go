@@ -133,3 +133,13 @@ func TestMergeRuntimeCarriesMetricsAddr(t *testing.T) {
 		t.Fatalf("MetricsAddr = %q, want :9090", rc.MetricsAddr)
 	}
 }
+
+func TestMergeRuntimeCarriesWebhookAddr(t *testing.T) {
+	rc, err := mergeRuntime(runParams{dbPath: filepath.Join(t.TempDir(), "navi.db"), webhookAddr: ":8081"})
+	if err != nil {
+		t.Fatalf("mergeRuntime: %v", err)
+	}
+	if rc.WebhookAddr != ":8081" {
+		t.Fatalf("WebhookAddr = %q, want :8081", rc.WebhookAddr)
+	}
+}

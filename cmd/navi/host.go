@@ -31,6 +31,7 @@ func runHost(args []string) error {
 	workers := fs.Int("workers", 2, "thought worker count")
 	metricsAddr := fs.String("metrics-addr", "", "Prometheus metrics listen address, e.g. :9090 (default: disabled)")
 	portalAddr := fs.String("portal-addr", "", "portal observation/control listen address, e.g. :8090 (default: disabled)")
+	webhookAddr := fs.String("webhook-addr", "", "webhook ingress listen address, e.g. :8081 (default: disabled); connectors declare routes, the navi owns the listener (ADR 0029)")
 	trustStore := fs.String("trust-store", "", "path (or env var name holding a path) of a keyed trust store declaring principals and their keys; ADR 0021 decision 6")
 	oidcIssuer := fs.String("oidc-issuer", "", "OIDC identity-provider issuer URL; humans authenticate through it (ADR 0021 decisions 6-8)")
 	oidcAudience := fs.String("oidc-audience", "", "expected OIDC audience (this navi's client id); required with --oidc-issuer")
@@ -87,6 +88,7 @@ func runHost(args []string) error {
 		workers:      *workers,
 		metricsAddr:  *metricsAddr,
 		portalAddr:   *portalAddr,
+		webhookAddr:  *webhookAddr,
 		trustStore:   *trustStore,
 		oidcIssuer:   *oidcIssuer,
 		oidcAudience: *oidcAudience,

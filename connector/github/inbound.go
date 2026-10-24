@@ -107,6 +107,17 @@ type Subscription struct {
 	Mention string
 }
 
+// declares reports whether the subscription names an event kind. The webhook
+// binding uses it too, so both transports agree on what a subscription serves.
+func (s Subscription) declares(k EventKind) bool {
+	for _, e := range s.Events {
+		if e == k {
+			return true
+		}
+	}
+	return false
+}
+
 // inboundEvent is one polled stimulus, normalized across event kinds.
 type inboundEvent struct {
 	ID     string
@@ -171,29 +182,12 @@ func validateSubscription(s Subscription) error {
 // launches the poll loop bound to the navi's thought system. A declaration the
 // binding cannot serve fails Start (and thus the navi's run), so a
 // misconfiguration is visible at composition rather than as missing work.
-func (c *Connector) startInbound(ctx context.Context, deps connector.Deps) error {
+func (c *Connector) startInbound(ctx context.Context, deps connector.Deps, seen *seenStore) error {
 	if len(c.cfg.Subscriptions) == 0 {
 		return nil
 	}
 	if deps.ThoughtSystem == nil {
 		return fmt.Errorf("github: inbound subscriptions require a thought system")
-	}
-	names := map[string]bool{}
-	for _, s := range c.cfg.Subscriptions {
-		if names[s.Name] {
-			return fmt.Errorf("github: duplicate subscription %q", s.Name)
-		}
-		names[s.Name] = true
-		if err := validateSubscription(s); err != nil {
-			return fmt.Errorf("github: %w", err)
-		}
-	}
-	seen, err := newSeenStore(c.stateDB)
-	if err != nil {
-		return err
-	}
-	if c.stateDB == nil && deps.Log != nil {
-		deps.Log.Warn("github: inbound dedupe and poll watermark are in-memory only; a restart may replay a redelivery (wire WithStateStore)")
 	}
 	interval := c.cfg.PollInterval
 	if interval <= 0 {

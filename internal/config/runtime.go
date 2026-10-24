@@ -135,6 +135,10 @@ type RuntimeConfig struct {
 	// disabled). It mirrors the --metrics-addr flag, so the YAML can turn
 	// the same knob (NAVI-357).
 	MetricsAddr string `yaml:"metrics_addr,omitempty"`
+	// WebhookAddr is the webhook ingress listen address ("" = disabled). It
+	// mirrors the --webhook-addr flag (ADR 0029 decision 2: the navi owns
+	// ONE webhook listener, and a connector declares only its route).
+	WebhookAddr string `yaml:"webhook_addr,omitempty"`
 }
 
 // DefaultRuntimeConfig is the baked-in baseline of the merge chain.
@@ -275,6 +279,9 @@ func mergeRuntime(dst *RuntimeConfig, src RuntimeConfig) {
 	}
 	if src.MetricsAddr != "" {
 		dst.MetricsAddr = src.MetricsAddr
+	}
+	if src.WebhookAddr != "" {
+		dst.WebhookAddr = src.WebhookAddr
 	}
 	if src.ToolCaps != nil {
 		tc := *src.ToolCaps
