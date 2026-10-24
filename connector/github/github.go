@@ -130,6 +130,12 @@ type Config struct {
 	// PollInterval is how often the inbound loop polls. Zero =
 	// DefaultPollInterval.
 	PollInterval time.Duration
+	// Webhooks are the build-time webhook declarations (ADR 0029). Empty = the
+	// connector has no webhook binding. Each binding serves the subscription
+	// of the same Name, so one declaration governs both transports; the
+	// binding is an addition to polling, never a replacement (ADR 0023
+	// decision 4).
+	Webhooks []WebhookBinding
 	// SelfLogin is the GitHub login this connector posts as. An inbound event
 	// that login authored is the navi's own egress (its own comment), not a
 	// new stimulus, so it is ignored — otherwise a comment mentioning the
@@ -164,6 +170,14 @@ type Connector struct {
 	// pollCancel / pollWG control the inbound poll loop.
 	pollCancel context.CancelFunc
 	pollWG     sync.WaitGroup
+
+	// bindings are the validated webhook declarations, with their per-source
+	// rate-limit state. webhookStop removes the routes Start registered.
+	bindings    []*webhookBinding
+	webhookStop func()
+	// seen is the shared inbound dedupe set, built once at Start and used by
+	// BOTH transports (ADR 0029 decision 6).
+	seen *seenStore
 }
 
 // Option configures the connector.
@@ -215,9 +229,71 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 		deps.Log.Warn("github connector has no usable credential; its egress tools will refuse", "err", err)
 	}
 	c.live.Set(c.newClient())
+	// Validate the declared subscriptions once, whichever transports serve
+	// them: a declaration neither transport can serve is a composition error,
+	// and a duplicate name is ambiguous for the dedupe scope (ADR 0023
+	// decision 1, ADR 0029 decision 10).
+	if err := c.validateDeclarations(); err != nil {
+		c.live.Clear()
+		return err
+	}
+	// ONE seen-set for both transports, so a delivery seen by one is not
+	// reprocessed by the other (ADR 0029 decision 6).
+	seen, err := newSeenStore(c.stateDB)
+	if err != nil {
+		c.live.Clear()
+		return err
+	}
+	c.seen = seen
+	if c.stateDB == nil && deps.Log != nil {
+		deps.Log.Warn("github: inbound dedupe and poll watermark are in-memory only; a restart may replay a redelivery (wire WithStateStore)")
+	}
+	// The webhook binding registers its route on the navi's shared router
+	// BEFORE the poll loop starts, so a delivery cannot arrive at a route that
+	// is not yet served. A registration failure releases the client so Start
+	// has not half-succeeded (the Start/Stop convention).
+	stop, err := c.startWebhooks(ctx, deps)
+	if err != nil {
+		c.live.Clear()
+		return err
+	}
+	c.webhookStop = stop
 	// The inbound half (ADR 0023) reuses this same client; it starts no second
 	// connection and resolves no second credential.
-	return c.startInbound(ctx, deps)
+	if err := c.startInbound(ctx, deps, seen); err != nil {
+		stop()
+		c.webhookStop = nil
+		c.live.Clear()
+		return err
+	}
+	return nil
+}
+
+// validateDeclarations checks the declared subscriptions once, before either
+// transport starts, so a misconfiguration fails Start rather than silently
+// dropping events at runtime.
+func (c *Connector) validateDeclarations() error {
+	names := map[string]bool{}
+	for _, s := range c.cfg.Subscriptions {
+		if names[s.Name] {
+			return fmt.Errorf("github: duplicate subscription %q", s.Name)
+		}
+		names[s.Name] = true
+		if err := validateSubscription(s); err != nil {
+			return fmt.Errorf("github: %w", err)
+		}
+	}
+	return nil
+}
+
+// seenStore returns the connector's shared seen-set, built at Start. It is an
+// error to call it before Start, which the webhook handler never does because
+// a route is only registered during Start.
+func (c *Connector) seenStore() (*seenStore, error) {
+	if c.seen == nil {
+		return nil, errors.New("github: inbound seen-set is not initialized")
+	}
+	return c.seen, nil
 }
 
 // Stop releases the client, so a call after Stop fails the same way a call
@@ -228,6 +304,14 @@ func (c *Connector) Stop() error {
 		c.pollCancel = nil
 		c.pollWG.Wait()
 	}
+	// Remove the routes so a stopped connector serves 404 rather than a
+	// handler over a cleared client (ADR 0029 decision 2).
+	if c.webhookStop != nil {
+		c.webhookStop()
+		c.webhookStop = nil
+		c.bindings = nil
+	}
+	c.seen = nil
 	c.live.Clear()
 	return nil
 }

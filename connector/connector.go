@@ -38,6 +38,14 @@ type Deps struct {
 	Model model.Registry
 	// Log is the shared structured logger (stdlib log/slog).
 	Log *slog.Logger
+	// Webhooks is the navi's shared webhook router (ADR 0029 decision 2).
+	// A connector declaring a webhook binding registers its route here at
+	// Start and removes it at Stop; the navi's ONE webhook listener
+	// dispatches through it, so a connector never owns a listener or a
+	// port. Nil = the navi composed no webhook listener, and a connector
+	// that declared a webhook binding must fail Start with
+	// ErrNoWebhookRouter rather than silently serving nothing.
+	Webhooks WebhookRouter
 }
 
 // Connector is the transport integration interface: Start begins

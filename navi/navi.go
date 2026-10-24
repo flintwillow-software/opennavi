@@ -97,6 +97,13 @@ type Navi struct {
 	// (WithThoughtBudget); <= 0 disables truncation and the deferral notice.
 	thoughtBudget int
 
+	// webhookAddr is the declared webhook listener address (WithWebhooks);
+	// empty = the navi serves no webhook ingress. webhooks is the shared
+	// router that listener serves and every connector registers its route
+	// on (ADR 0029 decisions 2-3).
+	webhookAddr string
+	webhooks    *connector.Router
+
 	// shortTermMemory records the WithShortTermMemory declaration.
 	shortTermMemory bool
 	// shortMemory is the always-loaded short-term memory tier, built at
@@ -695,7 +702,10 @@ func (n *Navi) serve(ctx context.Context) error {
 	if auth == nil {
 		auth = NewPortalAuthenticator(n.trust)
 	}
-	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log}
+	// The webhook router is the navi's, not a connector's (ADR 0029 decision
+	// 2): every connector registering a route receives THIS router, so one
+	// listener serves them all and the routes cannot drift apart.
+	cdeps := connector.Deps{ThoughtSystem: n.Thoughts, Model: n, Log: n.log, Webhooks: n.webhooks}
 	pdeps := portal.Deps{
 		ThoughtSystem: n.Thoughts,
 		Model:         n,
@@ -716,6 +726,31 @@ func (n *Navi) serve(ctx context.Context) error {
 	// health accumulates each door's start-time state for the health view
 	// (NAVI-329). A failed Start is recorded and the run continues.
 	var health []ConnectorHealth
+
+	// The webhook listener starts BEFORE the connectors, so a connector that
+	// registers its route during Start registers on a bound listener rather
+	// than a router nothing is serving yet (ADR 0029 decision 2). It is not in
+	// n.Connectors — the author does not declare it — so it is started here
+	// and stopped with everything else.
+	if ln := n.webhookListenerFor(); ln != nil {
+		name, addr := describeHealth(ln)
+		if err := ln.Start(ctx, cdeps); err != nil {
+			n.log.Error("webhook listener start failed; continuing", "listener", name, "err", err)
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorFailed, Addr: addr, Reason: err.Error()})
+			// No listener means no reachable webhook route: hand connectors a
+			// nil router so a webhook binding fails Start naming the reason
+			// rather than registering on a dead router.
+			cdeps.Webhooks = nil
+		} else {
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorOK, Addr: addr})
+			ln := ln
+			started = append(started, func() {
+				if err := ln.Stop(); err != nil {
+					n.log.Error("webhook listener stop", "listener", name, "err", err)
+				}
+			})
+		}
+	}
 
 	for _, c := range n.Connectors.All() {
 		name, addr := describeHealth(c)

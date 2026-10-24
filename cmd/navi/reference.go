@@ -53,6 +53,9 @@ type runParams struct {
 	workers     int
 	metricsAddr string
 	portalAddr  string
+	// webhookAddr is the webhook ingress listen address (ADR 0029). The navi
+	// owns the listener; a connector declares only its route.
+	webhookAddr string
 	daemonMode  bool
 	// noThinking turns a reasoning model's hidden reasoning off (Ollama's
 	// `think: false`), so the model answers instead of spending its budget
@@ -130,6 +133,13 @@ func serveReferenceNavi(p runParams) error {
 		// sees a degraded metrics or portal listener without reading logs
 		// (NAVI-329).
 		navi.WithHealthRecorder(connectorHealthRecorder(rc, p)),
+	}
+	// The navi's webhook ingress (ADR 0029 decision 2): ONE listener the navi
+	// owns, which connectors register their routes on. Absent, no listener is
+	// declared and a connector that declared a webhook binding fails Start
+	// naming that rather than silently serving nothing.
+	if addr := strings.TrimSpace(rc.WebhookAddr); addr != "" {
+		opts = append(opts, navi.WithWebhooks(addr))
 	}
 
 	// The compiled policy (ADR 0021 decisions 3-5). connector:github may
@@ -252,6 +262,9 @@ func mergeRuntime(p runParams) (config.RuntimeConfig, error) {
 	}
 	if p.metricsAddr != "" {
 		flags.MetricsAddr = p.metricsAddr
+	}
+	if p.webhookAddr != "" {
+		flags.WebhookAddr = p.webhookAddr
 	}
 	rc := config.MergeRuntime(fileRC, flags)
 	if err := rc.Validate(); err != nil {
