@@ -57,7 +57,13 @@ navi-fleet/
     template established.
 - **Model** — Ollama (`NAVI_MODEL`, default `qwen3.8:27b`), marked default.
   Runtime config may retarget the provider/model.
-- **Portal** — the TUI (ADR 0002).
+- **Portal** — the presentation is a runtime choice, so the same binary serves a
+  laptop and a systemd unit. `NAVI_PORTAL_ADDR` declares the portal gateway with
+  a control portal — **that is how a headless navi is driven**, and it is
+  fail-closed: with no trust source declared it refuses every remote attachment
+  (`401`) rather than accepting an anonymous one. The **TUI** is added only when
+  stdout is an interactive terminal and `NAVI_DAEMON` is not set, so a pipe, a
+  redirect, or a systemd journal never gets an alt-screen program.
 
 ## Environment
 
@@ -66,6 +72,8 @@ navi-fleet/
 | `NAVI_NAME` | navi name (also the `navi:<name>` principal) | `navi-fleet` |
 | `NAVI_CONFIG` | runtime config file | unset |
 | `NAVI_DB` | SQLite path (queue, memory, seen-sets) | `var/navi-fleet.db` |
+| `NAVI_PORTAL_ADDR` | portal gateway listen address — the headless front door | unset (disabled) |
+| `NAVI_DAEMON` | force the headless presentation even on a TTY | unset (off) |
 | `NAVI_MODEL` | Ollama model | `qwen3.8:27b` |
 | `HULY_URL` | Huly instance root | `https://huly.flintwillow.software` |
 | `HULY_WORKSPACE` | Huly workspace slug (required for Huly) | unset |
@@ -88,6 +96,17 @@ connector's capability — it does not stop the navi (ADR 0020 decision 7).
 go build -o navi-fleet ./cmd/navi-fleet
 HULY_WORKSPACE=flintwillowsoftware HULY_TOKEN=... ./navi-fleet
 ```
+
+Headless, as a service would run it (no TTY, driven over the gateway):
+
+```bash
+NAVI_DAEMON=1 NAVI_PORTAL_ADDR=127.0.0.1:8090 NAVI_DB=/var/lib/navi/navi.db ./navi-fleet
+```
+
+A deployment must also declare trust sources (`--trust-store` / `--oidc-issuer`
+equivalents in `NAVI_CONFIG`) so a remote front-end can authenticate; without one
+the gateway is up and refuses every request, which is the safe default rather
+than a misconfiguration.
 
 In-repo (from the repository root), the templates share a workspace:
 

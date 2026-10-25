@@ -34,6 +34,8 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore/sqlite"
 	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/navi"
+	"github.com/flintwillow-software/opennavi/portal"
+	"github.com/flintwillow-software/opennavi/portal/gateway"
 	"github.com/flintwillow-software/opennavi/portal/tui"
 	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/tool"
@@ -93,6 +95,15 @@ func compose() (*navi.Navi, *sqlite.Store, error) {
 	if cfg := strings.TrimSpace(os.Getenv("NAVI_CONFIG")); cfg != "" {
 		opts = append(opts, navi.WithRuntimeConfig(cfg))
 	}
+	// Trust sources (ADR 0021/0022): how a remote front-end authenticates to
+	// the gateway. Declared from the environment so a deployment needs no
+	// rebuild. Without one, a gateway-attached portal is refused — which is the
+	// correct fail-closed default, and why a headless deployment sets one.
+	trustOpts, err := trustOptions()
+	if err != nil {
+		return nil, nil, err
+	}
+	opts = append(opts, trustOpts...)
 	n := navi.New(name, opts...)
 
 	// One SQLite file backs the queue, transcripts, memory, and tool state —
@@ -164,7 +175,7 @@ func build(n *navi.Navi, store *sqlite.Store, dbPath string) (*navi.Navi, error)
 	if err := addForgejo(n); err != nil {
 		return nil, err
 	}
-	if err := addGitHub(n, n.Name()); err != nil {
+	if err := addGitHub(n, n.Name(), store.DB()); err != nil {
 		return nil, err
 	}
 
@@ -174,11 +185,95 @@ func build(n *navi.Navi, store *sqlite.Store, dbPath string) (*navi.Navi, error)
 		return nil, err
 	}
 
-	// The TUI is the front door (ADR 0002: portals).
-	if err := n.Portals.Add(tui.NewPortal()); err != nil {
+	// Portals (ADR 0002). The presentation is a runtime choice, not a compiled
+	// one: a navi deployed as a service has no terminal, and an alt-screen TUI
+	// in a systemd unit is never what the operator wanted (the same reasoning as
+	// cmd/navi's bare-`navi` default). A headless navi is driven remotely — the
+	// gateway with a control portal is how a front-end observes it and steers
+	// it — so `NAVI_PORTAL_ADDR` is the headless deployment's front door, and
+	// the TUI is added only when a terminal is actually watching.
+	if err := addPortals(n); err != nil {
 		return nil, err
 	}
 	return n, nil
+}
+
+// addPortals wires the presentation. The gateway is declared whenever an
+// address is configured (that is how a headless navi is reached); the TUI is
+// declared only when stdout is an interactive terminal and the run is not
+// explicitly headless, so a systemd unit — or any pipe — never gets an
+// alt-screen program.
+func addPortals(n *navi.Navi) error {
+	addr := strings.TrimSpace(os.Getenv("NAVI_PORTAL_ADDR"))
+	if addr != "" {
+		// The navi authorizes each action against the verified principal. A
+		// deployment declares trust sources and roles for its principals; with
+		// none declared the default is fail-closed, so a headless navi without
+		// a trust source refuses every remote attachment rather than accepting
+		// an anonymous one.
+		control := portal.NewControl(n)
+		if err := n.Portals.Add(control); err != nil {
+			return err
+		}
+		if err := n.Portals.Add(gateway.New(addr, control)); err != nil {
+			return err
+		}
+	}
+	if !headless() && stdoutIsTTY() {
+		if err := n.Portals.Add(tui.NewPortal()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// trustOptions builds the declared trust sources (ADR 0021 decision 6): a keyed
+// trust store (NAVI_TRUST_STORE, an ADR 0008 reference to the store document)
+// and/or an OIDC identity provider (NAVI_OIDC_ISSUER + NAVI_OIDC_AUDIENCE).
+// Either may be absent; absent everywhere means a remote attachment is refused,
+// which is the fail-closed default rather than an error.
+func trustOptions() ([]navi.Option, error) {
+	var opts []navi.Option
+	if ref := strings.TrimSpace(os.Getenv("NAVI_TRUST_STORE")); ref != "" {
+		store, err := navi.NewFileTrustStore(navi.FileTrustStoreConfig{Path: ref})
+		if err != nil {
+			return nil, fmt.Errorf("navi-fleet: trust store: %w", err)
+		}
+		opts = append(opts, navi.WithTrustSource(store))
+	}
+	if issuer := strings.TrimSpace(os.Getenv("NAVI_OIDC_ISSUER")); issuer != "" {
+		idp, err := navi.NewOIDC(navi.OIDCConfig{
+			Issuer:   issuer,
+			Audience: strings.TrimSpace(os.Getenv("NAVI_OIDC_AUDIENCE")),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("navi-fleet: OIDC trust source: %w", err)
+		}
+		opts = append(opts, navi.WithTrustSource(idp))
+	}
+	return opts, nil
+}
+
+// headless reports whether the run is explicitly non-interactive. NAVI_DAEMON
+// mirrors cmd/navi's --daemon: it forces the headless presentation even when a
+// terminal is attached (an operator watching logs in a pty, a test harness).
+func headless() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NAVI_DAEMON"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// stdoutIsTTY reports whether stdout is an interactive terminal — the basis for
+// choosing the TUI. A character device is a terminal; a pipe, a redirect, or a
+// systemd journal is not.
+func stdoutIsTTY() bool {
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // addHuly wires the tracker: the egress tools plus the inbound subscriptions
@@ -244,7 +339,7 @@ func addForgejo(n *navi.Navi) error {
 // addGitHub wires the public forge: egress plus the opt-in mention ingress the
 // navi-code template established. Ingress is off unless NAVI_GITHUB_USERNAME
 // names a login to watch for.
-func addGitHub(n *navi.Navi, naviName string) error {
+func addGitHub(n *navi.Navi, naviName string, db *sql.DB) error {
 	cfg := github.Config{
 		Token: github.ChainToken(
 			github.StaticToken{Ref: githubCredential},
@@ -256,7 +351,11 @@ func addGitHub(n *navi.Navi, naviName string) error {
 		cfg.PollInterval = 30 * time.Second
 		cfg.Subscriptions = subs
 	}
-	gh := github.New(cfg)
+	// The seen-set and poll watermark share the queue's SQLite file, exactly as
+	// the Huly connector's do, so a redelivery is suppressed across a restart
+	// (ADR 0023 decision 5). Without this the dedupe is in-memory and a
+	// restart replays a redelivery — the durability the deployment relies on.
+	gh := github.New(cfg, github.WithStateStore(db))
 	if err := n.Connectors.Add(gh); err != nil {
 		return err
 	}
