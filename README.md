@@ -2,7 +2,7 @@
 
 > An SDK for creating **n**etwork **a**ssistants and **v**irtual **i**nterfaces — compiled AI agent binaries distributed as single executable files.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ## Overview
 
@@ -107,4 +107,8 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+You may use, modify, and distribute OpenNAVI freely, including commercially.
+The license includes an explicit patent grant (section 3) and does not grant
+rights to the OpenNAVI name (section 6).

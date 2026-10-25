@@ -37,6 +37,19 @@ Thank you for your interest in contributing! This document covers the basics of 
 - `fix/<name>` — bug fixes
 - `chore/<name>` — maintenance
 
+## Licensing of contributions
+
+OpenNAVI is licensed under the [Apache License 2.0](LICENSE).
+
+By submitting a pull request you agree that your contribution is licensed under
+the same terms, as section 5 of the license provides ("Submission of
+Contributions"): unless you explicitly state otherwise, a contribution
+intentionally submitted for inclusion in the work is under the license's terms,
+with no additional conditions.
+
+If you are contributing on behalf of an employer, make sure you have permission
+to do so.
+
 ## Questions?
 
 Open a discussion or reach out to the team.

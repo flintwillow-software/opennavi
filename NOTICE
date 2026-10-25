@@ -1,0 +1,42 @@
+OpenNAVI
+Copyright 2026 Flintwillow Software
+
+This product includes software developed by Flintwillow Software
+(https://flintwillow.software).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+Third-party dependencies are licensed under their own terms. All are
+permissive (MIT or BSD-3-Clause); none are copyleft. See each module's
+LICENSE for its terms. The principal dependencies are:
+
+  github.com/charmbracelet/bubbletea      MIT
+  github.com/charmbracelet/lipgloss       MIT
+  github.com/charmbracelet/x/*            MIT
+  github.com/muesli/termenv               MIT
+  github.com/mattn/go-runewidth           MIT
+  github.com/mattn/go-isatty              MIT
+  github.com/rivo/uniseg                  MIT
+  github.com/dustin/go-humanize           MIT
+  github.com/lucasb-eyer/go-colorful      MIT
+  github.com/xo/terminfo                  MIT
+  gopkg.in/yaml.v3                        MIT
+  golang.org/x/*                          BSD-3-Clause
+  github.com/google/uuid                  BSD-3-Clause
+  github.com/remyoudompheng/bigfft        BSD-3-Clause
+  modernc.org/sqlite                      BSD-3-Clause
+  modernc.org/libc                        BSD-3-Clause
+  modernc.org/memory                      BSD-3-Clause
+  modernc.org/mathutil                    BSD-3-Clause
