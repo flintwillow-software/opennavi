@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/flintwillow-software/opennavi/navi/cli"
 )
 
 // usage orients rather than enumerating flags: the two roles are the thing to
@@ -54,11 +56,11 @@ func dispatch(args []string) int {
 	case name == "host":
 		return fail(runHost(rest))
 	case name == "connect":
-		return fail(runConnect(rest))
+		return fail(cli.Connect(rest))
 	case name == "enqueue":
-		return fail(runEnqueue(rest))
+		return fail(cli.Enqueue(rest))
 	case name == "health":
-		return fail(runHealth(rest))
+		return fail(cli.Health(rest))
 	default:
 		return defaultRole(rest)
 	}

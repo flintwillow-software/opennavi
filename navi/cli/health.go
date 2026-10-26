@@ -1,8 +1,9 @@
-package main
+package cli
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,35 +16,40 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// healthResult is the JSON summary printed by `navi health`.
-type healthResult struct {
+// ErrHealthFailed reports that a health probe failed. The JSON summary has
+// already been printed to stdout; the caller turns this into a non-zero exit.
+// A library must not exit the process itself, so the role returns the failure
+// rather than calling os.Exit the way a standalone command can.
+var ErrHealthFailed = errors.New("health: one or more probes failed")
+
+// HealthResult is the JSON summary `Health` prints.
+type HealthResult struct {
 	Provider string      `json:"provider"`
 	Store    string      `json:"store"`
 	NaviID   string      `json:"navi_id,omitempty"`
-	Todos    *todoHealth `json:"todos,omitempty"`
+	Todos    *TodoHealth `json:"todos,omitempty"`
 
-	// Connectors is the start-time connector-health view the host wrote
-	// beside the database (NAVI-329): each door's ok/disabled/failed state
-	// and, for a failure, the reason (e.g. "listen :9090: address in use").
-	// Present only after the navi has started against this database.
+	// Connectors is the start-time connector-health view the host wrote beside
+	// the database (NAVI-329): each door's ok/disabled/failed state and, for a
+	// failure, the reason (e.g. "listen :9090: address in use"). Present only
+	// after the navi has started against this database.
 	Connectors          []navi.ConnectorHealth `json:"connectors,omitempty"`
 	ConnectorsUpdatedAt *time.Time             `json:"connectors_updated_at,omitempty"`
 	ConnectorsError     string                 `json:"connectors_error,omitempty"`
 }
 
-// todoHealth is the navi's current todo state: counts
-// by status surfaced in the health view.
-type todoHealth struct {
+// TodoHealth is the navi's current todo state: counts by status.
+type TodoHealth struct {
 	Pending    int    `json:"pending"`
 	InProgress int    `json:"in_progress"`
 	Done       int    `json:"done"`
 	Error      string `json:"error,omitempty"`
 }
 
-// runHealth is the `navi health` subcommand: probes provider
-// reachability and store writability, prints a JSON summary, exits
-// non-zero on any failure.
-func runHealth(args []string) error {
+// Health is the `health` client role: probes provider reachability and store
+// writability, prints a JSON summary, and returns ErrHealthFailed when any
+// probe failed (so the caller exits non-zero).
+func Health(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ExitOnError)
 	dbPath := fs.String("db", "./navi.db", "path to the session SQLite database")
 	naviID := fs.String("navi-id", "default", "per-navi scoping key for stateful tool state")
@@ -56,10 +62,10 @@ func runHealth(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	hr := healthResult{Provider: "ok", Store: "ok", NaviID: *naviID}
+	hr := HealthResult{Provider: "ok", Store: "ok", NaviID: *naviID}
 	failed := false
 
-	// Provider probe: Ollama /api/tags via llm.OllamaProvider.Ping.
+	// Provider probe: Ollama /api/tags via the provider's Ping.
 	host := *ollamaHost
 	if host == "" {
 		host = llm.OllamaHostFromEnv()
@@ -82,16 +88,16 @@ func runHealth(args []string) error {
 			failed = true
 		}
 		// Todo state: counts by status for the navi. A probe failure is
-		// reported but does not fail the health command — todo storage may
+		// reported but does not fail the command — todo storage may
 		// legitimately be untouched (no tool activity yet); only store-level
 		// failures surface. The probe reads through the still-open store.
 		hr.Todos = todoProbe(store, *naviID)
 	}
 
-	// Connector health (NAVI-329): the start-time view the host wrote
-	// beside the database. A missing snapshot means the navi has not
-	// started against this DB; report that rather than guessing states.
-	// A connector failure is informational — it does not fail the probe.
+	// Connector health: the start-time view the host wrote beside the
+	// database. A missing snapshot means the navi has not started against
+	// this DB; report that rather than guessing states. A connector failure is
+	// informational — it does not fail the probe.
 	snap, ok, herr := readHealthSnapshot(healthSnapshotPath(*dbPath))
 	switch {
 	case herr != nil:
@@ -107,18 +113,18 @@ func runHealth(args []string) error {
 	blob, _ := json.MarshalIndent(hr, "", "  ")
 	fmt.Println(string(blob))
 	if failed {
-		os.Exit(1)
+		return ErrHealthFailed
 	}
 	return nil
 }
 
 // todoProbe reads the navi's todo counts from the stateful store.
-func todoProbe(st *sqlite.Store, naviID string) *todoHealth {
+func todoProbe(st *sqlite.Store, naviID string) *TodoHealth {
 	ss, err := sqlite.NewStatefulStore(st.DB())
 	if err != nil {
-		return &todoHealth{Error: fmt.Sprintf("stateful store: %v", err)}
+		return &TodoHealth{Error: fmt.Sprintf("stateful store: %v", err)}
 	}
-	th := &todoHealth{}
+	th := &TodoHealth{}
 	for _, probe := range []struct {
 		status datastore.TodoStatus
 		target *int
@@ -129,15 +135,15 @@ func todoProbe(st *sqlite.Store, naviID string) *todoHealth {
 	} {
 		items, err := ss.ListTodos(naviID, probe.status, 0)
 		if err != nil {
-			return &todoHealth{Error: fmt.Sprintf("list todos (%s): %v", probe.status, err)}
+			return &TodoHealth{Error: fmt.Sprintf("list todos (%s): %v", probe.status, err)}
 		}
 		*probe.target = len(items)
 	}
 	return th
 }
 
-// storeProbe verifies the SQLite store is writable by saving, loading,
-// and deleting a sentinel thought.
+// storeProbe verifies the SQLite store is writable by saving, loading, and
+// deleting a sentinel thought.
 func storeProbe(ctx context.Context, store *sqlite.Store) error {
 	ts, err := sqlite.NewThoughtStore(store.DB())
 	if err != nil {
@@ -147,7 +153,7 @@ func storeProbe(ctx context.Context, store *sqlite.Store) error {
 	sentinel := &thought.Thought{
 		ID:        fmt.Sprintf("health-check-%d", now.UnixNano()),
 		Prompt:    "health-check sentinel",
-		Priority:  10, // lowest — will never be claimed before real thoughts
+		Priority:  10, // lowest — never claimed before real thoughts
 		Status:    thought.ThoughtPending,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -166,4 +172,51 @@ func storeProbe(ctx context.Context, store *sqlite.Store) error {
 		return fmt.Errorf("delete sentinel: %w", err)
 	}
 	return nil
+}
+
+// healthSnapshot is the connector-health document the host writes beside the
+// database (NAVI-329).
+type healthSnapshot struct {
+	Connectors []navi.ConnectorHealth `json:"connectors"`
+	UpdatedAt  time.Time              `json:"updated_at"`
+}
+
+// healthSnapshotPath is the snapshot's path for a database path: the DB path
+// with the extension replaced, so one navi's health sits beside its state.
+func healthSnapshotPath(dbPath string) string {
+	return replaceExt(dbPath, ".health.json")
+}
+
+func replaceExt(path, ext string) string {
+	base := path
+	if i := lastIndexByte(base, '.'); i > lastIndexByte(base, '/') {
+		base = base[:i]
+	}
+	return base + ext
+}
+
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+// readHealthSnapshot reads the snapshot, reporting ok=false when the file does
+// not exist (the navi has not started against this database).
+func readHealthSnapshot(path string) (healthSnapshot, bool, error) {
+	var snap healthSnapshot
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return snap, false, nil
+		}
+		return snap, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(blob, &snap); err != nil {
+		return snap, false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return snap, true, nil
 }

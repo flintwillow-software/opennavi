@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -86,7 +86,7 @@ func dbThoughts(t *testing.T, db string) []*thought.Thought {
 func TestEnqueueViaPortalReachable(t *testing.T) {
 	addr, rt := servePortal(t, true)
 	db := t.TempDir() + "/portal.db"
-	err := runEnqueue([]string{"-portal", "http://" + addr, "-db", db, "portal task"})
+	err := Enqueue([]string{"-portal", "http://" + addr, "-db", db, "portal task"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestEnqueueViaPortalReachable(t *testing.T) {
 
 func TestEnqueueUnreachableFallsBackToDb(t *testing.T) {
 	db := t.TempDir() + "/fallback.db"
-	err := runEnqueue([]string{"-portal", "http://127.0.0.1:9", "-db", db, "fallback task"})
+	err := Enqueue([]string{"-portal", "http://127.0.0.1:9", "-db", db, "fallback task"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestEnqueueUnreachableFallsBackToDb(t *testing.T) {
 func TestEnqueuePortalFailClosedFallsBack(t *testing.T) {
 	addr, _ := servePortal(t, false) // no authorizer: 403
 	db := t.TempDir() + "/failclosed.db"
-	err := runEnqueue([]string{"-portal", "http://" + addr, "-db", db, "nope task"})
+	err := Enqueue([]string{"-portal", "http://" + addr, "-db", db, "nope task"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestEnqueuePortalFailClosedFallsBack(t *testing.T) {
 func TestRunEnqueuePromptFirst(t *testing.T) {
 	dir := t.TempDir()
 	db := dir + "/test.db"
-	err := runEnqueue([]string{"hello second", "--db", db})
+	err := Enqueue([]string{"hello second", "--db", db})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestRunEnqueuePromptFirst(t *testing.T) {
 func TestRunEnqueueFlagsFirst(t *testing.T) {
 	dir := t.TempDir()
 	db := dir + "/test.db"
-	err := runEnqueue([]string{"-priority", "7", "-db", db, "the prompt"})
+	err := Enqueue([]string{"-priority", "7", "-db", db, "the prompt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRunEnqueueFlagsFirst(t *testing.T) {
 func TestRunEnqueueMultiWordPrompt(t *testing.T) {
 	dir := t.TempDir()
 	db := dir + "/test.db"
-	err := runEnqueue([]string{"multi", "word", "prompt", "-priority", "2", "-db", db})
+	err := Enqueue([]string{"multi", "word", "prompt", "-priority", "2", "-db", db})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestRunEnqueueMultiWordPrompt(t *testing.T) {
 func TestRunEnqueuePriorityValidation(t *testing.T) {
 	dir := t.TempDir()
 	for _, p := range []string{"0", "11", "-1"} {
-		err := runEnqueue([]string{"-priority", p, "-db", dir + "/x.db", "task"})
+		err := Enqueue([]string{"-priority", p, "-db", dir + "/x.db", "task"})
 		if err == nil || !strings.Contains(err.Error(), "out of range") {
 			t.Errorf("priority %q: error = %v, want out-of-range", p, err)
 		}
@@ -183,14 +183,14 @@ func TestRunEnqueuePriorityValidation(t *testing.T) {
 
 func TestRunEnqueueMissingPrompt(t *testing.T) {
 	dir := t.TempDir()
-	err := runEnqueue([]string{"-db", dir + "/x.db"})
+	err := Enqueue([]string{"-db", dir + "/x.db"})
 	if err == nil || !strings.Contains(err.Error(), "prompt is required") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestRunEnqueueMissingDB(t *testing.T) {
-	err := runEnqueue([]string{"some prompt"})
+	err := Enqueue([]string{"some prompt"})
 	if err == nil || !strings.Contains(err.Error(), "db path is required") {
 		t.Fatalf("error = %v, want db path required", err)
 	}
@@ -206,7 +206,7 @@ func TestRunEnqueueThreeCaseOllamaHost(t *testing.T) {
 		// doesn't error with OLLAMA_HOST unset.
 		t.Setenv("OLLAMA_HOST", "")
 		dir := t.TempDir()
-		err := runEnqueue([]string{"task", "-priority", "3", "-db", dir + "/x.db"})
+		err := Enqueue([]string{"task", "-priority", "3", "-db", dir + "/x.db"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func TestRunEnqueueThreeCaseOllamaHost(t *testing.T) {
 	t.Run("env set", func(t *testing.T) {
 		t.Setenv("OLLAMA_HOST", "http://10.0.0.50:11434")
 		dir := t.TempDir()
-		err := runEnqueue([]string{"task", "-db", dir + "/y.db"})
+		err := Enqueue([]string{"task", "-db", dir + "/y.db"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +222,7 @@ func TestRunEnqueueThreeCaseOllamaHost(t *testing.T) {
 	t.Run("neither", func(t *testing.T) {
 		t.Setenv("OLLAMA_HOST", "")
 		dir := t.TempDir()
-		err := runEnqueue([]string{"task", "-db", dir + "/z.db"})
+		err := Enqueue([]string{"task", "-db", dir + "/z.db"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +232,7 @@ func TestRunEnqueueThreeCaseOllamaHost(t *testing.T) {
 func TestRunEnqueueProviderModel(t *testing.T) {
 	dir := t.TempDir()
 	db := dir + "/t.db"
-	err := runEnqueue([]string{"-provider", "mock", "-model", "fast-1", "-db", db, "do the thing"})
+	err := Enqueue([]string{"-provider", "mock", "-model", "fast-1", "-db", db, "do the thing"})
 	if err != nil {
 		t.Fatal(err)
 	}
