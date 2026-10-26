@@ -515,6 +515,13 @@ func (n *Navi) Run(ctx context.Context) error {
 // conflicts, mode/ceiling permission consistency, and the default-model
 // declaration. It is exported for authors who want to check a navi
 // without running it.
+//
+// It also compiles the policy (ADR 0033), so a validated navi has a usable
+// Policy: `n.Validate()` then `n.Policy().Decide(...)` is the composition-time
+// authorization check, and it covers the derived ceiling, the role and group
+// layers, and any conditions on the grants. A compile failure is fatal here
+// exactly as it is at Run, so an author who validates cannot ship a policy the
+// run would reject.
 func (n *Navi) Validate() error { return n.validate() }
 
 func (n *Navi) validate() error {
@@ -553,7 +560,14 @@ func (n *Navi) validate() error {
 	if err := n.validatePorts(); err != nil {
 		return err
 	}
-	return n.validateDefaultModel()
+	if err := n.validateDefaultModel(); err != nil {
+		return err
+	}
+	// Compile the policy last, after every declaration has been checked
+	// (ADR 0033): a validated navi has a usable Policy, so an out-of-repo navi
+	// can evaluate a real decision without serving. Run compiles again at
+	// assembly; the step is idempotent, so the second call is harmless.
+	return n.compilePolicy()
 }
 
 // validateModes checks every mode against the declared tools, the

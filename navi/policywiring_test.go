@@ -31,11 +31,11 @@ func TestNaviCompilesTheDeclaredPolicy(t *testing.T) {
 		t.Fatalf("Groups.Add: %v", err)
 	}
 	if n.Policy() != nil {
-		t.Fatal("no policy exists before assembly")
+		t.Fatal("no policy exists before anything compiles it")
 	}
 
-	if err := n.compilePolicy(); err != nil {
-		t.Fatalf("compilePolicy: %v", err)
+	if err := n.CompilePolicy(); err != nil {
+		t.Fatalf("CompilePolicy: %v", err)
 	}
 	p := n.Policy()
 	if p == nil {
@@ -77,7 +77,7 @@ func TestNaviRefusesAPolicyOutsideTheDerivedCeiling(t *testing.T) {
 	if err := n.Roles.Add(role); err != nil {
 		t.Fatalf("Roles.Add: %v", err)
 	}
-	if err := n.compilePolicy(); !errors.Is(err, ErrInvalid) {
+	if err := n.CompilePolicy(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a role granting an undeclared tool = %v, want ErrInvalid", err)
 	}
 
@@ -90,7 +90,7 @@ func TestNaviRefusesAPolicyOutsideTheDerivedCeiling(t *testing.T) {
 	if err := n2.Groups.Add(g); err != nil {
 		t.Fatalf("Groups.Add: %v", err)
 	}
-	if err := n2.compilePolicy(); !errors.Is(err, ErrInvalid) {
+	if err := n2.CompilePolicy(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a group granting an undeclared action = %v, want ErrInvalid", err)
 	}
 }
