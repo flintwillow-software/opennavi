@@ -231,23 +231,23 @@ func TestResolveForPrefersTheThoughtsOverride(t *testing.T) {
 	}
 
 	// No override: the navi default.
-	p, m, err := n.resolveFor(&thought.Thought{ID: "t1"})
+	sel, err := n.resolveFor(&thought.Thought{ID: "t1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name() != "ollama" || m != "qwen3.8:27b" {
-		t.Fatalf("default resolution: %s/%s", p.Name(), m)
+	if sel.provider.Name() != "ollama" || sel.model != "qwen3.8:27b" {
+		t.Fatalf("default resolution: %s/%s", sel.provider.Name(), sel.model)
 	}
 
 	// Per-thought override wins over the navi default.
-	p, m, err = n.resolveFor(&thought.Thought{
+	sel, err = n.resolveFor(&thought.Thought{
 		ID: "t2", Provider: "openrouter", Model: "some/other-model",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name() != "openrouter" || m != "some/other-model" {
-		t.Fatalf("thought override ignored: %s/%s", p.Name(), m)
+	if sel.provider.Name() != "openrouter" || sel.model != "some/other-model" {
+		t.Fatalf("thought override ignored: %s/%s", sel.provider.Name(), sel.model)
 	}
 }
 
@@ -258,7 +258,7 @@ func TestResolveForIsLoudOnAnUnknownThoughtProvider(t *testing.T) {
 	if err := n.assemble(); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := n.resolveFor(&thought.Thought{ID: "t1", Provider: "nope"})
+	_, err := n.resolveFor(&thought.Thought{ID: "t1", Provider: "nope"})
 	if !errors.Is(err, model.ErrUnknownProvider) {
 		t.Fatalf("ADR 0009 forbids a silent fallback; want ErrUnknownProvider, got %v", err)
 	}
@@ -269,4 +269,64 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// TestPerModelOptionsReachTheRequest pins ADR 0034 end to end through the
+// navi's own resolution: the routing declared for the SELECTED model reaches
+// the request config, and a per-thought model override carries that model's
+// options rather than the default's.
+//
+// The drift this guards is the reason the options travel with the selection
+// (decision 6): resolving the provider, the model, and the options separately
+// is how they end up disagreeing.
+func TestPerModelOptionsReachTheRequest(t *testing.T) {
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
+
+	n := New("opts-e2e")
+	if err := n.Models.Add(model.Ollama("qwen3.8:27b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Models.Add(model.OpenRouter("deepseek/deepseek-v4.1-flash",
+		model.Default(),
+		model.WithCredential("OPENROUTER_API_KEY"),
+		model.WithRouting("deepseek/deepseek-v4.1-flash", model.Routing{
+			Only:           []string{"inference-net/fp8"},
+			AllowFallbacks: model.Bool(false),
+		}),
+		model.WithReasoning("deepseek/deepseek-v4.1-flash", model.Reasoning{Effort: "high"}),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The default model: options present.
+	sel, err := n.resolveFor(&thought.Thought{ID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.options.Routing == nil || sel.options.Reasoning == nil {
+		t.Fatalf("options did not travel with the selection: %+v", sel.options)
+	}
+	if len(sel.options.Routing.Only) != 1 || sel.options.Routing.Only[0] != "inference-net/fp8" {
+		t.Errorf("routing = %+v", sel.options.Routing)
+	}
+	if sel.options.Reasoning.Effort != "high" {
+		t.Errorf("effort = %q", sel.options.Reasoning.Effort)
+	}
+
+	// A per-thought override to a model with no declaration carries NO
+	// options — not the default model's routing, which would be routing a
+	// model to an upstream that does not serve it.
+	over, err := n.resolveFor(&thought.Thought{
+		ID: "t2", Provider: "openrouter", Model: "anthropic/claude-sonnet-5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if over.options.Routing != nil || over.options.Reasoning != nil {
+		t.Fatalf("an undeclared model must carry no options, got %+v", over.options)
+	}
 }

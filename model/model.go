@@ -38,7 +38,67 @@ type Provider struct {
 	// Default marks the provider a thought uses when it names none
 	// (ADR 0009). A navi declares a set and exactly one default.
 	Default bool
+	// Options carries per-model request options (ADR 0034), keyed by model
+	// id. Keyed by model rather than held on the descriptor because routing
+	// is a property of a model, not of a provider: an upstream that serves
+	// one model does not serve another, and a thought may override the model
+	// per run (ADR 0009). An override to a model with no entry carries no
+	// options, rather than another model's.
+	Options map[string]ModelOptions
 }
+
+// ModelOptions is the per-model request-option set (ADR 0034). A zero value
+// is "say nothing": the request body is unchanged.
+type ModelOptions struct {
+	// Routing selects the upstream vendor that serves the model
+	// (OpenRouter's `provider` object). Nil sends nothing.
+	Routing *Routing `json:"routing,omitempty"`
+	// Reasoning requests the model's extended reasoning, or its absence.
+	// Nil sends nothing, leaving the model's own default.
+	Reasoning *Reasoning `json:"reasoning,omitempty"`
+}
+
+// Routing is OpenRouter's per-request upstream routing (ADR 0034): which
+// vendors may serve the model, in what order, and whether degrading to
+// another is permitted. It is a typed value rather than a passthrough map so
+// a typo is a composition error, not a request that silently routes nothing.
+// The JSON tags make the value readable through the object surface and
+// model_list (ADR 0017), so a declared routing is inspectable rather than
+// only greppable in main.go.
+type Routing struct {
+	// Only restricts serving to these upstream vendors. Empty = unrestricted.
+	Only []string `json:"only,omitempty"`
+	// Order prefers these upstream vendors, in order. Empty = no preference.
+	Order []string `json:"order,omitempty"`
+	// Ignore excludes these upstream vendors. Empty = exclude none.
+	Ignore []string `json:"ignore,omitempty"`
+	// AllowFallbacks permits OpenRouter to fall back to another vendor when
+	// the preferred one cannot serve the request. Nil sends nothing (keeping
+	// OpenRouter's default of true); false is a deliberate refusal to
+	// degrade, so "this model" cannot become "a different backend".
+	AllowFallbacks *bool `json:"allow_fallbacks,omitempty"`
+	// RequireParameters refuses upstreams that do not support every
+	// parameter the request sends (tools, temperature, and so on).
+	RequireParameters *bool `json:"require_parameters,omitempty"`
+	// Quantizations restricts serving to these quantizations (e.g. "fp8").
+	Quantizations []string `json:"quantizations,omitempty"`
+	// Sort orders candidate upstreams by a criterion (e.g. "throughput",
+	// "price", "latency"). Empty = no sort.
+	Sort string `json:"sort,omitempty"`
+}
+
+// Reasoning requests a reasoning model's extended thinking (ADR 0034),
+// emitted as OpenRouter's `reasoning` object. Effort is a level name
+// ("none", "low", "medium", "high", or a model-specific value); empty
+// sends nothing.
+type Reasoning struct {
+	// Effort is the reasoning level to request. Empty = send nothing.
+	Effort string `json:"effort,omitempty"`
+}
+
+// Bool returns a pointer to v, for the tri-state option fields where
+// "unset" and "false" mean different things (ADR 0034).
+func Bool(v bool) *bool { return &v }
 
 // Model is the model descriptor exposed to components: the model name
 // plus the provider it routes to.
@@ -91,6 +151,42 @@ func WithThinking(enabled bool) Option {
 // WithCredential names where the provider's secret lives (ADR 0008).
 func WithCredential(ref CredentialRef) Option {
 	return func(p *Provider) { p.Credential = ref }
+}
+
+// WithRouting declares upstream routing for one model (ADR 0034). It is
+// keyed by model id: routing is a property of a model, not of a provider.
+func WithRouting(model string, r Routing) Option {
+	return func(p *Provider) {
+		if p.Options == nil {
+			p.Options = map[string]ModelOptions{}
+		}
+		o := p.Options[model]
+		o.Routing = &r
+		p.Options[model] = o
+	}
+}
+
+// WithReasoning declares extended-reasoning options for one model
+// (ADR 0034), keyed by model id.
+func WithReasoning(model string, r Reasoning) Option {
+	return func(p *Provider) {
+		if p.Options == nil {
+			p.Options = map[string]ModelOptions{}
+		}
+		o := p.Options[model]
+		o.Reasoning = &r
+		p.Options[model] = o
+	}
+}
+
+// OptionsFor returns the request options declared for a model, or the zero
+// value when none are (ADR 0034). A provider that declares no options for a
+// model sends nothing extra for it.
+func (p Provider) OptionsFor(model string) ModelOptions {
+	if p.Options == nil {
+		return ModelOptions{}
+	}
+	return p.Options[model]
 }
 
 // Default marks this provider as the one a thought uses when it names no

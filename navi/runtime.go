@@ -311,42 +311,69 @@ func (n *Navi) buildTimeDefault() (string, DefaultSource, error) {
 // own overrides win over the navi default (ADR 0009), and an unknown name
 // is an error rather than a silent fallback — routing work to a different
 // model than the caller asked for is worse than failing.
-func (n *Navi) resolveFor(pt *thought.Thought) (llm.Provider, string, error) {
+func (n *Navi) resolveFor(pt *thought.Thought) (modelSelection, error) {
 	if n.override != nil {
 		modelName := pt.Model
 		if modelName == "" {
 			modelName = n.selection.Model
 		}
-		return n.override, modelName, nil
+		return modelSelection{provider: n.override, model: modelName}, nil
 	}
 	if n.providers == nil {
-		return nil, "", fmt.Errorf("navi: resolve provider before serving")
+		return modelSelection{}, fmt.Errorf("navi: resolve provider before serving")
 	}
 	// A thought that names no provider uses the default selection, and the
-	// configured fallback chain applies to exactly that path.
+	// configured fallback chain applies to exactly that path. The fallback
+	// is a provider chain, not an upstream routing choice, so it carries no
+	// per-model options (ADR 0034).
 	if pt.Provider == "" && n.fallback != nil {
 		modelName := pt.Model
 		if modelName == "" {
 			modelName = n.selection.Model
 		}
-		return n.fallback, modelName, nil
+		return modelSelection{provider: n.fallback, model: modelName}, nil
 	}
 	name := pt.Provider
 	if name == "" {
 		name = n.selection.Provider
 	}
 	if name == "" {
-		return nil, "", fmt.Errorf("navi: thought %s names no provider and no default is declared", pt.ID)
+		return modelSelection{}, fmt.Errorf("navi: thought %s names no provider and no default is declared", pt.ID)
 	}
 	p, err := n.providers.For(name)
 	if err != nil {
-		return nil, "", err
+		return modelSelection{}, err
 	}
 	modelName := pt.Model
 	if modelName == "" {
 		modelName = n.selection.Model
 	}
-	return p, modelName, nil
+	return modelSelection{provider: p, model: modelName, options: n.modelOptions(name, modelName)}, nil
+}
+
+// modelSelection is one thought's provider selection (ADR 0009) together with the
+// per-model request options that selection carries (ADR 0034). They travel
+// together because the options belong to the model actually selected, and
+// resolving them separately is how they would drift.
+type modelSelection struct {
+	provider llm.Provider
+	model    string
+	options  model.ModelOptions
+}
+
+// modelOptions returns the declared request options for a provider/model
+// pair, or the zero value when the provider declares none. A model override
+// to a model with no declaration carries no options rather than another
+// model's (ADR 0034 decision 1).
+func (n *Navi) modelOptions(providerName, modelName string) model.ModelOptions {
+	if n.providers == nil || modelName == "" {
+		return model.ModelOptions{}
+	}
+	d, ok := n.providers.Find(providerName)
+	if !ok {
+		return model.ModelOptions{}
+	}
+	return d.OptionsFor(modelName)
 }
 
 // withEndpoint returns a copy of the provider descriptors with the named

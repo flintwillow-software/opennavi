@@ -20,6 +20,31 @@ type openaiRequest struct {
 	Tools       []openaiTool    `json:"tools,omitempty"`
 	Temperature float64         `json:"temperature,omitempty"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
+	// Provider is OpenRouter's upstream routing object (ADR 0034). Omitted
+	// when the model declares no routing, so a navi that says nothing sends
+	// a byte-identical body to one built before this existed.
+	Provider *openaiProviderRouting `json:"provider,omitempty"`
+	// Reasoning is OpenRouter's extended-reasoning object (ADR 0034).
+	// Omitted when the model declares none.
+	Reasoning *openaiReasoning `json:"reasoning,omitempty"`
+}
+
+// openaiProviderRouting is the wire form of Routing (ADR 0034). Every field
+// is omitempty so an unset option sends nothing rather than a zero value that
+// would override OpenRouter's default.
+type openaiProviderRouting struct {
+	Only              []string `json:"only,omitempty"`
+	Order             []string `json:"order,omitempty"`
+	Ignore            []string `json:"ignore,omitempty"`
+	AllowFallbacks    *bool    `json:"allow_fallbacks,omitempty"`
+	RequireParameters *bool    `json:"require_parameters,omitempty"`
+	Quantizations     []string `json:"quantizations,omitempty"`
+	Sort              string   `json:"sort,omitempty"`
+}
+
+// openaiReasoning is the wire form of Reasoning (ADR 0034).
+type openaiReasoning struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type openaiMessage struct {
@@ -61,6 +86,8 @@ func buildOpenAIRequest(model string, messages []Message, tools []Tool, config C
 		Stream:      stream,
 		Temperature: config.Temperature,
 		MaxTokens:   config.MaxTokens,
+		Provider:    toWireRouting(config.Routing),
+		Reasoning:   toWireReasoning(config.Reasoning),
 	}
 	for _, m := range messages {
 		// Tool results: one wire message per result — multi-tool turns
@@ -97,6 +124,40 @@ func buildOpenAIRequest(model string, messages []Message, tools []Tool, config C
 		})
 	}
 	return req
+}
+
+// toWireRouting converts the resolved routing to its wire form (ADR 0034),
+// or nil when there is nothing to send. A non-nil Routing with every field
+// unset is treated as nothing: sending `"provider": {}` would be a request
+// the caller did not ask for.
+func toWireRouting(r *Routing) *openaiProviderRouting {
+	if r == nil {
+		return nil
+	}
+	w := openaiProviderRouting{
+		Only:              r.Only,
+		Order:             r.Order,
+		Ignore:            r.Ignore,
+		AllowFallbacks:    r.AllowFallbacks,
+		RequireParameters: r.RequireParameters,
+		Quantizations:     r.Quantizations,
+		Sort:              r.Sort,
+	}
+	if len(w.Only) == 0 && len(w.Order) == 0 && len(w.Ignore) == 0 &&
+		w.AllowFallbacks == nil && w.RequireParameters == nil &&
+		len(w.Quantizations) == 0 && w.Sort == "" {
+		return nil
+	}
+	return &w
+}
+
+// toWireReasoning converts the resolved reasoning request to its wire form
+// (ADR 0034), or nil when nothing was requested.
+func toWireReasoning(r *Reasoning) *openaiReasoning {
+	if r == nil || strings.TrimSpace(r.Effort) == "" {
+		return nil
+	}
+	return &openaiReasoning{Effort: strings.TrimSpace(r.Effort)}
 }
 
 // orSynthID returns the call's ID, or a synthesized placeholder when

@@ -451,3 +451,54 @@ func waitForEvent(t *testing.T, p *fakePortal, kind thought.EventKind) {
 	}
 	t.Fatalf("timed out waiting for %q", kind)
 }
+
+// TestRequestOptionsValidation pins ADR 0034 decisions 2 and 7: request
+// options must name a model the provider serves, and only a provider that
+// understands them may carry them. Both are composition-time errors, because
+// the failure they prevent — routing that silently does nothing — is
+// invisible at run time.
+func TestRequestOptionsValidation(t *testing.T) {
+	t.Run("a valid declaration is accepted", func(t *testing.T) {
+		n := New("opts-ok")
+		if err := n.Models.Add(model.OpenRouter("deepseek/deepseek-v4.1-flash",
+			model.Default(),
+			model.WithRouting("deepseek/deepseek-v4.1-flash", model.Routing{
+				Only:           []string{"inference-net/fp8"},
+				AllowFallbacks: model.Bool(false),
+			}),
+			model.WithReasoning("deepseek/deepseek-v4.1-flash", model.Reasoning{Effort: "high"}),
+		)); err != nil {
+			t.Fatalf("valid options rejected: %v", err)
+		}
+	})
+
+	t.Run("a typo in the model id is an error, not silence", func(t *testing.T) {
+		n := New("opts-typo")
+		err := n.Models.Add(model.OpenRouter("deepseek/deepseek-v4.1-flash",
+			model.Default(),
+			model.WithRouting("deepseek/deepseek-v4.1-FLASHX", model.Routing{
+				Only: []string{"inference-net/fp8"},
+			}),
+		))
+		if err == nil {
+			t.Fatal("routing naming a model the provider does not serve must be rejected")
+		}
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("want ErrInvalid, got %v", err)
+		}
+	})
+
+	t.Run("a provider that does not understand options rejects them", func(t *testing.T) {
+		n := New("opts-ollama")
+		err := n.Models.Add(model.Ollama("qwen3.8:27b",
+			model.Default(),
+			model.WithRouting("qwen3.8:27b", model.Routing{Only: []string{"a"}}),
+		))
+		if err == nil {
+			t.Fatal("per-model request options on a provider that drops them must be rejected")
+		}
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("want ErrInvalid, got %v", err)
+		}
+	})
+}

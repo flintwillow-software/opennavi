@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/tool"
 )
 
@@ -53,6 +54,13 @@ func (n *Navi) modelListTool() (tool.Tool, error) {
 			Default    bool   `json:"default"`
 			Local      bool   `json:"local,omitempty"`
 			Credential string `json:"credential_ref,omitempty"`
+			// Routing and Reasoning are the per-model request options
+			// declared for this model (ADR 0034), so "which upstream will
+			// serve this, and does it reason" is answerable from the navi
+			// rather than only from the gateway's dashboard. Omitted when
+			// the model declares none.
+			Routing   *model.Routing   `json:"routing,omitempty"`
+			Reasoning *model.Reasoning `json:"reasoning,omitempty"`
 		}
 		out := struct {
 			Default      string  `json:"default,omitempty"`
@@ -61,12 +69,15 @@ func (n *Navi) modelListTool() (tool.Tool, error) {
 		}{Models: []entry{}}
 		for _, p := range n.Models.All() {
 			isDefault := p.Default || (defaultName != "" && strings.EqualFold(p.Name, defaultName))
+			opts := p.OptionsFor(p.Model)
 			out.Models = append(out.Models, entry{
 				Provider:   p.Name,
 				Model:      p.Model,
 				Default:    isDefault,
 				Local:      p.Mode == "local",
 				Credential: string(p.Credential),
+				Routing:    opts.Routing,
+				Reasoning:  opts.Reasoning,
 			})
 			if isDefault {
 				out.Default, out.DefaultModel = p.Name, p.Model

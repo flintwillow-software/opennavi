@@ -84,6 +84,32 @@ type Config struct {
 	Thinking    ThinkingConfig
 	Endpoint    string // optional custom endpoint (Ollama, OpenRouter)
 	APIKey      string // resolved from env var or config
+
+	// Routing selects the upstream vendor that serves the request
+	// (OpenRouter's `provider` object, ADR 0034). Nil sends nothing.
+	Routing *Routing
+	// Reasoning requests the model's extended reasoning, or its absence
+	// (OpenRouter's `reasoning` object, ADR 0034). Nil sends nothing.
+	Reasoning *Reasoning
+}
+
+// Routing is the resolved per-request upstream routing (ADR 0034), carried
+// from the model declaration to the provider adapter so the two cannot
+// drift.
+type Routing struct {
+	Only              []string
+	Order             []string
+	Ignore            []string
+	AllowFallbacks    *bool
+	RequireParameters *bool
+	Quantizations     []string
+	Sort              string
+}
+
+// Reasoning is the resolved per-request reasoning request (ADR 0034).
+type Reasoning struct {
+	// Effort is the reasoning level to request; empty sends nothing.
+	Effort string
 }
 
 // StreamEventType enumerates stream event kinds. Tool calls

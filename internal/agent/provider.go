@@ -165,7 +165,39 @@ func agentConfigToLLM(name string, config AgentConfig) llm.Config {
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		MaxTokens:   config.MaxTokens,
+		// Per-model request options (ADR 0034) cross the agent boundary with
+		// the model they belong to, so the provider adapter emits the routing
+		// and reasoning the declaration asked for — and nothing when it asked
+		// for nothing.
+		Routing:   toLLMRouting(config.Routing),
+		Reasoning: toLLMReasoning(config.Reasoning),
 	}
+}
+
+// toLLMRouting converts the agent-side routing to the provider-layer value
+// (ADR 0034), or nil when there is nothing to send.
+func toLLMRouting(r *Routing) *llm.Routing {
+	if r == nil {
+		return nil
+	}
+	return &llm.Routing{
+		Only:              r.Only,
+		Order:             r.Order,
+		Ignore:            r.Ignore,
+		AllowFallbacks:    r.AllowFallbacks,
+		RequireParameters: r.RequireParameters,
+		Quantizations:     r.Quantizations,
+		Sort:              r.Sort,
+	}
+}
+
+// toLLMReasoning converts the agent-side reasoning request to the
+// provider-layer value (ADR 0034), or nil when none is declared.
+func toLLMReasoning(r *Reasoning) *llm.Reasoning {
+	if r == nil {
+		return nil
+	}
+	return &llm.Reasoning{Effort: r.Effort}
 }
 
 func toLLMMessages(messages []Message) []llm.Message {

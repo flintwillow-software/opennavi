@@ -139,22 +139,22 @@ func TestProviderFallbackChain(t *testing.T) {
 	if n.fallback == nil {
 		t.Fatal("configured fallback did not build a chain")
 	}
-	p, model, err := n.resolveFor(&thought.Thought{ID: "t1"})
+	sel, err := n.resolveFor(&thought.Thought{ID: "t1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := p.(*llm.ProviderFallback); !ok {
-		t.Fatalf("default resolution = %T, want the fallback chain", p)
+	if _, ok := sel.provider.(*llm.ProviderFallback); !ok {
+		t.Fatalf("default resolution = %T, want the fallback chain", sel.provider)
 	}
-	if model != "qwen3.8:27b" {
-		t.Fatalf("model = %q", model)
+	if sel.model != "qwen3.8:27b" {
+		t.Fatalf("model = %q", sel.model)
 	}
 
-	p2, _, err := n.resolveFor(&thought.Thought{ID: "t2", Provider: "openrouter", Model: "some/model"})
+	sel2, err := n.resolveFor(&thought.Thought{ID: "t2", Provider: "openrouter", Model: "some/model"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := p2.(*llm.ProviderFallback); ok {
+	if _, ok := sel2.provider.(*llm.ProviderFallback); ok {
 		t.Fatal("a per-thought provider override must not use the fallback chain")
 	}
 }

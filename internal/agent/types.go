@@ -106,12 +106,37 @@ type AgentTool struct {
 }
 
 // AgentConfig holds the configuration for an agent.
+// Routing is the per-model upstream routing carried from the navi's model
+// declaration to the provider request (ADR 0034).
+type Routing struct {
+	Only              []string
+	Order             []string
+	Ignore            []string
+	AllowFallbacks    *bool
+	RequireParameters *bool
+	Quantizations     []string
+	Sort              string
+}
+
+// Reasoning is the per-model reasoning request carried from the navi's model
+// declaration to the provider request (ADR 0034).
+type Reasoning struct {
+	// Effort is the reasoning level to request; empty sends nothing.
+	Effort string
+}
+
 type AgentConfig struct {
-	Provider       string      `json:"provider"`
-	Model          string      `json:"model"`
-	Temperature    float64     `json:"temperature"`
-	MaxTokens      int         `json:"max_tokens"`
-	Thinking       bool        `json:"thinking"`
+	Provider    string  `json:"provider"`
+	Model       string  `json:"model"`
+	Temperature float64 `json:"temperature"`
+	MaxTokens   int     `json:"max_tokens"`
+	Thinking    bool    `json:"thinking"`
+	// Routing selects the upstream vendor that serves the request
+	// (OpenRouter's `provider` object, ADR 0034). Nil sends nothing.
+	Routing *Routing `json:"routing,omitempty"`
+	// Reasoning requests the model's extended reasoning, or its absence
+	// (ADR 0034). Nil sends nothing.
+	Reasoning      *Reasoning  `json:"reasoning,omitempty"`
 	Tools          []AgentTool `json:"tools,omitempty"`
 	ToolPlugins    []string    `json:"tool_plugins,omitempty"`
 	QueueMode      QueueMode   `json:"queue_mode,omitempty"`
