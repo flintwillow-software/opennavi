@@ -12,7 +12,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/internal/bridge"
-	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/portal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -75,7 +75,7 @@ type AgentRunner struct {
 //     worker parks the thought (park-not-kill)
 //   - any other error → the worker marks the thought failed
 func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
-	provider, modelName, err := r.navi.resolveForMode(t)
+	sel, err := r.navi.resolveForMode(t)
 	if err != nil {
 		// An unknown provider/mode fails THIS thought, loudly (ADR 0009).
 		return err
@@ -84,12 +84,18 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 	// The thought carries the context it was created with (ADR 0013 decision
 	// 2): the runner consumes it rather than rebuilding it per turn.
 	a := agent.NewAgent(agent.AgentConfig{
-		Provider:      provider.Name(),
-		Model:         modelName,
+		Provider:      sel.provider.Name(),
+		Model:         sel.model,
 		SystemPrompt:  t.Assembled,
 		ContextBudget: r.navi.thoughtBudget,
+		// Per-model request options (ADR 0034) travel with the selection:
+		// they belong to the model actually chosen, so a thought that
+		// overrode the model carries that model's options, not the
+		// default's.
+		Routing:   toAgentRouting(sel.options.Routing),
+		Reasoning: toAgentReasoning(sel.options.Reasoning),
 	})
-	a.Provider = agent.NewProviderAdapter(provider, provider.Name())
+	a.Provider = agent.NewProviderAdapter(sel.provider, sel.provider.Name())
 
 	// Registry-first tool surface: the executor is rebuilt from the
 	// registry's active set through tool/bridge, narrowed by the
@@ -167,13 +173,13 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 // resolveForMode resolves the provider/model for one thought, letting the
 // thought's mode pin a model when the thought itself names none (ADR
 // 0007 composes with ADR 0009: mode default, per-thought override wins).
-func (n *Navi) resolveForMode(t *thought.Thought) (llm.Provider, string, error) {
+func (n *Navi) resolveForMode(t *thought.Thought) (modelSelection, error) {
 	if t.Mode == "" || t.Model != "" {
 		return n.resolveFor(t)
 	}
 	m, ok := n.Modes.Get(t.Mode)
 	if !ok {
-		return nil, "", fmt.Errorf("%w: thought %s: unknown mode %q",
+		return modelSelection{}, fmt.Errorf("%w: thought %s: unknown mode %q",
 			ErrInvalid, t.ID, t.Mode)
 	}
 	if m.Model == "" {
@@ -182,6 +188,32 @@ func (n *Navi) resolveForMode(t *thought.Thought) (llm.Provider, string, error) 
 	clone := *t
 	clone.Model = m.Model
 	return n.resolveFor(&clone)
+}
+
+// toAgentRouting converts a declared routing to the agent-side value
+// (ADR 0034), or nil when the model declares none.
+func toAgentRouting(r *model.Routing) *agent.Routing {
+	if r == nil {
+		return nil
+	}
+	return &agent.Routing{
+		Only:              r.Only,
+		Order:             r.Order,
+		Ignore:            r.Ignore,
+		AllowFallbacks:    r.AllowFallbacks,
+		RequireParameters: r.RequireParameters,
+		Quantizations:     r.Quantizations,
+		Sort:              r.Sort,
+	}
+}
+
+// toAgentReasoning converts a declared reasoning request to the agent-side
+// value (ADR 0034), or nil when none is declared.
+func toAgentReasoning(r *model.Reasoning) *agent.Reasoning {
+	if r == nil {
+		return nil
+	}
+	return &agent.Reasoning{Effort: r.Effort}
 }
 
 // joinBlocks joins two context blocks, tolerating either being empty.

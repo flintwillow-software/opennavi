@@ -220,3 +220,139 @@ func TestBuildOpenAIRequestShape(t *testing.T) {
 		t.Fatal("stream flag missing")
 	}
 }
+
+// TestOpenRouterEmitsProviderRouting pins ADR 0034: a model declaring routing
+// emits OpenRouter's `provider` object, and the JSON says exactly what the
+// declaration asked for.
+//
+// This asserts on the ENCODED BODY rather than the struct, because the bug
+// this guards is a field that exists in Go and never reaches the wire — which
+// is precisely how `model.WithThinking` was silently dropped for OpenRouter.
+func TestOpenRouterEmitsProviderRouting(t *testing.T) {
+	req := buildOpenAIRequest("deepseek/deepseek-v4.1-flash", nil, nil, Config{
+		Routing: &Routing{
+			Only:           []string{"inference-net/fp8"},
+			Order:          []string{"inference-net/fp8"},
+			AllowFallbacks: boolPtr(false),
+		},
+	}, false)
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	prov, ok := got["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("no provider object on the wire: %s", body)
+	}
+	if only, _ := prov["only"].([]any); len(only) != 1 || only[0] != "inference-net/fp8" {
+		t.Errorf("provider.only = %v, want [inference-net/fp8]", prov["only"])
+	}
+	if order, _ := prov["order"].([]any); len(order) != 1 || order[0] != "inference-net/fp8" {
+		t.Errorf("provider.order = %v, want [inference-net/fp8]", prov["order"])
+	}
+	// allow_fallbacks: false must be PRESENT as false, not omitted — omitted
+	// means "OpenRouter default (true)", which is the opposite of the ask.
+	af, present := prov["allow_fallbacks"]
+	if !present {
+		t.Fatalf("allow_fallbacks absent; false must reach the wire: %s", body)
+	}
+	if af != false {
+		t.Errorf("allow_fallbacks = %v, want false", af)
+	}
+}
+
+// TestOpenRouterEmitsReasoning pins the second half of ADR 0034: a declared
+// reasoning effort reaches OpenRouter as `reasoning.effort`, matching the pi
+// `openrouter` thinking format.
+func TestOpenRouterEmitsReasoning(t *testing.T) {
+	req := buildOpenAIRequest("deepseek/deepseek-v4.1-flash", nil, nil, Config{
+		Reasoning: &Reasoning{Effort: "high"},
+	}, false)
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	reasoning, ok := got["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("no reasoning object on the wire: %s", body)
+	}
+	if reasoning["effort"] != "high" {
+		t.Errorf("reasoning.effort = %v, want high", reasoning["effort"])
+	}
+}
+
+// TestOpenRouterOmitsUnsetOptions pins the other direction: a model that
+// declares nothing sends a body with neither object, so adding ADR 0034 does
+// not change the request for a navi that says nothing.
+func TestOpenRouterOmitsUnsetOptions(t *testing.T) {
+	// Nil options.
+	body, err := json.Marshal(buildOpenAIRequest("m", nil, nil, Config{}, false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{"provider", "reasoning"} {
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := got[key]; present {
+			t.Errorf("nil %s reached the wire: %s", key, body)
+		}
+	}
+
+	// A non-nil but empty Routing is also nothing: `"provider": {}` would be a
+	// request the caller did not ask for.
+	body, err = json.Marshal(buildOpenAIRequest("m", nil, nil, Config{
+		Routing:   &Routing{},
+		Reasoning: &Reasoning{Effort: "  "},
+	}, false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := got["provider"]; present {
+		t.Errorf("empty routing reached the wire: %s", body)
+	}
+	if _, present := got["reasoning"]; present {
+		t.Errorf("blank reasoning effort reached the wire: %s", body)
+	}
+}
+
+// TestOpenRouterAllowFallbacksUnsetVsFalse pins the tri-state distinction:
+// unset means "no opinion" (OpenRouter's default), false means "do not
+// degrade". Collapsing them would make it impossible to request the safe
+// behaviour explicitly.
+func TestOpenRouterAllowFallbacksUnsetVsFalse(t *testing.T) {
+	unset := buildOpenAIRequest("m", nil, nil, Config{
+		Routing: &Routing{Only: []string{"a"}},
+	}, false)
+	if unset.Provider.AllowFallbacks != nil {
+		t.Error("unset allow_fallbacks should stay nil (no opinion)")
+	}
+	explicitFalse := buildOpenAIRequest("m", nil, nil, Config{
+		Routing: &Routing{Only: []string{"a"}, AllowFallbacks: boolPtr(false)},
+	}, false)
+	if explicitFalse.Provider.AllowFallbacks == nil || *explicitFalse.Provider.AllowFallbacks {
+		t.Error("explicit false allow_fallbacks must be carried as false")
+	}
+	explicitTrue := buildOpenAIRequest("m", nil, nil, Config{
+		Routing: &Routing{Only: []string{"a"}, AllowFallbacks: boolPtr(true)},
+	}, false)
+	if explicitTrue.Provider.AllowFallbacks == nil || !*explicitTrue.Provider.AllowFallbacks {
+		t.Error("explicit true allow_fallbacks must be carried as true")
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

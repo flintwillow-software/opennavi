@@ -60,3 +60,38 @@ func TestModelListAbsentWithoutModels(t *testing.T) {
 		t.Fatal("model_list must not be registered when no models are declared")
 	}
 }
+
+// TestModelListReportsRequestOptions pins ADR 0034 open question 3: the
+// declared per-model routing and reasoning are visible through discovery, so
+// "which upstream will serve this, and does it reason" is answerable from the
+// navi rather than only from the gateway's dashboard.
+func TestModelListReportsRequestOptions(t *testing.T) {
+	clearProviderEnv(t)
+	withFakeOpenRouterCredential(t)
+
+	n := New("models-opts", WithWorkers(1))
+	if err := n.Models.Add(model.OpenRouter("deepseek/deepseek-v4.1-flash",
+		model.Default(),
+		model.WithCredential(model.DefaultOpenRouterCredential),
+		model.WithRouting("deepseek/deepseek-v4.1-flash", model.Routing{
+			Only:           []string{"inference-net/fp8"},
+			AllowFallbacks: model.Bool(false),
+		}),
+		model.WithReasoning("deepseek/deepseek-v4.1-flash", model.Reasoning{Effort: "high"}),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := n.registry.Dispatch(context.Background(), "model_list", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("dispatch model_list: %v", err)
+	}
+	for _, want := range []string{"inference-net/fp8", `"allow_fallbacks":false`, `"effort":"high"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("model_list output missing %q:\n%s", want, out)
+		}
+	}
+}

@@ -889,7 +889,41 @@ func validateProvider(p model.Provider) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("%w: provider requires a name", ErrInvalid)
 	}
+	// Per-model request options (ADR 0034) must name a model this provider
+	// serves, and only a provider that understands them may carry them. A
+	// typo in a model id would otherwise route nothing, silently — the
+	// failure mode ADR 0034 exists to prevent.
+	for modelName := range p.Options {
+		if strings.TrimSpace(modelName) == "" {
+			return fmt.Errorf("%w: provider %q: request options require a model id",
+				ErrInvalid, p.Name)
+		}
+		if !providerServesModel(p, modelName) {
+			return fmt.Errorf("%w: provider %q: request options name model %q, which it does not serve",
+				ErrInvalid, p.Name, modelName)
+		}
+		if !supportsModelOptions(p.Name) {
+			return fmt.Errorf("%w: provider %q: does not support per-model request options (model %q)",
+				ErrInvalid, p.Name, modelName)
+		}
+	}
 	return nil
+}
+
+// providerServesModel reports whether the descriptor serves a model id. A
+// provider serves its declared default model, and any model named by its
+// own options (the latter is how a provider declaring several models
+// declares them).
+func providerServesModel(p model.Provider, modelName string) bool {
+	return modelName == p.Model
+}
+
+// supportsModelOptions reports whether a provider understands per-model
+// request options (ADR 0034 decision 7). OpenRouter is the one that does;
+// another provider carrying them is a declaration error rather than a value
+// dropped at request time.
+func supportsModelOptions(name string) bool {
+	return strings.EqualFold(name, "openrouter")
 }
 
 func validateConnector(c connector.Connector) error {
