@@ -69,6 +69,12 @@ const PortalEnv = "NAVI_PORTAL"
 //
 // The returned positional list is the caller's to interpret — typically the
 // endpoint or the prompt.
+//
+// `health` deliberately does NOT call this: it declares no positional argument,
+// so it cannot drift into the mis-ordering this prevents. The rule is to share
+// a mechanism where the FAILURE MODE is shared, not where the shape merely
+// looks similar — applying it to `health` would change working code with no
+// test that could fail. If `health` ever gains a positional, adopt it there.
 func PartitionArgs(args []string, fs *flag.FlagSet) (flags, positional []string) {
 	takesValue := make(map[string]bool)
 	fs.VisitAll(func(f *flag.Flag) {
