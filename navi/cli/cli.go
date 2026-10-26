@@ -35,6 +35,7 @@ package cli
 // what makes `connect`, `enqueue`, and `health` resolve the same endpoint.
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -48,6 +49,79 @@ import (
 // endpoint when no positional argument is given. All the client roles read it,
 // so they agree on where a navi is.
 const PortalEnv = "NAVI_PORTAL"
+
+// PartitionArgs splits a role's argument list into flags and positionals, so a
+// role may accept its flags and its positional argument in ANY order.
+//
+// It exists because flag.FlagSet.Parse stops at the first non-flag argument: a
+// `connect <url> --key k.pem` would parse the URL and SILENTLY DROP the
+// credential, leaving the client unauthenticated with no error. The caller
+// therefore passes only the flags to fs.Parse and reads the positionals
+// separately.
+//
+// The set of value-taking flags is DERIVED from fs rather than passed in, and
+// that is deliberate: a hand-maintained list would be the same defect one level
+// up — a role adds a flag, forgets to list it, and the helper mis-parses
+// silently. Declaring the flag on fs is the only step, and it is already
+// mandatory. Arity comes from flag.Value's documented contract: a Value whose
+// IsBoolFlag reports true takes no value (the parser treats -name as
+// -name=true), so it never consumes the following token.
+//
+// The returned positional list is the caller's to interpret — typically the
+// endpoint or the prompt.
+//
+// `health` deliberately does NOT call this: it declares no positional argument,
+// so it cannot drift into the mis-ordering this prevents. The rule is to share
+// a mechanism where the FAILURE MODE is shared, not where the shape merely
+// looks similar — applying it to `health` would change working code with no
+// test that could fail. If `health` ever gains a positional, adopt it there.
+func PartitionArgs(args []string, fs *flag.FlagSet) (flags, positional []string) {
+	takesValue := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) {
+		takesValue[f.Name] = flagTakesValue(f)
+	})
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		// A lone "-" is a positional (stdin by convention), not a flag.
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		// Go's flag package accepts both -flag and --flag spellings, and
+		// -flag=value carries its own value.
+		name := strings.TrimLeft(arg, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		if takesValue[name] && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return flags, positional
+}
+
+// firstArg returns the first positional argument, or "" when there is none.
+func firstArg(positional []string) string {
+	if len(positional) == 0 {
+		return ""
+	}
+	return positional[0]
+}
+
+// flagTakesValue reports whether a declared flag consumes the next argument.
+// It asks the flag package's own question: a Value with IsBoolFlag() true is
+// parsed as -name=true and never takes the following token (see the flag.Value
+// documentation), so every other type — string, int, duration — does.
+func flagTakesValue(f *flag.Flag) bool {
+	type boolFlagger interface{ IsBoolFlag() bool }
+	if bf, ok := f.Value.(boolFlagger); ok {
+		return !bf.IsBoolFlag()
+	}
+	return true
+}
 
 // ResolveEndpoint resolves the portal endpoint: the positional argument wins,
 // then $NAVI_PORTAL.

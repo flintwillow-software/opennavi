@@ -23,11 +23,10 @@ import (
 // picked up on next start by the reconcile loop that adopts externally-written
 // rows.
 //
-// Flags and the positional prompt may appear in ANY order: the args are
-// partitioned manually, because flag.NewFlagSet.Parse stops at the first
-// positional and would drop a -db placed after the prompt. A token starting
-// with "-" is a flag; everything else is a prompt word. Both
-// `enqueue "prompt" -db X` and `enqueue -db X "prompt"` work.
+// Flags and the positional prompt may appear in ANY order: PartitionArgs splits
+// them, because flag.NewFlagSet.Parse stops at the first positional and would
+// drop a -db placed after the prompt. Both `enqueue "prompt" -db X` and
+// `enqueue -db X "prompt"` work.
 func Enqueue(args []string) error {
 	fs := flag.NewFlagSet("enqueue", flag.ExitOnError)
 	priority := fs.Int("priority", 4, "thought priority 1-10 (1 = critical, 4 = normal)")
@@ -42,26 +41,8 @@ func Enqueue(args []string) error {
 		}
 	}
 
-	// Partition: flags (with values) vs prompt positionals.
-	var flags []string
-	var positional []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if strings.HasPrefix(arg, "-") && arg != "-" {
-			flags = append(flags, arg)
-			// Known value-taking flags consume the next token. Go's flag
-			// package accepts both -flag and --flag spellings.
-			switch strings.TrimLeft(arg, "-") {
-			case "priority", "db", "provider", "model", "mode", "portal":
-				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-					i++
-					flags = append(flags, args[i])
-				}
-			}
-			continue
-		}
-		positional = append(positional, arg)
-	}
+	// Flags (with values) vs prompt positionals, in any order.
+	flags, positional := PartitionArgs(args, fs)
 
 	if err := fs.Parse(flags); err != nil {
 		return err

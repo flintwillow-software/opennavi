@@ -395,6 +395,49 @@ Runtime plugins are deferred (ADR 0005). If introduced, they register
 into the same tool registry under a distinct origin and require an explicit
 allow-signers declaration; they never widen the compiled policy.
 
+## Silent failure is the failure mode that matters
+
+The capability model is built to **fail closed**: a principal with no role is
+refused, a gateway with no trust source authenticates nobody, a connector with
+no resolvable credential refuses every call (ADR 0021 decision 11, ADR 0022
+decision 8, ADR 0020 decision 7). Every one of those is a *loud* refusal — it
+returns an error naming what was missing, so a caller learns immediately.
+
+The failure mode to design against is the opposite one: **a capability that
+appears present and is not.** A refusal is safe because it is visible. A silent
+omission is dangerous because it looks like success, and it reaches production.
+Three instances, all found while dogfooding NAVI-407, all the same shape:
+
+- A role that granted no tool call. The operator could open a chat; every tool
+  call inside it was refused at run time. The composition test asserted on the
+  *declared* grant list and could not see it (NAVI-565).
+- A `call:*` wildcard grant. It reads as "every tool" and exceeds the compiled
+  ceiling, which lists tools **by name** — so the navi refused to start and the
+  service crash-looped (NAVI-565).
+- `navi connect <url> --key k.pem`. Go's flag parser stops at the first
+  non-flag argument, so the credential after the address was **dropped**: the
+  client connected *unauthenticated*, with no error (NAVI-566).
+
+The third is the clearest illustration, because the tool did not merely fail to
+authenticate — it succeeded in connecting, as nobody. Had the navi been
+configured permissively, that connection would have been served.
+
+Two habits follow, and both are cheap:
+
+1. **Documentation of a defect is a signal to fix it, not evidence it is
+   understood.** Each of the three above was *documented* as a workaround
+   somewhere — a `NOTE ON FLAG ORDER` comment in the code, three stale warnings
+   in a downstream repo's README and justfile. Writing down the limitation
+   propagates it to every reader and makes it look intended. A comment that
+   explains a workaround should be read as a bug report against the code, and
+   the workaround removed when the bug is fixed.
+2. **Assert on the effect, not on the declaration.** A test that inspects a
+   decision's *inputs* (a role's grant list) cannot catch a defect in how those
+   inputs are *evaluated*. Compile the policy and assert on the resulting
+   `Decision` — that is what exercises the ceiling, the session layer, and the
+   conditions. This is why `Validate` compiles the policy (ADR 0033) and why the
+   acceptance test for NAVI-565 asserts per declared tool on a real decision.
+
 ## Related
 
 - [overview.md](./overview.md) — boundaries table
