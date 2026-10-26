@@ -22,21 +22,22 @@ import (
 // request for a service — and the navi answers with a verified principal or a
 // refusal. It never asserts an identity.
 //
-// NOTE ON FLAG ORDER: Go's flag parser stops at the first non-flag argument,
-// so a credential passed AFTER the address is silently ignored and the client
-// connects with none. The flags must precede the URL:
-//
-//	connect --principal service:cli --key k.pem --key-id k1 10.0.0.51:8090
+// Flags and the positional address may appear in ANY order — `connect --key k.pem
+// <url>` and `connect <url> --key k.pem` are equivalent. Go's flag parser stops
+// at the first non-flag argument, so a credential written after the address
+// would otherwise be silently dropped and the client would connect with none;
+// PartitionArgs handles the split (and is where that reasoning lives).
 func Connect(args []string) error {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	token := fs.String("token", "", "bearer token (an OIDC session) presented to the navi")
 	principalRef := fs.String("principal", "", "principal reference to sign requests as, e.g. service:cli (requires --key)")
 	keyPath := fs.String("key", "", "path to a PKCS#8 PEM Ed25519 private key used to sign requests (requires --principal and --key-id)")
 	keyID := fs.String("key-id", "", "key id within the principal (requires --key)")
-	if err := fs.Parse(args); err != nil {
+	flags, positional := PartitionArgs(args, fs)
+	if err := fs.Parse(flags); err != nil {
 		return err
 	}
-	endpoint, err := ResolveEndpoint(fs.Arg(0))
+	endpoint, err := ResolveEndpoint(firstArg(positional))
 	if err != nil {
 		return err
 	}
