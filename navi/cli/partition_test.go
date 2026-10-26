@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// These tests pin the shared argument partition (NAVI-565 follow-up): a role's
+// These tests pin the shared argument partition (NAVI-566): a role's
 // flags and its positional argument may appear in ANY order, and the set of
 // value-taking flags is DERIVED from the FlagSet rather than listed by hand.
 //

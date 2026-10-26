@@ -416,7 +416,7 @@ Three instances, all found while dogfooding NAVI-407, all the same shape:
   service crash-looped (NAVI-565).
 - `navi connect <url> --key k.pem`. Go's flag parser stops at the first
   non-flag argument, so the credential after the address was **dropped**: the
-  client connected *unauthenticated*, with no error (NAVI-565 follow-up).
+  client connected *unauthenticated*, with no error (NAVI-566).
 
 The third is the clearest illustration, because the tool did not merely fail to
 authenticate — it succeeded in connecting, as nobody. Had the navi been
