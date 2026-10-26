@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -14,34 +14,30 @@ import (
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
-// runEnqueue is the `navi enqueue` subcommand: writes a thought
-// directly to the shared SQLite queue DB.
-// If no navi is running, the thought is enqueued and picked up
-// on next start (the store is the cross-process channel; the
-// reconcile loop adopts externally-written rows).
+// Enqueue is the `enqueue` client role: writes a thought to a navi's queue.
 //
-// Flags and the positional prompt can appear in any order: the args
-// are partitioned manually (flag.NewFlagSet.Parse stops at the first
-// positional, which would drop -db/-priority placed after the prompt).
-// A token starting with "-" is a flag; everything else is a prompt
-// word. Both `enqueue "prompt" -db X` and `enqueue -db X "prompt"`
-// work.
-func runEnqueue(args []string) error {
+// With a known portal endpoint the control channel is tried first (a 2s
+// budget) and the SQLite mailbox is the fallback on refusal or
+// unreachability; without one, the DB write is the direct path. The store is
+// the cross-process channel, so a thought enqueued while no navi is running is
+// picked up on next start by the reconcile loop that adopts externally-written
+// rows.
+//
+// Flags and the positional prompt may appear in ANY order: the args are
+// partitioned manually, because flag.NewFlagSet.Parse stops at the first
+// positional and would drop a -db placed after the prompt. A token starting
+// with "-" is a flag; everything else is a prompt word. Both
+// `enqueue "prompt" -db X` and `enqueue -db X "prompt"` work.
+func Enqueue(args []string) error {
 	fs := flag.NewFlagSet("enqueue", flag.ExitOnError)
 	priority := fs.Int("priority", 4, "thought priority 1-10 (1 = critical, 4 = normal)")
 	dbPath := fs.String("db", "", "path to the session SQLite database (the durable mailbox the fallback writes)")
 	provider := fs.String("provider", "", "provider override for this thought (default: runtime primary; unknown names fail at run time)")
 	model := fs.String("model", "", "model override for this thought (default: runtime model)")
 	mode := fs.String("mode", "", "mode (session policy) for this thought: a declared mode the caller may select (default: the navi's)")
-	// Portal channel resolution order (NAVI-337): explicit --portal
-	// wins, then the NAVI_PORTAL env var. With a known portal the
-	// control channel is tried first (2s) and the DB mailbox is the
-	// fallback on refusal/unreachability; without one, the DB write is
-	// the direct path. provider/model carry over the DB path only (the
-	// portal channel's shim does not carry them yet).
 	portal := fs.String("portal", "", "portal control endpoint (http://host:port); tries the control channel first, falls back to the DB mailbox")
 	if *portal == "" {
-		if env := os.Getenv("NAVI_PORTAL"); env != "" {
+		if env := os.Getenv(PortalEnv); env != "" {
 			portal = &env
 		}
 	}
@@ -71,7 +67,7 @@ func runEnqueue(args []string) error {
 		return err
 	}
 	if len(positional) == 0 {
-		return fmt.Errorf("enqueue: prompt is required (navi enqueue \"prompt\" [-priority N] [-db path])")
+		return fmt.Errorf("enqueue: prompt is required (enqueue \"prompt\" [-priority N] [-db path])")
 	}
 	prompt := strings.Join(positional, " ")
 
@@ -110,11 +106,10 @@ func runEnqueue(args []string) error {
 		UpdatedAt: now,
 	}
 
-	// Portal-first channel (NAVI-337): when a portal endpoint is
-	// known — and the request is expressible on it (provider/model
-	// ride the DB path only until the shim carries them) — POST the
-	// enqueue control; the navi's ack confirms delivery. Refusals
-	// (403 fail-closed until IAM) and unreachable endpoints fall back
+	// Portal-first channel: when a portal endpoint is known — and the request
+	// is expressible on it (provider/model ride the DB path only until the
+	// shim carries them) — POST the enqueue control; the navi's ack confirms
+	// delivery. A refusal (fail-closed) or an unreachable endpoint falls back
 	// to the DB mailbox with a visible note.
 	var note string
 	if *portal != "" && *provider == "" && *model == "" {
@@ -138,11 +133,11 @@ func runEnqueue(args []string) error {
 	return nil
 }
 
-// enqueueViaPortal POSTs the enqueue control action to a navi's
-// portal endpoint. Priority/deferral ride along (the shim consumes
-// priority; defer_until is forwarded for forward-compat and ignored
-// until the shim learns it). Returns ok=true on the shim's 200 ack,
-// or the refusal/unreachability reason for the DB fallback.
+// enqueueViaPortal POSTs the enqueue control action to a navi's portal
+// endpoint. Priority and mode ride along (the shim consumes priority;
+// defer_until is forwarded for forward-compat and ignored until the shim
+// learns it). Returns ok=true on the shim's 200 ack, or the
+// refusal/unreachability reason for the DB fallback.
 func enqueueViaPortal(addr, id, prompt string, prio int, notBefore time.Time, mode string) (bool, error) {
 	payload := map[string]any{"action": "enqueue", "id": id, "prompt": prompt}
 	if prio > 0 {
