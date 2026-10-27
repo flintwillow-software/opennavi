@@ -179,3 +179,46 @@ func TestCronRecordsFireStateOnClaim(t *testing.T) {
 	}
 	t.Fatal("fire state never recorded for the claimed schedule thought")
 }
+
+// TestCronPriorityHintResolvesAtTheDoor pins NAVI-579's contract for the cron
+// connector: an unset hint lands at the planned-work default, and a deliberate
+// 0 survives as the urgent band rather than being re-read as "unset" (the
+// normalization that used to live in the scheduler would have clobbered it).
+func TestCronPriorityHintResolvesAtTheDoor(t *testing.T) {
+	cases := []struct {
+		name string
+		hint connector.PriorityHint
+		want int
+	}{
+		{"unset is the default", nil, connector.DefaultPriority},
+		{"deliberate urgent survives", connector.PriorityValue(0), 0},
+		{"a declared value is verbatim", connector.PriorityValue(2), 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newQueue(t)
+			c := New(Config{Schedules: []Schedule{
+				{Name: "s", Expr: "* * * * *", Prompt: "tick", Priority: tc.hint},
+			}})
+			c.now = func() time.Time {
+				return time.Date(2030, 1, 1, 12, 0, 59, 900_000_000, time.UTC)
+			}
+			if err := c.Start(context.Background(), connector.Deps{ThoughtSystem: q}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Stop()
+
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if thoughts := q.GetThoughts(); len(thoughts) > 0 {
+					if thoughts[0].Priority != tc.want {
+						t.Fatalf("priority = %d, want %d", thoughts[0].Priority, tc.want)
+					}
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.Fatal("schedule never fired")
+		})
+	}
+}

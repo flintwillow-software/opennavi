@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flintwillow-software/opennavi/connector"
 	"github.com/flintwillow-software/opennavi/connector/cron"
 	"github.com/flintwillow-software/opennavi/connector/metrics"
 	"github.com/flintwillow-software/opennavi/datastore"
@@ -379,6 +380,15 @@ func addCatalogTools(n *navi.Navi, rc config.RuntimeConfig, naviID string, state
 	return n.Tools.Add(skillTool)
 }
 
+// cronPriorityHint maps the config layer's priority (0 = unset) to a
+// connector priority hint: 0 becomes nil (unset), anything else is declared.
+func cronPriorityHint(p int) connector.PriorityHint {
+	if p == 0 {
+		return nil
+	}
+	return connector.PriorityValue(p)
+}
+
 // addCron wires configured schedules as the cron connector (ADR 0010),
 // backed by the shared store so tick state persists and missed ticks are
 // coalesced across restarts (NAVI-358).
@@ -389,10 +399,16 @@ func addCron(n *navi.Navi, rc config.RuntimeConfig, db *sql.DB) error {
 	schedules := make([]cron.Schedule, 0, len(rc.Cron.Schedules))
 	for _, s := range rc.Cron.Schedules {
 		schedules = append(schedules, cron.Schedule{
-			Name:     s.Name,
-			Expr:     s.Expr,
-			Prompt:   s.Prompt,
-			Priority: s.Priority,
+			Name:   s.Name,
+			Expr:   s.Expr,
+			Prompt: s.Prompt,
+			// The config layer documents 0 as "unset, use the default" and has
+			// always meant it that way, so it maps to a nil hint here rather
+			// than being passed through (ADR 0035 decision 5's hint is a
+			// pointer precisely so "unset" and a deliberate 0 are different).
+			// A config-expressed urgent schedule would need a new config
+			// shape; that is deliberately not invented here.
+			Priority: cronPriorityHint(s.Priority),
 			TZ:       s.TZ,
 			Disabled: !s.IsEnabled(),
 		})

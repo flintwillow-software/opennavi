@@ -100,8 +100,14 @@ type Subscription struct {
 	Principal principal.Ref
 	// Prompt is the thought prompt for an event. Empty = a generated prompt.
 	Prompt string
-	// Priority is the enqueued thought's priority (1-10; 0 = 3).
-	Priority int
+	// Priority is an ADVISORY priority hint for the thoughts this
+	// subscription spawns (ADR 0035 decision 5, ADR 0036 decision 2). Nil
+	// (unset) lands at connector.DefaultPriority; a value is used verbatim,
+	// including a deliberate 0 for the urgent band. GitHub reports no
+	// per-issue priority, so the subscription's hint is the whole signal; a
+	// hint is a starting position, not a verdict — only the running thought
+	// can see the queue and revise it.
+	Priority connector.PriorityHint
 	// Mention is the login (without "@") an issue_mention comment must name.
 	// Required when Events includes EventIssueMention.
 	Mention string
@@ -153,6 +159,9 @@ func (e inboundEvent) contextText() string {
 func validateSubscription(s Subscription) error {
 	if strings.TrimSpace(s.Name) == "" {
 		return fmt.Errorf("subscription requires a name")
+	}
+	if s.Priority != nil && !connector.ValidPriority(*s.Priority) {
+		return fmt.Errorf("subscription %q: priority %d is outside the 0..10 scale", s.Name, *s.Priority)
 	}
 	if !strings.Contains(s.Repository, "/") {
 		return fmt.Errorf("subscription %q: repository %q must be owner/name", s.Name, s.Repository)
@@ -491,10 +500,13 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, kind Eve
 		actor = ref
 	}
 	t := &thought.Thought{
-		ID:        fmt.Sprintf("github-%s-%s", sub.Name, ev.ID),
-		Prompt:    prompt,
+		ID:     fmt.Sprintf("github-%s-%s", sub.Name, ev.ID),
+		Prompt: prompt,
+		// GitHub states no per-issue priority, so the subscription's hint is
+		// the signal (ADR 0035 decision 5). Advisory: the triaging thought
+		// may revise it once it has seen the queue.
+		Priority:  connector.ResolvePriority(sub.Priority),
 		Context:   ev.contextText(),
-		Priority:  sub.Priority,
 		Status:    thought.ThoughtPending,
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.UTC(),

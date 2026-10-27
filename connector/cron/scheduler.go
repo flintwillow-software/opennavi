@@ -14,10 +14,13 @@ import (
 // deployment-time runtime config; the compiled navi
 // definition declares only whether the cron interface exists.
 type scheduleSpec struct {
-	Name     string // unique schedule name
-	Expr     string // 5-field cron expression
-	Prompt   string // thought prompt / task template
-	Priority int    // 1-10 (default 3: cron-triggered)
+	Name   string // unique schedule name
+	Expr   string // 5-field cron expression
+	Prompt string // thought prompt / task template
+	// Priority is a RESOLVED thought priority (0..10). It is resolved from the
+	// schedule's advisory hint at the connector door, so a deliberate 0 (the
+	// urgent band) survives — the scheduler must not treat 0 as "unset".
+	Priority int
 	TZ       string // IANA timezone ("" = time.Local)
 	// Disabled schedules are skipped by the tick loop. The definition
 	// layer uses *bool (nil = enabled); the scheduler normalizes to a
@@ -103,9 +106,9 @@ func (s *scheduler) Add(def scheduleSpec) error {
 	if strings.TrimSpace(def.Prompt) == "" {
 		return fmt.Errorf("cron: schedule %q: prompt is required", def.Name)
 	}
-	if def.Priority == 0 {
-		def.Priority = 3 // cron-triggered,
-	}
+	// NOTE: no "0 means unset" normalization here. The hint is resolved at the
+	// connector door (cron.Start, via connector.ResolvePriority), and by this
+	// point 0 is a deliberate urgent priority (ADR 0035 decision 1).
 	expr, err := parseExpr(def.Expr)
 	if err != nil {
 		return err

@@ -597,3 +597,170 @@ func TestMentionsPersonIgnoresCodeAndQuotes(t *testing.T) {
 		t.Error("an empty person id must not match")
 	}
 }
+
+// ── priority hints (NAVI-579, ADR 0035 decision 5) ──────────────────────
+
+// TestInboundUnsetHintLandsAtTheDefault is the regression that motivated the
+// pointer hint: the subscription declares no priority, and the thought must
+// land at the planned-work default — NOT the urgent band, which would cancel
+// whatever is running.
+func TestInboundUnsetHintLandsAtTheDefault(t *testing.T) {
+	f := newFakeHuly(t)
+	// The fixture issue carries priority 2 ("high"); strip it so this test
+	// exercises the no-signal-at-all path.
+	for _, is := range f.issues {
+		delete(is, "priority")
+	}
+	ts := &fakeTS{}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "assigned", Project: "NAVI", Events: []EventKind{EventIssueAssigned},
+		// Priority deliberately unset.
+	}}})
+	seen, _ := newSeenStore(nil)
+	pollOnceNow(t, c, ts, seen, time.Hour)
+
+	if ts.count() != 1 {
+		t.Fatalf("enqueued %d thoughts, want 1", ts.count())
+	}
+	got := ts.GetThoughts()[0]
+	if got.Priority != connector.DefaultPriority {
+		t.Fatalf("unset hint landed at priority %d (effective %d), want the default %d — "+
+			"0 would be the urgent band and would cancel running work",
+			got.Priority, got.EffectivePriority(), connector.DefaultPriority)
+	}
+}
+
+// TestInboundIssuePriorityDrivesTheHint: an issue's own priority wins over the
+// subscription's hint, so an urgent issue interrupts and an unprioritised event
+// falls back (ADR 0035 decision 5).
+func TestInboundIssuePriorityDrivesTheHint(t *testing.T) {
+	cases := []struct {
+		name      string
+		issuePrio any // Huly's numeric scale, or nil for absent
+		subHint   connector.PriorityHint
+		want      int
+	}{
+		{name: "urgent issue interrupts", issuePrio: 1, want: 0},
+		{name: "high issue", issuePrio: 2, want: 1},
+		{name: "medium issue", issuePrio: 3, want: 2},
+		{name: "low issue", issuePrio: 4, want: 3},
+		{name: "no-priority falls back to the sub hint", issuePrio: 0, subHint: connector.PriorityValue(2), want: 2},
+		{name: "absent priority falls back to the sub hint", issuePrio: nil, subHint: connector.PriorityValue(1), want: 1},
+		{name: "no priority and no hint is the default", issuePrio: 0, want: connector.DefaultPriority},
+		{name: "the issue wins over the sub hint", issuePrio: 1, subHint: connector.PriorityValue(3), want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHuly(t)
+			for _, is := range f.issues {
+				delete(is, "priority")
+				if tc.issuePrio != nil {
+					is["priority"] = tc.issuePrio
+				}
+			}
+			ts := &fakeTS{}
+			c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+				Name: "assigned", Project: "NAVI", Events: []EventKind{EventIssueAssigned},
+				Priority: tc.subHint,
+			}}})
+			seen, _ := newSeenStore(nil)
+			pollOnceNow(t, c, ts, seen, time.Hour)
+
+			if ts.count() != 1 {
+				t.Fatalf("enqueued %d thoughts, want 1", ts.count())
+			}
+			got := ts.GetThoughts()[0]
+			if got.Priority != tc.want {
+				t.Fatalf("priority = %d (effective %d), want %d", got.Priority, got.EffectivePriority(), tc.want)
+			}
+		})
+	}
+}
+
+// TestInboundUrgentIssueActuallyPreempts is the end-to-end statement of why the
+// hint exists: an urgent issue's thought carries a priority that preempts a
+// running lower-priority thought, while an unprioritised one does not.
+func TestInboundUrgentIssueActuallyPreempts(t *testing.T) {
+	enqueue := func(t *testing.T, issuePrio any, subHint connector.PriorityHint) *thought.Thought {
+		t.Helper()
+		f := newFakeHuly(t)
+		for _, is := range f.issues {
+			delete(is, "priority")
+			if issuePrio != nil {
+				is["priority"] = issuePrio
+			}
+		}
+		ts := &fakeTS{}
+		c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+			Name: "assigned", Project: "NAVI", Events: []EventKind{EventIssueAssigned},
+			Priority: subHint,
+		}}})
+		seen, _ := newSeenStore(nil)
+		pollOnceNow(t, c, ts, seen, time.Hour)
+		if ts.count() != 1 {
+			t.Fatalf("enqueued %d thoughts, want 1", ts.count())
+		}
+		return ts.GetThoughts()[0]
+	}
+
+	// A real queue: does the spawned thought preempt a running p1? The victim
+	// is p1 rather than something lower so the test is DISCRIMINATING: under
+	// strictly-higher-wins (ADR 0035 decision 2) a p3 would legitimately
+	// preempt a p5, so a p5 victim could not tell "the default preempts" from
+	// "urgent preempts". Only p0 outranks a running p1.
+	preempts := func(t *testing.T, spawned *thought.Thought) bool {
+		t.Helper()
+		q, err := thought.NewQueue(thought.Config{MaxConcurrent: 1, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		running := &thought.Thought{ID: "running", Prompt: "long", Priority: 1, Status: thought.ThoughtPending}
+		if err := q.Enqueue(running); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := q.Dequeue(); !ok {
+			t.Fatal("running thought not claimable")
+		}
+		spawned.Status = thought.ThoughtPending
+		if err := q.Enqueue(spawned); err != nil {
+			t.Fatal(err)
+		}
+		victim, err := q.GetThought("running")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return victim.PreemptedBy == spawned.ID
+	}
+
+	if !preempts(t, enqueue(t, 1, nil)) {
+		t.Fatal("an urgent Huly issue must preempt a running lower-priority thought")
+	}
+	if preempts(t, enqueue(t, 0, nil)) {
+		t.Fatal("an unprioritised Huly issue must NOT preempt a running p1 — it is planned work")
+	}
+	if preempts(t, enqueue(t, nil, nil)) {
+		t.Fatal("an unset hint must NOT preempt a running p1 — the default is not the urgent band")
+	}
+}
+
+// TestSubscriptionPriorityOutOfRangeIsRejected: a declared hint outside the
+// queue's scale is a composition error, not a value silently clamped at the
+// door.
+func TestSubscriptionPriorityOutOfRangeIsRejected(t *testing.T) {
+	for _, p := range []int{-1, 11} {
+		err := validateSubscription(Subscription{
+			Name: "x", Events: []EventKind{EventIssueAssigned},
+			Priority: connector.PriorityValue(p),
+		})
+		if err == nil || !strings.Contains(err.Error(), "0..10") {
+			t.Errorf("priority %d: error = %v, want an out-of-range rejection", p, err)
+		}
+	}
+	// A deliberate urgent hint is in range and accepted.
+	if err := validateSubscription(Subscription{
+		Name: "x", Events: []EventKind{EventIssueAssigned},
+		Priority: connector.PriorityValue(0),
+	}); err != nil {
+		t.Fatalf("a deliberate urgent hint must validate: %v", err)
+	}
+}
