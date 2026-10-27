@@ -57,7 +57,7 @@ needs into short-term memory, and queues follow-ups. Deferral *is* the context
 mechanism, so short-term memory is what makes the queue usable rather than a
 convenience on top of it. A navi in a chaotic environment
 ([ADR 0035](./0035-priority-classes-and-strict-preemption.md),
-[ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md)) also needs
+[ADR 0036](./0036-a-connector-event-triages-itself.md)) also needs
 somewhere to *park* a conclusion it cannot act on now — which is long-term
 memory, and today there is nowhere.
 
@@ -96,7 +96,7 @@ memory, and today there is nowhere.
    whatever the index happens to produce. A tool that can return an unbounded
    result into a thought with a fixed budget is a way to fail a thought, not a
    way to inform it. The contract is the same shape as
-   [ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md)'s bounded
+   [ADR 0036](./0036-a-connector-event-triages-itself.md)'s bounded
    queue read: a bounded window into something larger.
 
 4. **The two tiers are a system, through pointers.** Short-term memory may record
@@ -164,7 +164,7 @@ memory, and today there is nowhere.
   makes the memory skill load-bearing rather than decorative — and means the
   failure mode is silent (a follow-up that starts with no context) rather than
   loud. Accepted deliberately; the mitigation is guidance plus the fact that a
-  scout ([ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md)) is
+  scout ([ADR 0036](./0036-a-connector-event-triages-itself.md)) is
   the natural place to write it.
 - **Short-term memory has a size policy to design and enforce.** Bounded means a
   number, and a navi that cannot add a note because the tier is full needs a
@@ -233,5 +233,5 @@ memory, and today there is nowhere.
 - [ADR 0013](./0013-the-thought-queue-is-the-context-mechanism.md) — the queue is the context mechanism; memory is the inter-thought carrier
 - [ADR 0015](./0015-thought-dependencies-order-a-plan.md) — ordering is not inheritance
 - [ADR 0017](./0017-navi-state-as-typed-objects.md) — memory as inspectable objects
-- [ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md) — the scout, and the bounded queue read this ADR mirrors
+- [ADR 0036](./0036-a-connector-event-triages-itself.md) — the scout, and the bounded queue read this ADR mirrors
 - [memory.md](../architecture/memory.md) — the two-tier model this ADR implements

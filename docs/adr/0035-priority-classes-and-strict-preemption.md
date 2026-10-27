@@ -71,15 +71,15 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    in urgency as the number falls. Three bands are named because they carry
    distinct *behaviour*, not merely distinct rank:
 
-   | Priority | Meaning | Behaviour |
+   | Priority | Meaning | How the running thought yields |
    |---|---|---|
-   | **0** | urgent | interrupts: park the running thought, come back to it |
-   | **1** | "respond to me" | parks anything 2-or-lower, then addresses it |
-   | **2+** | planned work | yields to anything strictly higher |
+   | **0** | urgent | **cancelled and parked** — Ctrl-C, then park where it stood |
+   | **1** | "respond to me" | **steered to park** — told to put the work down, at a point it chooses |
+   | **2+** | planned work | **steered to park**, same as 1, for anything strictly more urgent |
 
    The bands are documentation and convention, not a hard-coded table: the
-   scheduler implements the *rule* in decision 2, and the bands are how the
-   connectors and the scout use it.
+   scheduler implements the rules in decisions 2 and 3, and the bands are how
+   the connectors and the triaging thought use them.
 
 2. **Preemption is strictly-higher-wins; the fixed threshold is removed.**
    `HighPriorityThreshold` no longer gates preemption. A pending thought may
@@ -88,10 +88,45 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    comparison in `preemptCandidate` becomes the whole rule, and the
    `EffectivePriority() > HighPriorityThreshold` early return goes away.
 
+3. **Two ways to yield, and the difference is whether the victim gets to think.**
+   This is the operator's distinction, and it is the sharper half of the rule:
+   *a p0 is Ctrl-C and then park; anything else is steer to park.*
+
+   - **A p0 cancels.** The victim is stopped **immediately** — `EventPreempted`
+     → context cancel → the runner snapshots its checkpoint → `Pause`. It does
+     not reason about it and does not get to choose. This is for work that
+     cannot wait: an outage. The cost is an abrupt checkpoint that may land
+     mid-step, leaving the resumed thought with less context than a deliberate
+     wrap-up would have produced. That cost is accepted, because nothing the
+     victim is doing matters as much as stopping.
+   - **Any other higher priority steers.** The victim is **told** to put its
+     work down (`RouteMessage` → `Agent.Steer`, `internal/agent/agent.go:225`),
+     and it does so **at a point it chooses** — the turn boundary. It can finish
+     the step it is in, write what the next thought needs into memory, and park
+     with a stated reason. The result is a **better handoff** than a forced
+     cancellation produces, which is the whole reason to prefer steering when
+     there is time for it.
+
+   Both mechanisms already exist; what changes is *when each is used*. Today
+   `EventPreempted` is the only preemption path, so every preemption is a forced
+   cancellation.
+
+   **A steered yield is bounded by one turn, not instantaneous.** `Steer`
+   injects at the turn boundary, so a p1 arrives when the current provider turn
+   ends. That is the correct granularity — it is what makes the stopping point
+   *natural* — but it means p1 latency is bounded by a turn rather than by
+   nothing, and no caller should expect otherwise.
+
+   **A steering instruction must be actionable.** The victim has to understand
+   that it is being asked to park, and why, in terms it can act on: put the work
+   down, record what the next thought needs, and park. That is a **guidance**
+   obligation carried by the core thoughts skill, not something each connector
+   invents — the same instruction has to work for every running thought.
+
    The threshold constant is retained only if it still marks something real;
    otherwise it is deleted rather than left as a misleading vestige.
 
-3. **Time breaks ties, explicitly, in every path.** A thought's position among
+4. **Time breaks ties, explicitly, in every path.** A thought's position among
    equals is `(priority, created_at)` — arrival order, not last-activity order
    and not insertion order. Concretely:
    - the in-memory comparator becomes `(priority, created_at)` rather than
@@ -107,7 +142,7 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    observable order after a restart and after a resume. That is the point —
    the order becomes a stated rule instead of an artifact.
 
-4. **The self-scheduled clamp stays.** `EffectiveSelfPriority` continues to
+5. **The self-scheduled clamp stays.** `EffectiveSelfPriority` continues to
    clamp origin-tagged work to ≥5, so a navi that schedules its own follow-ups
    cannot preempt external work. A navi assigned a low-priority issue can decide
    it is genuinely low priority and let it wait while it finishes what it is
@@ -118,7 +153,7 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    and it is deliberately a separate decision with its own authority model
    rather than a hole punched in this one.
 
-5. **Connectors declare a priority hint on the thoughts they spawn.** A
+6. **Connectors declare a priority hint on the thoughts they spawn.** A
    connector is closer to the event than the queue is, so it states the urgency
    it knows: a Huly issue comment at 1 (the user is waiting for feedback), a new
    assignment at 2 (it has a place to fall that does not interrupt the current
@@ -129,12 +164,46 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    A hint is a starting position, not a verdict — the scout (ADR 0036) may
    revise it once it has read the event and seen the queue.
 
-6. **Preemption remains cooperative, and that is stated rather than implied.**
-   A p0 does not stop an in-flight provider call; it parks the thought at its
-   next checkpoint. "Interrupt" means *the victim yields at a natural stopping
-   point and resumes later*, which is what the operator asked for and what the
-   existing `EventPreempted` → context-cancel → checkpoint → `Pause` path
-   delivers. Nothing here makes it preemptive in the hard sense.
+7. **Preemption remains cooperative, and that is stated rather than implied.**
+   Even a p0 does not stop an in-flight provider call; it parks the thought at
+   its next checkpoint. "Interrupt" means *the victim yields and resumes later*,
+   which is what the existing `EventPreempted` → context-cancel → checkpoint →
+   `Pause` path delivers for p0 and what steering delivers for everything else.
+   Nothing here makes it preemptive in the hard sense — there is no mechanism to
+   interrupt a provider mid-call, and a p0's Ctrl-C lands at the same checkpoint
+   boundary as any other cancellation, just without the victim's cooperation.
+
+8. **A preempted thought resumes automatically when its preemptor finishes.**
+   This is the half that makes an interrupt tolerable, and it does **not exist
+   today**: every `Resume` call site is operator-driven (a portal action, a
+   `thoughts_update`, an explicit API call), `Dequeue` walks only `q.pending`,
+   and `Complete` clears the victim's `PreemptRequested` flag but resumes
+   nothing. So a preempted thought is parked **permanently** until a human
+   resumes it, and "I was interrupted, I will come back to that" is not a
+   behaviour the queue has.
+
+   The intended cycle is: a higher-priority thought arrives → the running
+   thought parks with a checkpoint → the preemptor runs → the preemptor
+   **finishes** → the victim is resumed from its checkpoint. A preemption is
+   therefore only acceptable because the preemptor is expected to be *short*:
+   the interruption costs the victim a context switch, not its progress.
+
+   **Resumption is automatic only for a preemption.** A thought parked by an
+   operator, by a `thoughts_update`, or by a plan deciding to shelve work is
+   paused **deliberately** and stays paused until something resumes it — the
+   queue must not resurrect work a human or the navi chose to stop. The queue
+   therefore has to distinguish "paused because it was preempted" from "paused
+   because someone decided to pause it", which today it does not: `Pause`
+   (`thought/queue.go:549`) and `PauseWithCheckpoint` are one path, and a
+   preemption is recorded only as a transient `PreemptRequested` flag that
+   `Complete` clears.
+
+   A victim whose preemptor *fails* or is *cancelled* is also resumed: the
+   reason for the interruption is gone, and leaving the victim parked would make
+   a failed high-priority thought silently destroy the work it interrupted.
+
+   Interaction with ADR 0015: resuming the head of a chain releases the chain,
+   so the plan continues where it left off.
 
 ## Consequences
 
@@ -150,11 +219,37 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
   (p5 vs p7), they now happen. This is the accepted price of strict ordering;
   if it proves expensive in practice, the answer is a floor on *checkpoint*
   frequency rather than a return to the threshold.
+- **A steered yield produces a better handoff than a cancelled one.** The
+  victim writes what the next thought needs and parks with a stated reason,
+  rather than being snapshotted wherever it happened to be. This is a real
+  quality difference, not just a timing one: a p1 leaves the resumed thought in
+  a better position than a p0 does, because the victim cooperated.
+- **A p0 buys immediacy at the cost of context.** It is the only path that does
+  not let the victim reason, so it may park mid-step with a thinner checkpoint.
+  That is the intended trade — for an outage, stopping matters more than the
+  quality of the resume — but it means p0 is not simply "a p1 that is faster",
+  and a caller should not reach for 0 when 1 would do.
+- **Steering needs guidance, which is a new obligation on the core thoughts
+  skill.** The instruction must be actionable in terms any running thought can
+  act on (put the work down, record what the next needs, park). Without it, a
+  steered thought receives a message it does not know how to obey — which is
+  worse than a cancellation, because it keeps running and ignores the message.
+- **An interrupt costs a context switch, not progress** — but only once
+  automatic resumption exists (decision 8). Until it does, every preemption is a
+  **permanent** loss of the victim's forward progress, which makes the strict
+  rule actively harmful rather than merely aggressive: a p5 arriving during a p7
+  would park the p7 forever. Decision 7 is therefore not a nicety; it is the
+  thing that makes decision 2 safe, and the two must ship together.
 - **Parking a dependency's head parks its chain** (ADR 0015 decision 3): a
   paused dependency is not `complete`, so a preemption mid-plan pauses that plan
   until the preemptor finishes. Correct, but worth knowing: a busy p0 stream can
   starve a long plan by repeatedly parking it. The strict rule makes this more
   likely than the threshold did.
+- **The preemptor is expected to be short.** A preemption is only tolerable
+  because the interrupting thought finishes quickly and hands control back. A
+  p0 that itself runs for a long time holds the victim parked for that whole
+  span — which is why a scout (ADR 0036) doing cheap triage rather than the work
+  is what makes the model pay off.
 - **Restart and resume order changes**, in the direction of correctness. A
   restored queue now drains oldest-first within a band rather than
   most-recently-touched-first, and a resumed thought no longer goes to the back
@@ -174,6 +269,13 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
 - **Keep stable-sort tie-breaking and fix only the store query.** Rejected:
   three paths must agree, and leaving two of them implicit is how they drift.
   Making the comparator explicit is a one-line change that removes the class.
+- **Leave resumption to the operator.** Rejected: it makes every preemption a
+  permanent loss, which contradicts the whole point of parking. "I will come
+  back to that" is only true if something brings it back.
+- **Auto-resume anything paused.** Rejected: a pause is also how an operator
+  stops work and how a navi shelves something deliberately. Resurrecting that
+  would override a human decision, so the queue must distinguish a preemption
+  park from a deliberate one.
 - **Let a resumed thought go to the back of its band.** Rejected: it was in the
   queue first. Re-appending it behind newer work inverts arrival order exactly
   where the operator wants it respected.
@@ -206,5 +308,5 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
 - [ADR 0013](./0013-the-thought-queue-is-the-context-mechanism.md) — the thought queue is the context mechanism
 - [ADR 0015](./0015-thought-dependencies-order-a-plan.md) — dependencies order a plan; a paused dependency blocks its chain
 - [ADR 0016](./0016-a-plan-closes-with-a-verification-thought.md) — how a plan closes
-- [ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md) — scouts, connector hints, and the scheduling authority a scout needs
+- [ADR 0036](./0036-a-connector-event-triages-itself.md) — scouts, connector hints, and the scheduling authority a scout needs
 - [runtime.md](../architecture/runtime.md) — the queue, slots, and preemption
