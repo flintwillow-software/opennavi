@@ -127,8 +127,26 @@ func streamFromLLM(ctx context.Context, inner llm.Provider, name string, message
 					})
 				}
 			case llm.StreamEventToolCallEnd:
-				// The agent loop assembles calls from ToolCallStart
-				// events; the end event carries no new information.
+				// The end event carries the FULLY ACCUMULATED arguments. It is
+				// not redundant with the start event: OpenAI-compatible
+				// providers stream arguments in fragments, so the start event
+				// carries an empty (or partial) argument string and only the
+				// end event has the whole JSON body. Forwarding it lets the
+				// loop replace what it built from the start event.
+				//
+				// Ollama sends complete arguments in one chunk, so for it the
+				// two events agree and the reconciliation is a no-op.
+				if ev.ToolCall != nil {
+					deliver(ctx, out, Event{
+						Type: EventToolCall,
+						Tool: &ToolUpdate{
+							ToolCallID: ev.ToolCall.ID,
+							Name:       ev.ToolCall.Name,
+							Input:      []byte(ev.ToolCall.Arguments),
+							Complete:   true,
+						},
+					})
+				}
 			case llm.StreamEventMessageEnd:
 				deliver(ctx, out, Event{Type: EventMessageEnd})
 			case llm.StreamEventStop:

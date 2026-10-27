@@ -62,6 +62,10 @@ func OllamaHostFromEnv() string {
 // Name implements Provider.
 func (p *OllamaProvider) Name() string { return "ollama" }
 
+// ModelName reports the model this adapter was built for, so a fallback chain
+// can retarget a request at it (see fallbackConfigFor).
+func (p *OllamaProvider) ModelName() string { return p.Model }
+
 // ── wire types (Ollama /api/chat) ────────────────────────────────────────
 
 type ollamaChatRequest struct {

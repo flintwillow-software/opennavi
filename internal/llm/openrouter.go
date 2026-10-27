@@ -18,7 +18,11 @@ import (
 type OpenRouterProvider struct {
 	BaseURL string // default https://openrouter.ai/api/v1
 	APIKey  string
-	client  *http.Client
+	// Model is the default model this adapter serves; a request may override
+	// it (OpenRouter serves many models behind one key). It exists so a
+	// fallback chain can retarget a request at the fallback's own model.
+	Model  string
+	client *http.Client
 }
 
 // NewOpenRouterProviderWithClient builds a provider with a custom HTTP
@@ -46,6 +50,11 @@ func NewOpenRouterProvider() *OpenRouterProvider {
 
 // Name implements Provider.
 func (p *OpenRouterProvider) Name() string { return "openrouter" }
+
+// ModelName reports the model this adapter was built for, so a fallback chain
+// can retarget a request at it (see fallbackConfigFor). OpenRouter serves many
+// models behind one key, so this is the descriptor's default.
+func (p *OpenRouterProvider) ModelName() string { return p.Model }
 
 // knownContextWindows maps model IDs to context windows
 // scenario). The live /models/{id} fetch covers everything else.

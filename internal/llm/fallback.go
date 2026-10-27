@@ -73,11 +73,10 @@ func (f *ProviderFallback) Stream(ctx context.Context, messages []Message, tools
 	}
 
 	if f.fallback != nil {
-		fallbackConfig := config
-		fallbackConfig.Provider = f.fallback.Name()
+		fallbackConfig := fallbackConfigFor(config, f.fallback)
 		events, fbErr := f.fallback.Stream(ctx, messages, tools, fallbackConfig)
 		if fbErr != nil {
-			return nil, fmt.Errorf("llm: all providers unavailable: %w", fbErr)
+			return nil, allUnavailable(err, fbErr)
 		}
 		return events, nil
 	}
@@ -94,11 +93,57 @@ func (f *ProviderFallback) Complete(ctx context.Context, messages []Message, too
 	}
 
 	if f.fallback != nil {
-		fallbackConfig := config
-		fallbackConfig.Provider = f.fallback.Name()
-		return f.fallback.Complete(ctx, messages, tools, fallbackConfig)
+		fallbackConfig := fallbackConfigFor(config, f.fallback)
+		resp, fbErr := f.fallback.Complete(ctx, messages, tools, fallbackConfig)
+		if fbErr != nil {
+			return nil, allUnavailable(err, fbErr)
+		}
+		return resp, nil
 	}
 	return nil, fmt.Errorf("llm: all providers unavailable: %w", err)
+}
+
+// fallbackConfigFor retargets a request at the fallback provider. It rewrites
+// the model to the FALLBACK's own model when the two providers serve
+// different ones: a fallback exists to serve the request another way, and
+// forwarding the primary's model id to a provider that does not serve it
+// produces a 404 rather than a fallback. When the fallback declares no model
+// of its own, the primary's is kept (a same-model fallback, e.g. two
+// endpoints of one service).
+func fallbackConfigFor(config Config, fallback Provider) Config {
+	fallbackConfig := config
+	fallbackConfig.Provider = fallback.Name()
+	if fbModel := modelOf(fallback); fbModel != "" && fbModel != config.Model {
+		fallbackConfig.Model = fbModel
+	}
+	// Per-model request options belong to the model that declared them
+	// (ADR 0034). A fallback serving a different model must not inherit the
+	// primary's routing or reasoning — that would send, say, Ollama an
+	// OpenRouter routing object.
+	if fallbackConfig.Model != config.Model {
+		fallbackConfig.Routing = nil
+		fallbackConfig.Reasoning = nil
+	}
+	return fallbackConfig
+}
+
+// modelOf reports the model a provider serves, when it exposes one. The
+// Ollama and OpenRouter adapters carry their configured model; a provider
+// with no notion of one (the mock) answers "" and the primary's model is
+// kept.
+func modelOf(p Provider) string {
+	if m, ok := p.(interface{ ModelName() string }); ok {
+		return m.ModelName()
+	}
+	return ""
+}
+
+// allUnavailable reports a chain failure naming BOTH halves. The primary's
+// error is the one that says why the request did not work; reporting only the
+// fallback's (as this did) hides the cause and makes a chain failure read as a
+// fallback misconfiguration.
+func allUnavailable(primaryErr, fallbackErr error) error {
+	return fmt.Errorf("llm: all providers unavailable: primary: %v; fallback: %w", primaryErr, fallbackErr)
 }
 
 // withRetry runs fn against the primary, retrying while the error is
