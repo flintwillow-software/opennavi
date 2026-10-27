@@ -73,7 +73,7 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
 
    | Priority | Meaning | Behaviour |
    |---|---|---|
-   | **0** | urgent | interrupts: park the running thought, come back to it |
+   | **0** | urgent | interrupts: park the running thought, resume it after |
    | **1** | "respond to me" | parks anything 2-or-lower, then addresses it |
    | **2+** | planned work | yields to anything strictly higher |
 
@@ -136,6 +136,38 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    existing `EventPreempted` → context-cancel → checkpoint → `Pause` path
    delivers. Nothing here makes it preemptive in the hard sense.
 
+7. **A preempted thought resumes automatically when its preemptor finishes.**
+   This is the half that makes an interrupt tolerable, and it does **not exist
+   today**: every `Resume` call site is operator-driven (a portal action, a
+   `thoughts_update`, an explicit API call), `Dequeue` walks only `q.pending`,
+   and `Complete` clears the victim's `PreemptRequested` flag but resumes
+   nothing. So a preempted thought is parked **permanently** until a human
+   resumes it, and "I was interrupted, I will come back to that" is not a
+   behaviour the queue has.
+
+   The intended cycle is: a higher-priority thought arrives → the running
+   thought parks with a checkpoint → the preemptor runs → the preemptor
+   **finishes** → the victim is resumed from its checkpoint. A preemption is
+   therefore only acceptable because the preemptor is expected to be *short*:
+   the interruption costs the victim a context switch, not its progress.
+
+   **Resumption is automatic only for a preemption.** A thought parked by an
+   operator, by a `thoughts_update`, or by a plan deciding to shelve work is
+   paused **deliberately** and stays paused until something resumes it — the
+   queue must not resurrect work a human or the navi chose to stop. The queue
+   therefore has to distinguish "paused because it was preempted" from "paused
+   because someone decided to pause it", which today it does not: `Pause`
+   (`thought/queue.go:549`) and `PauseWithCheckpoint` are one path, and a
+   preemption is recorded only as a transient `PreemptRequested` flag that
+   `Complete` clears.
+
+   A victim whose preemptor *fails* or is *cancelled* is also resumed: the
+   reason for the interruption is gone, and leaving the victim parked would make
+   a failed high-priority thought silently destroy the work it interrupted.
+
+   Interaction with ADR 0015: resuming the head of a chain releases the chain,
+   so the plan continues where it left off.
+
 ## Consequences
 
 - **The queue becomes explainable.** "Why did this run before that" has an
@@ -150,11 +182,22 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
   (p5 vs p7), they now happen. This is the accepted price of strict ordering;
   if it proves expensive in practice, the answer is a floor on *checkpoint*
   frequency rather than a return to the threshold.
+- **An interrupt costs a context switch, not progress** — but only once
+  automatic resumption exists (decision 7). Until it does, every preemption is a
+  **permanent** loss of the victim's forward progress, which makes the strict
+  rule actively harmful rather than merely aggressive: a p5 arriving during a p7
+  would park the p7 forever. Decision 7 is therefore not a nicety; it is the
+  thing that makes decision 2 safe, and the two must ship together.
 - **Parking a dependency's head parks its chain** (ADR 0015 decision 3): a
   paused dependency is not `complete`, so a preemption mid-plan pauses that plan
   until the preemptor finishes. Correct, but worth knowing: a busy p0 stream can
   starve a long plan by repeatedly parking it. The strict rule makes this more
   likely than the threshold did.
+- **The preemptor is expected to be short.** A preemption is only tolerable
+  because the interrupting thought finishes quickly and hands control back. A
+  p0 that itself runs for a long time holds the victim parked for that whole
+  span — which is why a scout (ADR 0036) doing cheap triage rather than the work
+  is what makes the model pay off.
 - **Restart and resume order changes**, in the direction of correctness. A
   restored queue now drains oldest-first within a band rather than
   most-recently-touched-first, and a resumed thought no longer goes to the back
@@ -174,6 +217,13 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
 - **Keep stable-sort tie-breaking and fix only the store query.** Rejected:
   three paths must agree, and leaving two of them implicit is how they drift.
   Making the comparator explicit is a one-line change that removes the class.
+- **Leave resumption to the operator.** Rejected: it makes every preemption a
+  permanent loss, which contradicts the whole point of parking. "I will come
+  back to that" is only true if something brings it back.
+- **Auto-resume anything paused.** Rejected: a pause is also how an operator
+  stops work and how a navi shelves something deliberately. Resurrecting that
+  would override a human decision, so the queue must distinguish a preemption
+  park from a deliberate one.
 - **Let a resumed thought go to the back of its band.** Rejected: it was in the
   queue first. Re-appending it behind newer work inverts arrival order exactly
   where the operator wants it respected.
@@ -206,5 +256,5 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
 - [ADR 0013](./0013-the-thought-queue-is-the-context-mechanism.md) — the thought queue is the context mechanism
 - [ADR 0015](./0015-thought-dependencies-order-a-plan.md) — dependencies order a plan; a paused dependency blocks its chain
 - [ADR 0016](./0016-a-plan-closes-with-a-verification-thought.md) — how a plan closes
-- [ADR 0036](./0036-scouts-on-ingress-and-scheduling-authority.md) — scouts, connector hints, and the scheduling authority a scout needs
+- [ADR 0036](./0036-a-connector-event-triages-itself.md) — scouts, connector hints, and the scheduling authority a scout needs
 - [runtime.md](../architecture/runtime.md) — the queue, slots, and preemption
