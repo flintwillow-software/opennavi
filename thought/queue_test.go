@@ -268,7 +268,8 @@ func TestRetry(t *testing.T) {
 }
 
 func TestEffectivePriorityClamps(t *testing.T) {
-	for _, c := range []struct{ in, want int }{{0, 1}, {-5, 1}, {5, 5}, {11, 10}, {99, 10}} {
+	// The floor is 0, not 1 (ADR 0035 decision 1: 0 is the urgent band).
+	for _, c := range []struct{ in, want int }{{0, 0}, {-5, 0}, {5, 5}, {11, 10}, {99, 10}} {
 		tt := &Thought{Priority: c.in}
 		if got := tt.EffectivePriority(); got != c.want {
 			t.Errorf("priority %d: got %d, want %d", c.in, got, c.want)
@@ -336,10 +337,10 @@ func TestQueuePreemption(t *testing.T) {
 		t.Fatal("low should be claimable")
 	}
 
-	// High-priority arrival with all slots full: the low thought is
-	// marked preempt-requested (cooperative — it keeps running until
-	// its runner yields).
-	high := newThought("high", 1)
+	// p0 arrival with all slots full: the low thought is marked
+	// preempt-requested (cooperative cancellation — it keeps running until
+	// its runner yields). ADR 0035 decision 3: p0 is the cancel band.
+	high := newThought("high", 0)
 	if err := q.Enqueue(high); err != nil {
 		t.Fatal(err)
 	}
@@ -395,8 +396,8 @@ func TestQueueRejectPolicy(t *testing.T) {
 	if err := q.Enqueue(newThought("second", 4)); err == nil {
 		t.Fatal("reject policy should refuse when slots are full")
 	}
-	// But a high-priority thought can preempt.
-	if err := q.Enqueue(newThought("urgent", 1)); err != nil {
+	// But a strictly-higher-priority thought can preempt.
+	if err := q.Enqueue(newThought("urgent", 0)); err != nil {
 		t.Fatalf("high-priority enqueue under reject policy: %v", err)
 	}
 }
@@ -644,7 +645,8 @@ func TestPoolCooperativePreemption(t *testing.T) {
 	// thought runs. No work is discarded.
 	q, _ := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 0, SlotExhaustion: PolicyQueue}, NewMemoryStore())
 
-	lowCtxErr := make(chan error, 1)
+	lowCtxErr := make(chan error, 1) // low's cancellation observation
+	highGate := make(chan struct{})  // test releases high once the park is seen
 	lowRuns := 0
 	var lowMu sync.Mutex
 	runner := RunnerFunc(func(ctx context.Context, t *Thought) error {
@@ -662,7 +664,11 @@ func TestPoolCooperativePreemption(t *testing.T) {
 			}
 			return nil // resumed run completes normally
 		}
-		return nil // high-priority thought completes immediately
+		// high holds the slot until the test has observed low parked, so the
+		// paused state is deterministic rather than racing the auto-resume
+		// that high's completion triggers.
+		<-highGate
+		return nil
 	})
 	p := NewPool(q, runner, 1)
 	p.Start()
@@ -675,19 +681,19 @@ func TestPoolCooperativePreemption(t *testing.T) {
 		return got != nil && got.Status == ThoughtRunning
 	}, "low should start")
 
-	if err := q.Enqueue(newThought("high", 1)); err != nil {
+	// p0: the cancel band (ADR 0035 decision 3). The victim is stopped via
+	// ctx cancellation, not steered.
+	if err := q.Enqueue(newThought("high", 0)); err != nil {
 		t.Fatal(err)
 	}
 
+	// The victim parks with its checkpoint before high can complete (high is
+	// blocked on the single slot the park frees), so this snapshot is stable.
 	waitFor(t, func() bool {
-		got, _ := q.GetThought("high")
-		return got != nil && got.Status == ThoughtComplete
-	}, "high should complete after preemption")
-
+		got, _ := q.GetThought("low")
+		return got != nil && got.Status == ThoughtPaused
+	}, "low should park after cancellation")
 	paused, _ := q.GetThought("low")
-	if paused.Status != ThoughtPaused {
-		t.Fatalf("low status = %q, want paused", paused.Status)
-	}
 	if string(paused.Checkpoint) != "low-progress" {
 		t.Fatalf("checkpoint = %q, want runner snapshot", paused.Checkpoint)
 	}
@@ -699,15 +705,22 @@ func TestPoolCooperativePreemption(t *testing.T) {
 	default:
 		t.Fatal("low runner never observed cancellation")
 	}
-
-	// Resume the victim: it completes normally afterwards.
-	if err := q.Resume("low"); err != nil {
-		t.Fatal(err)
+	// The cancelled park is a PREEMPTION park (auto-resumable) and carries
+	// the runtime-synthesised handoff floor (ADR 0035 decision 3).
+	if paused.ParkReason != ParkPreempted {
+		t.Fatalf("park reason = %q, want preempted", paused.ParkReason)
 	}
+	if paused.HandoffNote == "" {
+		t.Fatal("cancelled park has no handoff note")
+	}
+
+	// Auto-resume (ADR 0035 decision 7): let the preemptor finish, and the
+	// victim is released with no operator action.
+	close(highGate)
 	waitFor(t, func() bool {
 		got, _ := q.GetThought("low")
 		return got != nil && got.Status == ThoughtComplete
-	}, "resumed low should complete")
+	}, "auto-resumed low should complete")
 	p.StopAndWait()
 }
 

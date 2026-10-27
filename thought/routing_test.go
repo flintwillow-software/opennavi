@@ -382,7 +382,7 @@ func TestForegroundPreemptionUnchanged(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("foreground claim failed")
 	}
-	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}); err != nil {
+	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 0, Status: ThoughtPending}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := q.GetThought("fg-low")
@@ -533,7 +533,7 @@ func TestPreemptNormalSlotVictimUnchanged(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("claim failed")
 	}
-	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}); err != nil {
+	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 0, Status: ThoughtPending}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := q.GetThought("victim")
@@ -554,7 +554,7 @@ func TestPreemptForegroundTakesFreedSlot(t *testing.T) {
 	if _, ok := q.Dequeue(); !ok {
 		t.Fatal("second claim failed")
 	}
-	urgentFG := &Thought{ID: "urgent-fg", Prompt: "interactive urgent", Priority: 1, Status: ThoughtPending, Foreground: true}
+	urgentFG := &Thought{ID: "urgent-fg", Prompt: "interactive urgent", Priority: 0, Status: ThoughtPending, Foreground: true}
 	if err := q.Enqueue(urgentFG); err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestPreemptForegroundOnNormalSlot(t *testing.T) {
 
 	// Non-foreground urgent work preempts it: freed normal slot is
 	// claimable by the preemptor.
-	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 1, Status: ThoughtPending}); err != nil {
+	if err := q.Enqueue(&Thought{ID: "urgent", Prompt: "urgent", Priority: 0, Status: ThoughtPending}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := q.GetThought("fg-low"); !got.PreemptRequested {

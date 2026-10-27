@@ -31,9 +31,15 @@ type Slot struct {
 	Foreground bool
 }
 
-// HighPriorityThreshold: thoughts at or above this priority (i.e. this
-// number or lower) may use reserved slots and preempt running thoughts.
-const HighPriorityThreshold = 3
+// reservedSlotBand is the capacity policy for reserved slots: thoughts at
+// this priority or above (numerically lower) may occupy a slot reserved by
+// Config.PrioritySlots. It is deliberately NOT the preemption rule and NOT
+// a statement about urgency ordering — ADR 0035 removed the fixed
+// preemption threshold in favour of strictly-higher-wins, and the two must
+// not be re-linked. Reserved slots are a scarce-capacity reservation; the
+// scheduler orders work by (priority, created_at) and preempts by the
+// strictly-lower rule regardless of this band.
+const reservedSlotBand = 3
 
 // Config configures a Queue.
 type Config struct {
@@ -88,6 +94,13 @@ type Queue struct {
 	// (running-path); invoked OUTSIDE q.mu — implementations
 	// must not re-enter the queue. Wired by the runtime (NAVI-320).
 	steeringRouter SteeringRouter
+
+	// pendingSteers collects victims marked for steering during a
+	// preemption, so the steering bridge can be invoked after q.mu is
+	// released (the router is injected code and must not run under the
+	// lock). Guarded by q.mu; drained by deliverSteers on every
+	// preemption-emitting path.
+	pendingSteers []string
 
 	// reconcile loop lifecycle (NAVI-336): reconcileStop guards the
 	// single loop per queue (StartReconcile is idempotent).
@@ -207,9 +220,27 @@ func (q *Queue) Recover() {
 	q.reconcileOnce()
 }
 
+// sortPending orders the pending queue by (priority, created_at) — urgency
+// first, arrival second (ADR 0035 decision 4). The tiebreak is EXPLICIT
+// rather than an accident of sort.SliceStable preserving insertion order:
+// the guarantee has to hold in every path, and insertion order does not
+// survive a restart or a resume. A thought's position among equals is its
+// arrival time, so a thought touched recently (a status change, a retry, a
+// metadata write) is not promoted over one queued earlier and never
+// touched, and a resumed thought keeps its original arrival position within
+// its band rather than re-appending behind newer work.
+//
+// sort.Slice (not SliceStable) is correct here: the comparator is a total
+// order on the fields that matter, and equal (priority, created_at) is a
+// genuine tie with no stated preference — pinning it with stability would
+// reintroduce the implicit rule this replaces.
 func (q *Queue) sortPending() {
-	sort.SliceStable(q.pending, func(i, j int) bool {
-		return q.pending[i].EffectivePriority() < q.pending[j].EffectivePriority()
+	sort.Slice(q.pending, func(i, j int) bool {
+		a, b := q.pending[i], q.pending[j]
+		if pa, pb := a.EffectivePriority(), b.EffectivePriority(); pa != pb {
+			return pa < pb
+		}
+		return a.CreatedAt.Before(b.CreatedAt)
 	})
 }
 
@@ -441,6 +472,14 @@ func (q *Queue) Enqueue(t *Thought) error {
 		return err
 	}
 
+	// Arrival time is the queue's tiebreak (ADR 0035 decision 4), so a
+	// thought that arrives without one would tie with every other
+	// unstamped arrival at the zero time. Stamp it here, at the door,
+	// where "arrival" actually means something.
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now().UTC()
+	}
+
 	// Reject policy: reject when NO slot is immediately available and
 	// the thought can't preempt one.
 	if q.cfg.SlotExhaustion == PolicyReject && q.findSlotFor(t) == "" && q.preemptCandidate(t) == "" {
@@ -463,9 +502,15 @@ func (q *Queue) Enqueue(t *Thought) error {
 	// NAVI-338 memory-first: mark dirty (in-memory, zero I/O in the
 	// critical section); the flusher persists outside the lock.
 	q.markDirty(t)
+	steers := q.pendingSteers
+	q.pendingSteers = nil
 	q.mu.Unlock()
 
 	q.emit(evts)
+	// Steering runs outside the lock (ADR 0035 decision 3): the bridge is
+	// injected code. A steered victim keeps running until it chooses to
+	// park, so this is a delivery, not a state transition.
+	q.deliverSteers(steers)
 	return nil
 }
 
@@ -551,7 +596,43 @@ func (q *Queue) Pause(id string) error { return q.PauseWithCheckpoint(id, nil) }
 // PauseWithCheckpoint parks a thought and records the checkpoint the
 // runner snapshotted, so a resumed thought continues rather than
 // restarts (NAVI-338: the checkpoint is on disk at park time).
+//
+// A park through this path is DELIBERATE unless the thought already carries
+// a preemption mark: a worker parking a preempted victim goes through
+// ParkWithHandoff, which stamps the reason. This form is what a component or
+// the park tool uses to stop work on purpose — and a deliberate park is
+// never auto-resumed (ADR 0035 decision 8).
 func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
+	return q.park(id, checkpoint, "", false)
+}
+
+// ParkWithHandoff parks a thought and writes the runtime-synthesised handoff
+// note (ADR 0035 decision 3). It is the path a preemption takes, on BOTH
+// bands: a p0 cancel and a p1+ steer both land here, so the resume guarantee
+// — "a resumed thought is never contextless" — holds uniformly rather than
+// depending on how the interruption happened.
+//
+// The note is synthesised from what the runtime already has (prompt,
+// context, the result reached) with NO model call, so p0 keeps its
+// immediacy. It is a FLOOR: a thought that wrote its own handoff while it
+// could (ADR 0037 decision 10) is better served by its own words, and the
+// note does not overwrite a HandoffNote the thought already set.
+//
+// reason stamps ParkReason; it defaults to ParkPreempted because the only
+// callers are the preemption paths. A park through the deliberate path
+// (PauseWithCheckpoint) keeps whatever reason the thought already carries.
+func (q *Queue) ParkWithHandoff(id string, checkpoint []byte, reason ParkReason) error {
+	if reason == "" {
+		reason = ParkPreempted
+	}
+	return q.park(id, checkpoint, reason, true)
+}
+
+// park is the one park path (ADR 0035 decision 3): it stamps the reason, so
+// a preemption park is distinguishable from a deliberate one (ADR 0035
+// decision 8), writes the handoff floor when withNote is set, and persists
+// the checkpoint synchronously.
+func (q *Queue) park(id string, checkpoint []byte, reason ParkReason, withNote bool) error {
 	var evts []Event
 
 	q.mu.Lock()
@@ -561,6 +642,15 @@ func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
 		return fmt.Errorf("thought: %s: %w (not running)", id, ErrThoughtNotFound)
 	}
 	t.Checkpoint = checkpoint
+	if reason != "" {
+		t.ParkReason = reason
+	} else if t.ParkReason == "" {
+		// No reason supplied and none carried: this is a deliberate park.
+		t.ParkReason = ParkDeliberate
+	}
+	if withNote {
+		q.applyHandoffFloor(t)
+	}
 	if err := t.Transition(ThoughtPaused); err != nil {
 		q.mu.Unlock()
 		return err
@@ -569,6 +659,7 @@ func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
 	t.SlotID = ""
 	t.WorkerID = ""
 	t.PreemptRequested = false
+	t.SteerRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.paused = append(q.paused, t)
 	// DURABILITY-CRITICAL (NAVI-338): park-with-checkpoint is the
@@ -578,11 +669,37 @@ func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
 		q.mu.Unlock()
 		return err
 	}
-	collect(&evts, EventPaused, id, "")
+	collect(&evts, EventPaused, id, string(t.ParkReason))
 	q.mu.Unlock()
 
 	q.emit(evts)
 	return nil
+}
+
+// applyHandoffFloor writes the mechanical handoff note when the thought has
+// not written one of its own. Caller holds q.mu. No model call: this is the
+// whole point of the floor — it must land even when the victim was mid-step
+// and could not respond.
+func (q *Queue) applyHandoffFloor(t *Thought) {
+	if t.HandoffNote != "" {
+		return // the thought's own handoff is the ceiling; do not clobber it
+	}
+	var b strings.Builder
+	b.WriteString("Handoff (synthesised at park time): this thought was interrupted by more urgent work.\n")
+	if t.PreemptedBy != "" {
+		fmt.Fprintf(&b, "Interrupted by thought %s.\n", t.PreemptedBy)
+	}
+	if t.Prompt != "" {
+		fmt.Fprintf(&b, "Task: %s\n", t.Prompt)
+	}
+	if t.Context != "" {
+		fmt.Fprintf(&b, "Context it was given: %s\n", t.Context)
+	}
+	if t.Result != "" {
+		fmt.Fprintf(&b, "Result reached before parking: %s\n", t.Result)
+	}
+	b.WriteString("Resume from the checkpoint and continue; this note is the mechanical floor, not a summary of progress.")
+	t.HandoffNote = b.String()
 }
 
 // Resume moves a paused thought back to pending (it re-acquires a slot
@@ -650,6 +767,10 @@ func (q *Queue) Cancel(id string) error {
 		// NAVI-338: dirty mark.
 		q.markDirty(t)
 		q.failDependents(id, "cancelled", &evts)
+		// A cancelled thought can never complete, so any victim it parked
+		// would be stranded with a dangling PreemptedBy. Cancellation is a
+		// terminal state, so it releases them exactly as a completion does.
+		q.resumeVictimsOf(id, &evts)
 		q.mu.Unlock()
 		q.emit(evts)
 		return nil
@@ -686,6 +807,9 @@ func (q *Queue) Complete(id string, result string) error {
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	collect(&evts, EventCompleted, id, "")
+	// ADR 0035 decision 7: the preemptor finished, so the victim it parked
+	// comes back from its checkpoint.
+	q.resumeVictimsOf(id, &evts)
 	q.mu.Unlock()
 
 	q.emit(evts)
@@ -718,10 +842,82 @@ func (q *Queue) Fail(id string, detail string) error {
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	q.failDependents(id, "failed", &evts)
+	// A failed preemptor releases its victims (ADR 0035 decision 7): the
+	// reason for the interruption is gone, and leaving them parked would
+	// make a failed high-priority thought destroy the work it interrupted.
+	q.resumeVictimsOf(id, &evts)
 	q.mu.Unlock()
 
 	q.emit(evts)
 	return nil
+}
+
+// resumeVictimsOf releases the thoughts this one parked (ADR 0035
+// decision 7): a preempted victim resumes automatically when its preemptor
+// reaches a terminal state. The reason the interruption existed is gone
+// once the preemptor is done — whether it completed, failed, or was
+// cancelled — and leaving the victim parked would make a failed
+// high-priority thought silently destroy the work it interrupted.
+//
+// Only a PREEMPTION park is released: a thought paused by an operator, by a
+// thoughts_update, or by a deliberate shelf keeps ParkReason != preempted
+// and stays paused, because the queue must not resurrect work someone chose
+// to stop. A victim that was resumed and then preempted again by a newer
+// arrival carries the newer PreemptedBy (latest wins), so it is released by
+// that arrival rather than by this one — which is also why the release graph
+// is acyclic: a preemptor must strictly outrank the victim it parks.
+//
+// Resuming releases a chain head, so a plan continues where it left off
+// (ADR 0015). The resumed thought rejoins at its own priority with its
+// original arrival time (ADR 0035 decision 9) — it does not jump the queue.
+//
+// Caller holds q.mu.
+func (q *Queue) resumeVictimsOf(preemptorID string, evts *[]Event) {
+	for _, t := range append(append([]*Thought{}, q.paused...), q.pending...) {
+		if t.PreemptedBy != preemptorID || !t.IsPreemptionPark() {
+			continue
+		}
+		_, idx := q.findIn(q.paused, t.ID)
+		if idx < 0 {
+			continue
+		}
+		if err := t.Transition(ThoughtPending); err != nil {
+			continue
+		}
+		t.ParkReason = ""
+		t.PreemptedBy = ""
+		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
+		q.pending = append(q.pending, t)
+		q.markDirty(t)
+		collect(evts, EventResumed, t.ID, fmt.Sprintf("preemptor %s finished", preemptorID))
+	}
+	q.sortPending()
+}
+
+// clearVictimEdges drops dangling release edges before a thought record is
+// removed: a victim whose preemptor was deleted can never be released by it,
+// so the edge is cleared and the victim is resumed rather than stranded
+// (ADR 0035 decision 7). Caller holds q.mu.
+func (q *Queue) clearVictimEdges(preemptorID string, evts *[]Event) {
+	for _, t := range append(append([]*Thought{}, q.paused...), q.pending...) {
+		if t.PreemptedBy != preemptorID {
+			continue
+		}
+		if t.IsPreemptionPark() {
+			_, idx := q.findIn(q.paused, t.ID)
+			if idx >= 0 {
+				if err := t.Transition(ThoughtPending); err == nil {
+					q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
+					q.pending = append(q.pending, t)
+					collect(evts, EventResumed, t.ID, fmt.Sprintf("preemptor %s deleted", preemptorID))
+				}
+			}
+		}
+		t.ParkReason = ""
+		t.PreemptedBy = ""
+		q.markDirty(t)
+	}
+	q.sortPending()
 }
 
 // GetThoughts returns all known thoughts.
@@ -764,7 +960,9 @@ func (q *Queue) GetThought(id string) (*Thought, error) {
 // reserved slots for high-priority thoughts and never giving a reserved
 // slot to a low-priority thought while a normal one might free up.
 func (q *Queue) findSlotFor(t *Thought) string {
-	high := t.EffectivePriority() <= HighPriorityThreshold
+	// Reserved-slot eligibility is a capacity policy, unrelated to
+	// preemption (see reservedSlotBand).
+	high := t.EffectivePriority() <= reservedSlotBand
 	var normalFree, foregroundFree string
 	for _, s := range q.slots {
 		if s.ThoughtID != "" {
@@ -798,9 +996,20 @@ func (q *Queue) findSlotFor(t *Thought) string {
 	return normalFree
 }
 
-// preemptCandidate picks the lowest-priority running thought the given
-// high-priority thought may preempt (only strictly lower-priority
-// victims;).
+// preemptCandidate picks the running thought the given thought may preempt.
+//
+// The rule is strictly-higher-wins and nothing else (ADR 0035 decision 2):
+// the pending thought must be strictly more urgent (numerically lower) than
+// the victim. The old fixed HighPriorityThreshold gate is gone — it encoded
+// "only genuinely urgent things interrupt", which is the wrong rule for a
+// navi juggling a chaotic inbound stream where RELATIVE order is what keeps
+// the work sane. A p5 arriving while a p7 runs now preempts.
+//
+// Equal priority never preempts: two equally urgent things do not outrank
+// each other, and swapping a nearly-finished urgent task for a fresh one is
+// strictly worse. What happens instead is decided by slots (ADR 0035
+// decision 10): a p0 with a free slot runs alongside a running p0; with no
+// free slot it queues behind.
 //
 // Slot-type rule (foreground reservation): a victim whose slot
 // the preemptor could not claim must not be picked — preemption frees
@@ -812,9 +1021,6 @@ func (q *Queue) findSlotFor(t *Thought) string {
 // foreground preemptors, normal-slot victims by anyone meeting the
 // priority rule (same priority/preemption rules as everything else).
 func (q *Queue) preemptCandidate(t *Thought) string {
-	if t.EffectivePriority() > HighPriorityThreshold {
-		return ""
-	}
 	victimID := ""
 	victimPrio := 0
 	for _, r := range q.running {
@@ -832,24 +1038,91 @@ func (q *Queue) preemptCandidate(t *Thought) string {
 	return victimID
 }
 
-// preempt pauses the victim running thought (freeing its slot,
-// running → paused) and parks it as paused for later resume;
-// the caller's thought then starts on the freed slot.
+// preempt makes a running victim yield to a strictly-higher-priority
+// arrival. The WAY it yields depends on the preemptor's band (ADR 0035
+// decision 3), and the two mechanisms are genuinely different:
+//
+//   - preemptor priority 0: CANCEL. The victim is stopped immediately —
+//     PreemptRequested → the pool cancels its ctx → the runner snapshots
+//     its checkpoint → the worker parks it. It does not reason about it and
+//     does not choose, because nothing it is doing matters as much as
+//     stopping. This is for an outage. The cost is an abrupt checkpoint that
+//     may land mid-step.
+//   - preemptor priority ≥1: STEER. The victim is TOLD to put its work down
+//     at the turn boundary (RouteMessage → Agent.Steer) and parks at a point
+//     it chooses, which is what makes the handoff better. Steering is
+//     ADVISORY: it never sets PreemptRequested, because a steered victim that
+//     is also cancelled is a p0 with a delay, and the handoff-quality
+//     difference the ADR is built on would not exist.
+//
+// Both bands record PreemptedBy on the victim (the release edge for
+// automatic resumption, ADR 0035 decision 7) and ParkReason = preempted. The
+// handoff note is written at park time on both paths — by ParkWithHandoff —
+// so the resume guarantee holds uniformly rather than depending on how the
+// interruption happened.
+//
+// The caller holds q.mu; the steering router is invoked outside it.
 func (q *Queue) preempt(victimID string, by *Thought, evts *[]Event) {
-	// Cooperative preemption (caller holds q.mu): mark the victim — it
-	// keeps running until its runner honours the ctx cancellation the
-	// pool sends on this event, snapshots its checkpoint, and returns;
-	// then the worker parks it via Pause and the freed slot serves the
-	// next claim. Acceleration is honestly bounded by runner
-	// ctx-responsiveness.
 	t, ok := q.findByID(victimID)
 	if !ok || t.Status != ThoughtRunning {
 		return
 	}
-	t.PreemptRequested = true
-	// NAVI-338: dirty mark.
+	// The release edge and the park reason are stamped for BOTH bands, so a
+	// victim's park is legibly a preemption park however it yields, and the
+	// queue knows what to resume when the preemptor finishes.
+	t.PreemptedBy = by.ID
+	t.ParkReason = ParkPreempted
+
+	if by.EffectivePriority() == 0 {
+		// Cancel: cooperative, but the victim does not cooperate in
+		// choosing the stopping point. The pool cancels the run ctx; the
+		// runner snapshots; the worker parks with the handoff floor.
+		t.PreemptRequested = true
+		q.markDirty(t)
+		collect(evts, EventPreempted, victimID, fmt.Sprintf("cancelled by %s (priority 0)", by.ID))
+		return
+	}
+
+	// Steer: mark the advisory request (no cancellation) and record the
+	// event. The instruction is delivered through the routing bridge —
+	// which runs OUTSIDE q.mu — so the caller emits a steer request and
+	// the delivery happens after unlock (see emitSteers).
+	t.SteerRequested = true
 	q.markDirty(t)
-	collect(evts, EventPreempted, victimID, fmt.Sprintf("by %s (priority %d)", by.ID, by.EffectivePriority()))
+	collect(evts, EventPreempted, victimID, fmt.Sprintf("steered by %s (priority %d)", by.ID, by.EffectivePriority()))
+	q.pendingSteers = append(q.pendingSteers, victimID)
+}
+
+// SteerInstruction is the provisional steer text delivered to a victim that
+// a strictly-higher-priority thought preempts (ADR 0035 decision 3). It is
+// deliberately minimal and MUST be replaced by the core thoughts skill's
+// guidance (NAVI-582), which owns the actionable wording every running
+// thought can obey: put the work down, record what the next thought needs,
+// and park. It lives here for now so the queue-side mechanism is testable
+// on its own.
+//
+// PROVISIONAL — NAVI-582 owns this wording.
+const SteerInstruction = "A more urgent thought has arrived. Put this work down at a natural stopping point: finish the step you are in, record anything the next thought will need, and park this thought. It will be resumed when the urgent work is done."
+
+// deliverSteers invokes the steering bridge for each victim parked in the
+// steering band. MUST be called without q.mu held: the router is injected
+// code (the runtime's agent bridge) and must never run under the lock.
+func (q *Queue) deliverSteers(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	q.mu.Lock()
+	router := q.steeringRouter
+	q.mu.Unlock()
+	if router == nil {
+		return
+	}
+	for _, id := range ids {
+		// A failed steer is not fatal: the victim keeps running, which is
+		// the accepted guidance-failure mode (NAVI-582), not a reason to
+		// cancel it.
+		_ = router(id, SteerInstruction)
+	}
 }
 
 // claimSlot moves a thought to running on the given slot. Caller holds mu.
@@ -1075,6 +1348,9 @@ func (q *Queue) Delete(id string) error {
 	// A removed thought can never complete, so its dependents are failed
 	// rather than left blocked on a record that no longer exists.
 	q.failDependents(id, "deleted", &evts)
+	// A removed preemptor can never release its victims, so the dangling
+	// edge is cleared and they are resumed rather than stranded.
+	q.clearVictimEdges(id, &evts)
 	if q.store != nil {
 		if err := q.store.DeleteThought(id); err != nil {
 			q.mu.Unlock()

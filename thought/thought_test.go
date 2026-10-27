@@ -5,9 +5,14 @@ import (
 )
 
 func TestEffectivePriority(t *testing.T) {
+	// 0 is the highest band (ADR 0035 decision 1) and must NOT be promoted
+	// to 1 — a clamp to 1 would collapse the cancel/steer distinction.
 	lo := &Thought{Priority: 0}
-	if lo.EffectivePriority() != 1 {
-		t.Errorf("prio 0 should clamp to 1")
+	if lo.EffectivePriority() != 0 {
+		t.Errorf("prio 0 should stay 0, got %d", lo.EffectivePriority())
+	}
+	if neg := (&Thought{Priority: -5}).EffectivePriority(); neg != 0 {
+		t.Errorf("negative priority should clamp to 0, got %d", neg)
 	}
 	if hi := (&Thought{Priority: 99}).EffectivePriority(); hi != 10 {
 		t.Errorf("prio 99 should clamp to 10")
