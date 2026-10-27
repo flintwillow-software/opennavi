@@ -23,7 +23,7 @@ func routeQueue(t *testing.T) *thought.Queue {
 	return q
 }
 
-// toolRegistry registers all four tools bound to the given queue with
+// toolRegistry registers every thoughts tool bound to the given queue with
 // the full active set.
 func toolRegistry(t *testing.T, q *thought.Queue) *registry.Registry {
 	t.Helper()
@@ -31,7 +31,7 @@ func toolRegistry(t *testing.T, q *thought.Queue) *registry.Registry {
 	if err := Register(reg, q); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := reg.SetActive([]string{"thoughts_read", "thoughts_create", "thoughts_update", "thoughts_delete"}); err != nil {
+	if err := reg.SetActive([]string{"thoughts_read", "thoughts_search", "thoughts_create", "thoughts_update", "thoughts_delete"}); err != nil {
 		t.Fatalf("SetActive: %v", err)
 	}
 	return reg
@@ -73,13 +73,14 @@ func TestDefinitionsComplete(t *testing.T) {
 		format string
 	}{
 		"thoughts_read":   {registry.AccessReadOnly, registry.ToolModeParallel, "json"},
+		"thoughts_search": {registry.AccessReadOnly, registry.ToolModeParallel, "json"},
 		"thoughts_create": {registry.AccessWrite, registry.ToolModeSequential, "json"},
 		"thoughts_update": {registry.AccessWrite, registry.ToolModeSequential, "json"},
 		"thoughts_delete": {registry.AccessWrite, registry.ToolModeSequential, "json"},
 	}
 	defs := Definitions()
-	if len(defs) != 4 {
-		t.Fatalf("Definitions() = %d defs, want 4", len(defs))
+	if len(defs) != 5 {
+		t.Fatalf("Definitions() = %d defs, want 5", len(defs))
 	}
 	seen := map[string]bool{}
 	for _, def := range defs {
@@ -488,5 +489,482 @@ func TestToolsInactiveUntilActive(t *testing.T) {
 	// Writers still inactive.
 	if _, err := dispatch(t, reg, "thoughts_create", `{"prompt":"x"}`); err == nil {
 		t.Fatal("inactive create must not dispatch")
+	}
+}
+
+// ── thoughts_search (NAVI-577) ───────────────────────────────────────
+
+// searchQueue builds a queue with a mix of statuses, priorities, ages,
+// metadata, and text, so a filter can be shown to select exactly one thing.
+func searchQueue(t *testing.T) *thought.Queue {
+	t.Helper()
+	q := routeQueue(t)
+	base := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	add := func(id, prompt, context string, prio int, created time.Time, meta map[string]string) {
+		th := &thought.Thought{
+			ID: id, Prompt: prompt, Context: context, Priority: prio,
+			Status: thought.ThoughtPending, CreatedAt: created, UpdatedAt: created,
+			Metadata: meta,
+		}
+		if err := q.Enqueue(th); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+	add("urgent", "fix the outage", "prod is down", 0, base, map[string]string{"source": "huly"})
+	add("old", "oldest planned work", "no hurry", 5, base.Add(time.Minute), nil)
+	add("new", "newest planned work", "no hurry", 5, base.Add(time.Hour), nil)
+	add("mid", "middle priority", "vendor question", 3, base.Add(2*time.Minute), map[string]string{"source": "github"})
+	return q
+}
+
+func decodeSearch(t *testing.T, out string) (int, int, bool, []map[string]any) {
+	t.Helper()
+	var env struct {
+		Total     int              `json:"total"`
+		Returned  int              `json:"returned"`
+		Truncated bool             `json:"truncated"`
+		Thoughts  []map[string]any `json:"thoughts"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("decode search output %q: %v", out, err)
+	}
+	return env.Total, env.Returned, env.Truncated, env.Thoughts
+}
+
+func searchIDs(items []map[string]any) []string {
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it["id"].(string))
+	}
+	return ids
+}
+
+// TestThoughtsSearchFilters pins each filter selects exactly what it says.
+func TestThoughtsSearchFilters(t *testing.T) {
+	q := searchQueue(t)
+	reg := toolRegistry(t, q)
+
+	cases := []struct {
+		name string
+		args string
+		want []string
+	}{
+		{"no filter returns everything in queue order", `{}`, []string{"urgent", "mid", "old", "new"}},
+		{"priority_max asks what is more urgent", `{"priority_max":2}`, []string{"urgent"}},
+		{"priority_max includes the boundary", `{"priority_max":3}`, []string{"urgent", "mid"}},
+		{"priority_min is the least urgent included", `{"priority_min":3}`, []string{"mid", "old", "new"}},
+		{"a priority band", `{"priority_min":3,"priority_max":5}`, []string{"mid", "old", "new"}},
+		{"status", `{"status":["pending"]}`, []string{"urgent", "mid", "old", "new"}},
+		{"status with no match", `{"status":["running"]}`, nil},
+		{"metadata exact", `{"metadata":{"source":"huly"}}`, []string{"urgent"}},
+		{"text matches the prompt", `{"text":"vendor"}`, []string{"mid"}},
+		{"text matches the context", `{"text":"prod is down"}`, []string{"urgent"}},
+		{"text is case-insensitive", `{"text":"OUTAGE"}`, []string{"urgent"}},
+		{"created_after", `{"created_after":"2030-01-01T12:30:00Z"}`, []string{"new"}},
+		{"created_before", `{"created_before":"2030-01-01T12:00:30Z"}`, []string{"urgent"}},
+		{"filters combine", `{"priority_min":3,"metadata":{"source":"github"}}`, []string{"mid"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := dispatch(t, reg, "thoughts_search", tc.args)
+			if err != nil {
+				t.Fatalf("thoughts_search(%s): %v", tc.args, err)
+			}
+			_, _, _, items := decodeSearch(t, out)
+			got := searchIDs(items)
+			if len(got) != len(tc.want) {
+				t.Fatalf("ids = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("ids = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestThoughtsSearchSorts pins the three orders.
+func TestThoughtsSearchSorts(t *testing.T) {
+	q := searchQueue(t)
+	reg := toolRegistry(t, q)
+
+	cases := []struct {
+		name string
+		args string
+		want []string
+	}{
+		{"default is the queue's own order", `{}`, []string{"urgent", "mid", "old", "new"}},
+		{"age is oldest first", `{"sort":"age"}`, []string{"urgent", "old", "mid", "new"}},
+		{"priority sorts by urgency then arrival", `{"sort":"priority"}`, []string{"urgent", "mid", "old", "new"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := dispatch(t, reg, "thoughts_search", tc.args)
+			if err != nil {
+				t.Fatalf("thoughts_search(%s): %v", tc.args, err)
+			}
+			_, _, _, items := decodeSearch(t, out)
+			got := searchIDs(items)
+			for i := range got {
+				if i < len(tc.want) && got[i] != tc.want[i] {
+					t.Fatalf("order = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+
+	// "updated" is asserted separately: touch the oldest thought and confirm
+	// it comes first.
+	if err := q.BumpPriority("old", 5); err != nil {
+		t.Fatal(err)
+	}
+	out, err := dispatch(t, reg, "thoughts_search", `{"sort":"updated"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, items := decodeSearch(t, out)
+	if items[0]["id"] != "old" {
+		t.Fatalf("sort=updated put %v first, want the most recently changed", searchIDs(items))
+	}
+}
+
+// TestThoughtsSearchIsBounded is the acceptance criterion: the bound is part of
+// the contract, and the cap is enforced even when the caller asks for more.
+func TestThoughtsSearchIsBounded(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+	base := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	// More thoughts than the cap.
+	for i := 0; i < searchMaxLimit+25; i++ {
+		th := &thought.Thought{
+			ID: fmt.Sprintf("t%03d", i), Prompt: "work", Priority: 5,
+			Status: thought.ThoughtPending,
+			// Distinct arrival times so the order is deterministic.
+			CreatedAt: base.Add(time.Duration(i) * time.Second),
+			UpdatedAt: base.Add(time.Duration(i) * time.Second),
+		}
+		if err := q.Enqueue(th); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Default: the default limit, and the envelope says it was truncated.
+	out, err := dispatch(t, reg, "thoughts_search", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, returned, truncated, items := decodeSearch(t, out)
+	if returned != searchDefaultLimit || len(items) != searchDefaultLimit {
+		t.Fatalf("default returned %d (envelope %d), want %d", len(items), returned, searchDefaultLimit)
+	}
+	if total != searchMaxLimit+25 {
+		t.Fatalf("total = %d, want %d (what matched, before the bound)", total, searchMaxLimit+25)
+	}
+	if !truncated {
+		t.Fatal("truncated should be true when the bound cut the result")
+	}
+
+	// Asking for more than the cap is honoured AT the cap, not refused and
+	// not obeyed.
+	out, err = dispatch(t, reg, "thoughts_search", `{"limit":10000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, returned, _, items = decodeSearch(t, out)
+	if returned != searchMaxLimit || len(items) != searchMaxLimit {
+		t.Fatalf("limit=10000 returned %d (envelope %d), want the cap %d", len(items), returned, searchMaxLimit)
+	}
+
+	// A small limit is honoured, and the bound is not confused with "no more".
+	out, err = dispatch(t, reg, "thoughts_search", `{"limit":3}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, returned, truncated, items = decodeSearch(t, out)
+	if returned != 3 || len(items) != 3 || !truncated {
+		t.Fatalf("limit=3 returned %d (truncated=%v), want 3 truncated", len(items), truncated)
+	}
+
+	// A result that fits the bound is NOT truncated: filter down to fewer
+	// than the limit and confirm the envelope says so.
+	out, err = dispatch(t, reg, "thoughts_search", `{"limit":5,"text":"t000"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, returned, truncated, _ = decodeSearch(t, out)
+	if truncated {
+		t.Fatalf("a result that fits the bound must not report truncated (returned=%d)", returned)
+	}
+}
+
+// TestThoughtsSearchRejectsWhatItCannotHonour: a silently dropped filter
+// returns a superset the caller believes is narrowed.
+func TestThoughtsSearchRejectsWhatItCannotHonour(t *testing.T) {
+	q := searchQueue(t)
+	reg := toolRegistry(t, q)
+	bad := []string{
+		`{"priority_min":5,"priority_max":3}`, // inverted band
+		`{"sort":"nonsense"}`,
+		`{"created_after":"not-a-time"}`,
+		`{"created_before":"not-a-time"}`,
+		`{"status":"pending"}`,  // must be an array
+		`{"metadata":{"k":1}}`,  // values must be strings
+		`{"limit":"lots"}`,      // must be an integer
+		`{"unknown_field":"x"}`, // schema rejects unknown keys
+	}
+	for _, args := range bad {
+		if _, err := dispatch(t, reg, "thoughts_search", args); err == nil {
+			t.Errorf("thoughts_search(%s) = nil error, want a rejection", args)
+		}
+	}
+}
+
+// TestThoughtsSearchIsReadOnly: a search must not mutate the queue.
+func TestThoughtsSearchIsReadOnly(t *testing.T) {
+	q := searchQueue(t)
+	reg := toolRegistry(t, q)
+	before, err := dispatch(t, reg, "thoughts_read", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatch(t, reg, "thoughts_search", `{"text":"work","sort":"age"}`); err != nil {
+		t.Fatal(err)
+	}
+	after, err := dispatch(t, reg, "thoughts_read", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("thoughts_search mutated the queue")
+	}
+}
+
+// ── thoughts_update: park with a stated reason (NAVI-577) ────────────
+
+// TestThoughtsUpdateParkWithReason is the acceptance criterion: a park can
+// carry a stated reason, so a shelved thought is legible.
+func TestThoughtsUpdateParkWithReason(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+	if err := q.Enqueue(&thought.Thought{ID: "shelf", Prompt: "waiting", Priority: 5, Status: thought.ThoughtPending}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("claim failed")
+	}
+
+	out, err := dispatch(t, reg, "thoughts_update", `{"id":"shelf","status":"pause","reason":"waiting on the vendor's reply"}`)
+	if err != nil {
+		t.Fatalf("thoughts_update: %v", err)
+	}
+	if !strings.Contains(out, "waiting on the vendor") {
+		t.Fatalf("park note not in the response: %s", out)
+	}
+	got, err := q.GetThought("shelf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParkNote != "waiting on the vendor's reply" {
+		t.Fatalf("ParkNote = %q, want the stated reason", got.ParkNote)
+	}
+	// A stated reason is a DELIBERATE park, never auto-resumed (ADR 0035 d8).
+	if got.ParkReason != thought.ParkDeliberate {
+		t.Fatalf("ParkReason = %q, want deliberate", got.ParkReason)
+	}
+
+	// The reason is visible in a read, so it is legible without a second call.
+	read, err := dispatch(t, reg, "thoughts_read", `{"status":"paused"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read, "waiting on the vendor") {
+		t.Fatalf("park note not surfaced in thoughts_read: %s", read)
+	}
+
+	// Resuming clears it: the reason belonged to the park that ended.
+	if _, err := dispatch(t, reg, "thoughts_update", `{"id":"shelf","status":"resume"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = q.GetThought("shelf")
+	if got.ParkNote != "" {
+		t.Fatalf("ParkNote survived a resume: %q", got.ParkNote)
+	}
+}
+
+// TestThoughtsUpdateReasonRequiresPause: a reason with no park would be
+// recorded nowhere, so it is refused rather than silently dropped.
+func TestThoughtsUpdateReasonRequiresPause(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+	_ = q.Enqueue(&thought.Thought{ID: "t", Prompt: "x", Priority: 5, Status: thought.ThoughtPending})
+	if _, err := dispatch(t, reg, "thoughts_update", `{"id":"t","reason":"because"}`); err == nil {
+		t.Fatal("a reason without status=pause must be refused")
+	}
+}
+
+// TestThoughtsUpdateMergesMetadata: metadata is merged, not replaced, and the
+// origin safety rail is not writable.
+func TestThoughtsUpdateMergesMetadata(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+	_ = q.Enqueue(&thought.Thought{
+		ID: "t", Prompt: "x", Priority: 5, Status: thought.ThoughtPending,
+		Metadata: map[string]string{"origin": "tool", "keep": "me"},
+	})
+
+	if _, err := dispatch(t, reg, "thoughts_update", `{"id":"t","metadata":{"shelf":"vendor","added":"yes"}}`); err != nil {
+		t.Fatalf("thoughts_update: %v", err)
+	}
+	got, _ := q.GetThought("t")
+	if got.Metadata["keep"] != "me" {
+		t.Fatalf("merge dropped an existing key: %v", got.Metadata)
+	}
+	if got.Metadata["shelf"] != "vendor" || got.Metadata["added"] != "yes" {
+		t.Fatalf("merge did not add keys: %v", got.Metadata)
+	}
+	if got.Metadata["origin"] != "tool" {
+		t.Fatalf("origin tag changed: %v", got.Metadata)
+	}
+
+	// The origin tag cannot be rewritten through the tool (the safety rail
+	// that keeps self-scheduled work clamped).
+	if _, err := dispatch(t, reg, "thoughts_update", `{"id":"t","metadata":{"origin":"external"}}`); err != nil {
+		t.Fatalf("a metadata update naming only origin should be a no-op, not an error: %v", err)
+	}
+	got, _ = q.GetThought("t")
+	if got.Metadata["origin"] != "tool" {
+		t.Fatalf("origin tag was rewritten through metadata: %v", got.Metadata)
+	}
+}
+
+// TestThoughtsReadUsesTheQueueOrder pins the consistency fix: the view the
+// model reasons about is the order the scheduler runs, not last-activity.
+// seededQueue builds a queue whose thoughts carry the EXACT timestamps given,
+// by persisting them and letting crash recovery load them. Enqueue stamps
+// UpdatedAt with the wall clock, so a test that needs arrival order and
+// last-activity order to disagree cannot go through Enqueue.
+func seededQueue(t *testing.T, thoughts []*thought.Thought) *thought.Queue {
+	t.Helper()
+	store := thought.NewMemoryStore()
+	for _, th := range thoughts {
+		if err := store.SaveThought(th); err != nil {
+			t.Fatalf("seed %s: %v", th.ID, err)
+		}
+	}
+	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 3, SlotExhaustion: thought.PolicyQueue}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return q
+}
+
+func TestThoughtsReadUsesTheQueueOrder(t *testing.T) {
+	q := routeQueue(t)
+	reg := toolRegistry(t, q)
+	base := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	// Same priority. Arrival order is [older, younger] (older arrived first);
+	// last-activity order is [younger, older] because the YOUNGER one is
+	// touched last. The two orders must disagree, or the test proves nothing.
+	// Arrival: older first. Last activity: younger touched last. The two
+	// orders must DISAGREE or the test proves nothing.
+	older := &thought.Thought{
+		ID: "older", Prompt: "first", Priority: 5, Status: thought.ThoughtPending,
+		CreatedAt: base, UpdatedAt: base,
+	}
+	younger := &thought.Thought{
+		ID: "younger", Prompt: "second", Priority: 5, Status: thought.ThoughtPending,
+		CreatedAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Hour),
+	}
+	// Enqueue stamps UpdatedAt with the wall clock, so both would read "now"
+	// and the two orders would agree. Seed a store directly instead, so the
+	// timestamps are exactly what the test needs.
+	_ = older
+	_ = younger
+	q2 := seededQueue(t, []*thought.Thought{older, younger})
+	reg = toolRegistry(t, q2)
+	q = q2
+
+	out, err := dispatch(t, reg, "thoughts_read", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := decodeList(t, out)
+	if items[0]["id"] != "older" {
+		t.Fatalf("thoughts_read order = %v, want arrival order (older first, despite younger being touched last)", searchIDs(items))
+	}
+}
+
+// ── thoughts_search cost on a long queue (NAVI-577) ──────────────────
+
+// BenchmarkThoughtsSearchCost measures what a triaging thought pays per call
+// as the queue grows. The acceptance criterion is that the number is KNOWN,
+// not that it is small: a navi's queue is a working set, so the question is
+// whether the O(n) snapshot-and-clone dominates at realistic sizes.
+func BenchmarkThoughtsSearchCost(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("queue=%d", n), func(b *testing.B) {
+			q, err := thought.NewQueue(thought.Config{MaxConcurrent: 3, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
+			if err != nil {
+				b.Fatal(err)
+			}
+			base := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+			for i := 0; i < n; i++ {
+				th := &thought.Thought{
+					ID: fmt.Sprintf("t%05d", i), Prompt: "work item", Context: "some context",
+					Priority: i % 11, Status: thought.ThoughtPending,
+					CreatedAt: base.Add(time.Duration(i) * time.Second),
+					UpdatedAt: base.Add(time.Duration(i) * time.Second),
+					Metadata:  map[string]string{"source": "bench", "i": fmt.Sprint(i)},
+				}
+				if err := q.Enqueue(th); err != nil {
+					b.Fatal(err)
+				}
+			}
+			handle := registry.QueueHandle{Queue: q}
+			args := map[string]any{"priority_max": float64(3), "limit": float64(searchDefaultLimit)}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := handleSearch(context.Background(), args, handle); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkThoughtsReadCost is the baseline the search is measured against:
+// thoughts_read already took the full snapshot, so the search's added cost is
+// the filtering and sorting over it.
+func BenchmarkThoughtsReadCost(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("queue=%d", n), func(b *testing.B) {
+			q, err := thought.NewQueue(thought.Config{MaxConcurrent: 3, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
+			if err != nil {
+				b.Fatal(err)
+			}
+			base := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+			for i := 0; i < n; i++ {
+				th := &thought.Thought{
+					ID: fmt.Sprintf("t%05d", i), Prompt: "work item", Context: "some context",
+					Priority: i % 11, Status: thought.ThoughtPending,
+					CreatedAt: base.Add(time.Duration(i) * time.Second),
+					UpdatedAt: base.Add(time.Duration(i) * time.Second),
+					Metadata:  map[string]string{"source": "bench", "i": fmt.Sprint(i)},
+				}
+				if err := q.Enqueue(th); err != nil {
+					b.Fatal(err)
+				}
+			}
+			handle := registry.QueueHandle{Queue: q}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := handleRead(context.Background(), map[string]any{}, handle); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

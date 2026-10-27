@@ -15,15 +15,16 @@ import (
 	"github.com/flintwillow-software/opennavi/tool/todo"
 )
 
-// defaultActiveSet is the reference navi's default 13-tool active set —
-// the catalog the retired daemon path served, reproduced exactly by the
-// navi's collection-assembled surface.
+// defaultActiveSet is the reference navi's default 14-tool active set —
+// the catalog the retired daemon path served, plus thoughts_search
+// (NAVI-577), reproduced exactly by the navi's collection-assembled
+// surface.
 var defaultActiveSet = []string{
 	"file_read", "shell_exec",
 	"todo_read", "todo_write", "todo_update",
 	"note_read", "note_write",
 	"time_read", "http_request",
-	"thoughts_read", "thoughts_create", "thoughts_update", "thoughts_delete",
+	"thoughts_read", "thoughts_search", "thoughts_create", "thoughts_update", "thoughts_delete",
 }
 
 // catalogNavi builds a navi from the ported catalog collections.
@@ -105,13 +106,13 @@ func TestCatalogParityDefaultActiveSet(t *testing.T) {
 
 	got := n.registry.ActiveNames()
 	if !equalNameSets(got, defaultActiveSet) {
-		t.Fatalf("navi default active set = %v, want the reference 13 %v", got, defaultActiveSet)
+		t.Fatalf("navi default active set = %v, want the reference %d %v", got, len(defaultActiveSet), defaultActiveSet)
 	}
 }
 
 // TestCatalogParityCeilingNarrowsDefault pins the compiled permission
 // ceiling behaviour: denying shell_exec at the navi drops it from the
-// default surface (12 tools).
+// default surface (one fewer than the default set).
 func TestCatalogParityCeilingNarrowsDefault(t *testing.T) {
 	n := catalogNavi(t, WithPermissions(PermissionPolicy{
 		DenyTools: []string{"shell_exec"},
@@ -130,6 +131,6 @@ func TestCatalogParityCeilingNarrowsDefault(t *testing.T) {
 		}
 	}
 	if len(got) != len(defaultActiveSet)-1 {
-		t.Fatalf("active set = %v (len %d), want 12", got, len(got))
+		t.Fatalf("active set = %v (len %d), want %d", got, len(got), len(defaultActiveSet)-1)
 	}
 }

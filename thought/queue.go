@@ -603,7 +603,17 @@ func (q *Queue) Pause(id string) error { return q.PauseWithCheckpoint(id, nil) }
 // the park tool uses to stop work on purpose — and a deliberate park is
 // never auto-resumed (ADR 0035 decision 8).
 func (q *Queue) PauseWithCheckpoint(id string, checkpoint []byte) error {
-	return q.park(id, checkpoint, "", false)
+	return q.park(id, checkpoint, "", false, "")
+}
+
+// ParkWithReason parks a thought deliberately and records the stated reason
+// (ADR 0036 decision 5), so "I decided to come back to this" is recorded
+// rather than inferred from a bare `paused`. It is the park a thought or an
+// operator chooses — never auto-resumed (ADR 0035 decision 8) — and it takes
+// no checkpoint, because the caller parking deliberately is not the runner
+// mid-run (the runner's park goes through ParkWithHandoff).
+func (q *Queue) ParkWithReason(id, reason string) error {
+	return q.park(id, nil, ParkDeliberate, false, reason)
 }
 
 // ParkWithHandoff parks a thought and writes the runtime-synthesised handoff
@@ -625,14 +635,14 @@ func (q *Queue) ParkWithHandoff(id string, checkpoint []byte, reason ParkReason)
 	if reason == "" {
 		reason = ParkPreempted
 	}
-	return q.park(id, checkpoint, reason, true)
+	return q.park(id, checkpoint, reason, true, "")
 }
 
 // park is the one park path (ADR 0035 decision 3): it stamps the reason, so
 // a preemption park is distinguishable from a deliberate one (ADR 0035
-// decision 8), writes the handoff floor when withNote is set, and persists
-// the checkpoint synchronously.
-func (q *Queue) park(id string, checkpoint []byte, reason ParkReason, withNote bool) error {
+// decision 8), writes the handoff floor when withNote is set, records the
+// stated reason when one is given, and persists the checkpoint synchronously.
+func (q *Queue) park(id string, checkpoint []byte, reason ParkReason, withNote bool, note string) error {
 	var evts []Event
 
 	q.mu.Lock()
@@ -650,6 +660,9 @@ func (q *Queue) park(id string, checkpoint []byte, reason ParkReason, withNote b
 	}
 	if withNote {
 		q.applyHandoffFloor(t)
+	}
+	if note != "" {
+		t.ParkNote = note
 	}
 	if err := t.Transition(ThoughtPaused); err != nil {
 		q.mu.Unlock()
@@ -719,6 +732,9 @@ func (q *Queue) Resume(id string) error {
 	}
 	q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 	q.pending = append(q.pending, t)
+	// The stated reason belonged to the park that just ended; a resumed
+	// thought that parks again states a fresh one.
+	t.ParkNote = ""
 	q.sortPending()
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
@@ -891,6 +907,7 @@ func (q *Queue) resumeVictimsOf(preemptorID string, evts *[]Event) {
 		}
 		t.ParkReason = ""
 		t.PreemptedBy = ""
+		t.ParkNote = ""
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.pending = append(q.pending, t)
 		q.markDirty(t)
@@ -920,6 +937,7 @@ func (q *Queue) clearVictimEdges(preemptorID string, evts *[]Event) {
 		}
 		t.ParkReason = ""
 		t.PreemptedBy = ""
+		t.ParkNote = ""
 		q.markDirty(t)
 	}
 	q.sortPending()
@@ -1306,6 +1324,36 @@ func (q *Queue) AppendContext(id, msg string) error {
 	t.AppendMessage(msg)
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
+	// NAVI-338: dirty mark.
+	q.markDirty(t)
+	return nil
+}
+
+// MergeMetadata merges key/value pairs into a thought's metadata, leaving keys
+// not listed alone (ADR 0036 decision 5's "status or metadata adjustment", so a
+// thought can tag why or where it shelved work). It refuses to touch the origin
+// tag: that is the safety rail which keeps self-scheduled work in the
+// conservative band, and it is not a thought's to rewrite.
+func (q *Queue) MergeMetadata(id string, merge map[string]string) error {
+	if len(merge) == 0 {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	t, err := q.lookup(id)
+	if err != nil {
+		return err
+	}
+	if _, ok := merge[MetadataOrigin]; ok {
+		return fmt.Errorf("thought: %s: metadata %q is not writable", id, MetadataOrigin)
+	}
+	if t.Metadata == nil {
+		t.Metadata = map[string]string{}
+	}
+	for k, v := range merge {
+		t.Metadata[k] = v
+	}
+	t.UpdatedAt = time.Now().UTC()
 	// NAVI-338: dirty mark.
 	q.markDirty(t)
 	return nil

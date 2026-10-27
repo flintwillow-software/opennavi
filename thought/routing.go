@@ -202,6 +202,9 @@ func (q *Queue) RouteMessageWithPath(id, msg string) (DeliveryPath, error) {
 		}
 		q.paused = append(q.paused[:idx], q.paused[idx+1:]...)
 		q.pending = append(q.pending, t)
+		// The stated reason belonged to the park that just ended (ADR 0036
+		// decision 5): a thought that parks again states a fresh one.
+		t.ParkNote = ""
 		q.sortPending()
 		saveErr = q.save(t)
 		evts = append(evts,

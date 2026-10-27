@@ -46,6 +46,7 @@ type thoughtDoc struct {
 	PreemptedBy    string `yaml:"preempted_by,omitempty"`
 	HandoffNote    string `yaml:"handoff_note,omitempty"`
 	SteerRequested bool   `yaml:"steer_requested,omitempty"`
+	ParkNote       string `yaml:"park_note,omitempty"`
 	CreatedAt      string `yaml:"created_at,omitempty"`
 	UpdatedAt      string `yaml:"updated_at,omitempty"`
 
@@ -203,6 +204,7 @@ func (t thoughts) DeleteThought(id string) error {
 	doc.Priority, doc.Status, doc.Provider, doc.Model, doc.Mode = 0, "", "", "", ""
 	doc.Assembled, doc.DeferUntil, doc.LogPath, doc.Checkpoint = "", "", "", ""
 	doc.ParkReason, doc.PreemptedBy, doc.HandoffNote, doc.SteerRequested = "", "", "", false
+	doc.ParkNote = ""
 	doc.CreatedAt, doc.UpdatedAt = "", ""
 
 	if !doc.HasTranscript {
@@ -409,6 +411,7 @@ func rowDoc(th *thought.Thought) (thoughtDoc, error) {
 		PreemptedBy:    th.PreemptedBy,
 		HandoffNote:    th.HandoffNote,
 		SteerRequested: th.SteerRequested,
+		ParkNote:       th.ParkNote,
 
 		CreatedAt: formatTime(th.CreatedAt),
 		UpdatedAt: formatTime(th.UpdatedAt),
@@ -473,6 +476,7 @@ func docThought(path string, doc *thoughtDoc) (*thought.Thought, error) {
 	th.PreemptedBy = doc.PreemptedBy
 	th.HandoffNote = doc.HandoffNote
 	th.SteerRequested = doc.SteerRequested
+	th.ParkNote = doc.ParkNote
 	if th.DeferUntil, err = parseTime(doc.DeferUntil); err != nil {
 		return nil, fmt.Errorf("fs: %s: defer_until: %w", path, err)
 	}
