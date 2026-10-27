@@ -149,6 +149,18 @@ type Thought struct {
 	// decision 8). Empty means the park predates this field or the record
 	// was never stamped; such a thought is treated as deliberately parked.
 	ParkReason ParkReason
+	// ParkNote is the STATED REASON a thought was parked, in the words of
+	// whoever parked it (ADR 0036 decision 5): "waiting on the vendor",
+	// "superseded by NAVI-900", "shelved until the migration lands". It is
+	// what makes "I decided to come back to this" recorded rather than
+	// inferred from a bare `paused`.
+	//
+	// It is deliberately distinct from ParkReason (the queue's own enum, which
+	// drives auto-resume and is not the thought's to state) and from
+	// HandoffNote (what the next run needs to CONTINUE, which is not a reason
+	// for stopping). A shelf reason is not a handoff and a handoff is not a
+	// reason, so folding them together would lose one of them.
+	ParkNote string
 
 	// Origin is the verified principal that CAUSED this thought (ADR 0022
 	// decision 2). It is recorded when the thought is enqueued — from the

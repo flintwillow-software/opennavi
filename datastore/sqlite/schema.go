@@ -319,6 +319,12 @@ var migrations = []string{
 	`ALTER TABLE thoughts ADD COLUMN preempted_by TEXT`,
 	`ALTER TABLE thoughts ADD COLUMN handoff_note TEXT`,
 	`ALTER TABLE thoughts ADD COLUMN steer_requested INTEGER`,
+	// 22: the STATED park reason (NAVI-577, ADR 0036 decision 5) — why a
+	// thought was shelved, in the words of whoever parked it. Distinct from
+	// park_reason (the queue's enum, which drives auto-resume) and from
+	// handoff_note (what the next run needs to continue): a shelf reason is
+	// not a handoff.
+	`ALTER TABLE thoughts ADD COLUMN park_note TEXT`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema
