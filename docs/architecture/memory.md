@@ -1,7 +1,7 @@
 ---
 status: draft
 created: '2026-09-26'
-updated: '2026-09-30'
+updated: '2026-10-27'
 tags:
   - architecture
   - memory
@@ -157,24 +157,30 @@ when implementing either side.
 
 ## Open questions
 
+> **Partly settled by [ADR 0037](../adr/0037-memory-tiers-load-timing-and-management.md)**
+> (proposed). The write path is a **tool** the agent calls, not a runtime pass;
+> the `navi` scope is **long-term**; retention is deliberate rather than
+> heuristic; and the load/manage split is that the runtime loads while tools
+> manage. The remaining questions below are still open, plus the ones ADR 0037
+> raises (the short-term bound, the search result shape, the embedder, pointer
+> lifecycle, and prune tooling).
+
 Recorded rather than silently decided:
 
-1. **Where the `navi` scope belongs.** It loads when interacting with a specific
-   navi, so it is neither always-loaded nor purely on-demand. It could sit with
-   either tier; the original design describes it as searchable, which argues for
-   long-term.
-2. **The write path.** Is the post-thought pass a runtime step the navi always
-   performs, or a tool the agent calls? May the navi also write mid-thought, or
-   only at thought end? Deliberate writes argue for one well-defined opportunity
-   per thought rather than an ad-hoc surface.
-3. **Retention and pruning.** The original design said "long-term with pruning"
-   for both `navi` and `memories`, without defining a policy. Because short-term
-   writes are deliberate rather than volume-driven, pruning can also be a
-   deliberate act rather than a heuristic. Datastore history follows the same
-   stance: retention defaults to unbounded and a prune mechanism ships with the
-   datastore, invoked explicitly rather than by a background heuristic
-   ([ADR 0011](../adr/0011-persistence-is-a-datastore-component.md), decision 11).
-   The memory tiers' own retention policy is still open.
+1. ~~**Where the `navi` scope belongs.**~~ **Settled (ADR 0037 decision 5):**
+   long-term. Loading is a *condition* ("when interacting with a specific navi"),
+   not a load time, and a navi cannot know in advance which peers it will meet —
+   so always-injecting it would pay context for every peer it might ever
+   interact with.
+2. ~~**The write path.**~~ **Settled (ADR 0037 decisions 1 and 9):** a tool the
+   agent calls, mid-thought or at thought end. There is deliberately no runtime
+   post-thought pass, because a pass must decide what to keep without the
+   reasoning the thought just did — and that produces the incidental artifact
+   this document distinguishes memory from. The cost is that the handoff depends
+   on the model choosing to write.
+3. ~~**Retention and pruning.**~~ **Settled (ADR 0037 decision 7):** deliberate,
+   following ADR 0011 decision 11's stance — unbounded by default, pruned by an
+   explicit act. The tool surface must expose it.
 
 ## Provenance
 

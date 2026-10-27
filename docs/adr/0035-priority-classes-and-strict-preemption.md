@@ -46,8 +46,13 @@ weaker than they look, and one of them is not a rule at all.
    the guarantee does not hold across the paths that matter:
    - crash recovery loads via `LoadThoughts`, which orders by
      `ORDER BY priority, updated_at` (`datastore/sqlite/thought_store.go:105`) —
-     the secondary key is *last activity*, not arrival, so a thought that was
-     touched recently sorts behind a younger untouched one;
+     the secondary key is *last activity*, not arrival. **Activity is the wrong
+     signal entirely.** A restart is not a continuation of what the navi was
+     last touching; it is a fresh start, and the queue should come back **from
+     the top** — most urgent first, oldest first within a band. A thought that
+     happened to be modified recently (a status change, a retry, a metadata
+     write) must not be promoted over one that was queued earlier and never
+     touched;
    - `Resume` re-appends to `pending` and re-sorts stably, so a **parked**
      thought rejoins at the *end* of its priority band, behind everything that
      arrived while it was parked — though it was in the queue first.
@@ -91,7 +96,9 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    and not insertion order. Concretely:
    - the in-memory comparator becomes `(priority, created_at)` rather than
      relying on `SliceStable`;
-   - `LoadThoughts` orders by `ORDER BY priority, created_at`;
+   - `LoadThoughts` orders by `ORDER BY priority, created_at` — so a restart
+     resumes from the top of the queue rather than from whatever was last
+     touched;
    - a **resumed** thought keeps its original arrival position within its
      priority band, because it was in the queue before the work that arrived
      while it was parked.
