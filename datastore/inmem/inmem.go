@@ -393,6 +393,9 @@ func (m memory) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord, error
 	defer m.b.mu.RUnlock()
 	var out []datastore.MemoryRecord
 	for _, rec := range m.b.memories {
+		if q.ID != "" && rec.ID != q.ID {
+			continue
+		}
 		if q.Scope != "" && rec.Scope != q.Scope {
 			continue
 		}

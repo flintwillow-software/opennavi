@@ -7,6 +7,7 @@ import (
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/principal"
 	"github.com/flintwillow-software/opennavi/thought"
 )
@@ -63,12 +64,12 @@ func TestShortTermMemoryIsInjectedIntoEveryThought(t *testing.T) {
 }
 
 // TestMemoryWriteIsVisibleToTheNextThought is the issue's gate (b): the agent
-// writes with memory_write during thought 1, and thought 2's assembled prompt
+// writes with stm_write during thought 1, and thought 2's assembled prompt
 // already contains it.
 func TestMemoryWriteIsVisibleToTheNextThought(t *testing.T) {
 	backend := inmem.New()
 	mock := llm.NewMockProvider(
-		toolCallStream("memory_write", `{"content":"the code is blue","scope":"session"}`),
+		toolCallStream("stm_write", `{"content":"the code is blue","scope":"session"}`),
 		streamEvents("noted"),
 		streamEvents("done"),
 	)
@@ -141,5 +142,103 @@ func TestShortTermMemoryWithoutDatastoreFailsAtRun(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "short-term memory requires a datastore") {
 		t.Fatalf("error should name the reason: %v", err)
+	}
+}
+
+// TestBothMemoryTiersAreReachableFromANavi is NAVI-578's gate: a navi that
+// declares memory gets BOTH tiers' tools registered and active, so every tier
+// is reachable from a thought rather than only existing in the datastore.
+func TestBothMemoryTiersAreReachableFromANavi(t *testing.T) {
+	backend := inmem.New()
+	n := New("tier-navi", WithProvider(llm.NewMockProvider()), WithWorkers(1), WithShortTermMemory())
+	if err := n.Datastores.Add(memoryCandidate(backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := n.assemble(); err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	active := map[string]bool{}
+	for _, name := range n.registry.ActiveNames() {
+		active[name] = true
+	}
+	for _, want := range []string{"stm_write", "ltm_write", "ltm_search", "ltm_read", "ltm_prune"} {
+		if !active[want] {
+			t.Errorf("%s is not in the active set: %v", want, n.registry.ActiveNames())
+		}
+	}
+	if active["memory_write"] {
+		t.Error("memory_write is still active; the tier split replaces it")
+	}
+
+	// The long-term tier is real: a write through the tool reaches the
+	// datastore and is findable, while a short-term write does not.
+	svc := n.longMemory
+	if svc == nil {
+		t.Fatal("the navi declared memory but built no long-term tier")
+	}
+	if _, err := svc.Write(datastore.MemoryRecord{
+		Scope: datastore.ScopeMemories, Content: "the archive works",
+	}); err != nil {
+		t.Fatalf("long-term write: %v", err)
+	}
+	recs, err := svc.Search(memory.SearchQuery{Query: "archive works"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("archive search returned %d entries, want 1", len(recs))
+	}
+	// And it is NOT injected: the tier boundary holds end to end.
+	if block := n.shortMemory.Inject(); strings.Contains(block, "archive works") {
+		t.Fatalf("a long-term entry leaked into the injected short-term tier:\n%s", block)
+	}
+}
+
+// TestMemorySkillShipsOnlyWhenMemoryIsDeclared: the core memory skill names the
+// tier tools, so a navi with no memory surface must not be told about them.
+func TestMemorySkillShipsOnlyWhenMemoryIsDeclared(t *testing.T) {
+	// Without memory.
+	plain := New("no-mem", WithProvider(llm.NewMockProvider()), WithWorkers(1))
+	if err := plain.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.assemble(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain.skillIndex["core_memory"]; ok {
+		t.Fatal("core_memory shipped for a navi that declares no memory")
+	}
+
+	// With memory.
+	backend := inmem.New()
+	withMem := New("with-mem", WithProvider(llm.NewMockProvider()), WithWorkers(1), WithShortTermMemory())
+	if err := withMem.Datastores.Add(memoryCandidate(backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := withMem.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := withMem.assemble(); err != nil {
+		t.Fatal(err)
+	}
+	sk, ok := withMem.skillIndex["core_memory"]
+	if !ok {
+		t.Fatal("core_memory did not ship for a navi that declares memory")
+	}
+	// The skill must name the tier tools, which is the whole point of it.
+	for _, want := range []string{"stm_write", "ltm_write", "ltm_search", "ltm_read", "ltm_prune"} {
+		if !strings.Contains(sk.Content, want) {
+			t.Errorf("core_memory does not name %s", want)
+		}
+	}
+	// And it must state which tier is for what.
+	for _, want := range []string{"always in front of you", "knowledge base you search"} {
+		if !strings.Contains(sk.Content, want) {
+			t.Errorf("core_memory does not explain the tiers (missing %q)", want)
+		}
 	}
 }

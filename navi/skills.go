@@ -55,6 +55,12 @@ func (n *Navi) coreSkills() []skill.Skill {
 	}
 	// The thought system is core, not added (ADR 0003).
 	out = append(out, skill.CoreThoughts())
+	// The memory skill names the tier tools, so it ships only when the navi
+	// actually declares memory — a navi with no memory surface must not be
+	// told about tools it does not have.
+	if n.shortMemory != nil {
+		out = append(out, skill.CoreMemory())
+	}
 	if n.Connectors.Len() > 0 {
 		out = append(out, skill.CoreConnectors())
 	}

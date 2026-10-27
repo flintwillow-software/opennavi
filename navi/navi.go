@@ -106,6 +106,9 @@ type Navi struct {
 
 	// shortTermMemory records the WithShortTermMemory declaration.
 	shortTermMemory bool
+	// longMemory is the searched long-term memory tier (ADR 0037 decision 2),
+	// built at assembly alongside shortMemory when the navi declares memory.
+	longMemory *memory.LongTerm
 	// shortMemory is the always-loaded short-term memory tier, built at
 	// assembly when declared.
 	shortMemory *memory.Service

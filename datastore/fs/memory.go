@@ -120,6 +120,9 @@ func (m memory) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord, error
 			if !ok {
 				continue
 			}
+			if q.ID != "" && rec.ID != q.ID {
+				continue
+			}
 			if q.Scope != "" && rec.Scope != q.Scope {
 				continue
 			}

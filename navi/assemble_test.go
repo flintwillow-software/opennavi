@@ -115,7 +115,7 @@ func TestTruncationIsReported(t *testing.T) {
 func TestDeferralEndToEnd(t *testing.T) {
 	backend := inmem.New()
 	mock := llm.NewMockProvider(
-		toolCallStream("memory_write", `{"content":"handoff: the config lives in main.go","scope":"session"}`),
+		toolCallStream("stm_write", `{"content":"handoff: the config lives in main.go","scope":"session"}`),
 		toolCallStream("thoughts_create", `{"prompt":"continue with the runbook","skills":["deploy_runbook"]}`),
 		streamEvents("deferred"),
 		streamEvents("continued"),

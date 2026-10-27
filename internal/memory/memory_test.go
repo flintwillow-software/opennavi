@@ -146,16 +146,95 @@ func TestInjectSeparatesScopes(t *testing.T) {
 	}
 }
 
-func TestMemoryWriteTool(t *testing.T) {
-	svc, _ := newService(t)
-	tools, err := Tools(svc)
+// newLongTerm builds the archive tier over the same in-memory backend.
+func newLongTerm(t *testing.T, backend *inmem.Backend) *LongTerm {
+	t.Helper()
+	lt, err := NewLongTerm(backend.Memory(), principal.MustParse("navi:navi"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 1 || tools[0].Def.Name != "memory_write" {
-		t.Fatalf("tools = %+v", tools)
+	return lt
+}
+
+// toolNamed finds a tool by name in a Tools() result.
+func toolNamed(t *testing.T, tools []tool.Tool, name string) tool.Tool {
+	t.Helper()
+	for _, tl := range tools {
+		if tl.Def.Name == name {
+			return tl
+		}
 	}
-	write := tools[0]
+	t.Fatalf("tool %q not found in %v", name, toolNames(tools))
+	return tool.Tool{}
+}
+
+func toolNames(tools []tool.Tool) []string {
+	out := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		out = append(out, tl.Def.Name)
+	}
+	return out
+}
+
+func TestSTMToolSurface(t *testing.T) {
+	svc, backend := newService(t)
+	tools, err := Tools(svc, newLongTerm(t, backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The surface is split by TIER, not by operation: the tier decides whether
+	// a write costs context on every future thought, so it is in the tool name
+	// rather than a scope argument a caller can get wrong.
+	for _, want := range []string{"stm_write", "ltm_write", "ltm_search", "ltm_read", "ltm_prune"} {
+		toolNamed(t, tools, want)
+	}
+	if got := toolNames(tools); len(got) != 5 {
+		t.Fatalf("tool surface = %v, want exactly the five tier tools", got)
+	}
+	// memory_write is gone, not aliased: one name per thing.
+	for _, tl := range tools {
+		if tl.Def.Name == "memory_write" {
+			t.Fatal("memory_write still exists; the tier split replaces it")
+		}
+	}
+	// There is no stm_read: short-term memory is always in context, so there
+	// is nothing to search for.
+	for _, tl := range tools {
+		if tl.Def.Name == "stm_read" || tl.Def.Name == "stm_search" {
+			t.Fatalf("%s exists, but short-term memory is always injected and needs no read tool", tl.Def.Name)
+		}
+	}
+}
+
+// TestToolsReturnsOnlyDeclaredTiers: a navi with no archive gets no ltm_*
+// surface rather than a tool that fails at call time.
+func TestToolsReturnsOnlyDeclaredTiers(t *testing.T) {
+	svc, _ := newService(t)
+	stmOnly, err := Tools(svc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := toolNames(stmOnly); len(got) != 1 || got[0] != "stm_write" {
+		t.Fatalf("short-term-only surface = %v, want [stm_write]", got)
+	}
+	ltOnly, err := Tools(nil, newLongTerm(t, inmem.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range ltOnly {
+		if tl.Def.Name == "stm_write" {
+			t.Fatal("a long-term-only navi must not get stm_write")
+		}
+	}
+}
+
+func TestSTMToolSurfaceWrite(t *testing.T) {
+	svc, backend := newService(t)
+	tools, err := Tools(svc, newLongTerm(t, backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := toolNamed(t, tools, "stm_write")
 
 	out, err := write.Handler(context.Background(), map[string]any{
 		"content": "remember this",
@@ -197,17 +276,22 @@ func TestNewRequiresDependencies(t *testing.T) {
 
 // The tool def must satisfy the same shape validation the catalogue applies.
 func TestToolDefIsValid(t *testing.T) {
-	svc, _ := newService(t)
-	tools, err := Tools(svc)
+	svc, backend := newService(t)
+	tools, err := Tools(svc, newLongTerm(t, backend))
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := tools[0].Def
-	if def.Access == tool.AccessAny || def.Mode == tool.ModeAny || def.SourceInfo.Origin == tool.OriginAny {
-		t.Fatalf("tool def missing required metadata: %+v", def)
-	}
-	if len(def.InputSchema.Raw()) == 0 {
-		t.Fatal("tool def missing an input schema")
+	for _, tl := range tools {
+		def := tl.Def
+		if def.Access == tool.AccessAny || def.Mode == tool.ModeAny || def.SourceInfo.Origin == tool.OriginAny {
+			t.Fatalf("%s missing required metadata: %+v", def.Name, def)
+		}
+		if len(def.InputSchema.Raw()) == 0 {
+			t.Fatalf("%s missing an input schema", def.Name)
+		}
+		if def.PromptSnippet == "" {
+			t.Fatalf("%s missing a prompt snippet", def.Name)
+		}
 	}
 }
 

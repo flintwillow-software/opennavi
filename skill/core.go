@@ -38,7 +38,7 @@ func CoreThoughts() Skill {
 		Content: `You run one bounded thought at a time, and you have no context compaction. When
 a task is larger than one thought, do not try to hold it all: finish a coherent
 unit of work, write what the next unit needs into short-term memory
-(memory_write), and queue a follow-up thought that states the next goal and
+(stm_write), and queue a follow-up thought that states the next goal and
 declares which skills it should load. A large task becomes a plan of thoughts.
 Queue follow-ups deliberately — they are work, not notes. Use the thoughts_* tools
 to queue, adjust, or cancel them.
@@ -60,7 +60,7 @@ Do this, in order:
 
 1. **Finish the step you are in.** Do not stop mid-edit or mid-command. The
    stopping point is yours to choose, which is what makes the handoff good.
-2. **Write what the next run needs** into short-term memory (memory_write), and
+2. **Write what the next run needs** into short-term memory (stm_write), and
    write it *now* rather than saving it for a wrap-up — see below.
 3. **Park the thought with a stated reason** (thoughts_update with
    status "pause" and a reason such as "yielding to more urgent work"), so
@@ -80,6 +80,51 @@ a short note after each meaningful step costs little, and losing a handoff costs
 the whole run. If you are stopped before writing anything, the runtime leaves a
 mechanical note so you are never contextless — but it is a floor, not a
 handoff, and your own notes are what actually let the next run continue.`,
+	}
+}
+
+// CoreMemory describes the two memory tiers and when to reach for each. It is
+// included only when the navi declares memory (navi/skills.go), so a navi with
+// no memory surface is not told about tools it does not have.
+func CoreMemory() Skill {
+	return Skill{
+		Name:        "core_memory",
+		Description: "The two memory tiers: what is always in context, and what you search for.",
+		AutoLoad:    true,
+		Version:     "0.1.0",
+		Content: `You have two kinds of memory, and they differ in one thing: when they reach your
+context. Choosing the wrong tier is the mistake to avoid.
+
+**Short-term memory — always in front of you.** Written with stm_write, and
+injected into every thought you run, so you never have to ask for it. Two scopes:
+user (notes about the human — preferences, style, lessons) and session (working
+state for the current task). Because it is injected every time, a note here is a
+cost you pay on every future thought: keep it small, keep it deliberate, and
+consolidate rather than accumulating near-duplicates. Most thoughts should write
+nothing at all. This is where the handoff to your next thought goes.
+
+**Long-term memory — a knowledge base you search.** Written with ltm_write and
+found with ltm_search, in two scopes: memories (facts and learned information)
+and navi (notes about another navi — how to communicate, delegate, collaborate).
+Nothing here is ever in your context unless you look for it, which is what lets it
+grow: park a conclusion you cannot act on now, give it tags you would search by,
+and find it later. ltm_search returns a bounded, ranked set with enough of each
+entry to judge relevance; ltm_read returns one entry in full once a hit looks
+worth reading.
+
+**The two are a system, through pointers.** When something belongs in long-term
+but matters to the thought in hand, leave a short-term note naming it — the topic
+and the tag or id you would search by — so a later thought knows to go looking.
+Without that, the archive is a store nothing tells you to open.
+
+**Write as you go, not at the end.** Record what matters while you can. A more
+urgent thought can stop this one without giving it a chance to write a final
+note, so a handoff saved for a wrap-up may never be written at all. A short note
+after each meaningful step costs little; losing a handoff costs the whole run.
+
+**Retention is deliberate.** Nothing prunes your memory for you. Remove short-term
+notes with stm_write (remove=true) and archive entries with ltm_prune. Search
+before pruning — it is permanent.`,
 	}
 }
 
