@@ -29,7 +29,7 @@ import (
 // `enqueue -db X "prompt"` work.
 func Enqueue(args []string) error {
 	fs := flag.NewFlagSet("enqueue", flag.ExitOnError)
-	priority := fs.Int("priority", 4, "thought priority 1-10 (1 = critical, 4 = normal)")
+	priority := fs.Int("priority", 4, "thought priority 0-10 (0 = urgent, 1 = respond-to-me, 4 = normal)")
 	dbPath := fs.String("db", "", "path to the session SQLite database (the durable mailbox the fallback writes)")
 	provider := fs.String("provider", "", "provider override for this thought (default: runtime primary; unknown names fail at run time)")
 	model := fs.String("model", "", "model override for this thought (default: runtime model)")
@@ -52,8 +52,8 @@ func Enqueue(args []string) error {
 	}
 	prompt := strings.Join(positional, " ")
 
-	if *priority < 1 || *priority > 10 {
-		return fmt.Errorf("enqueue: priority %d out of range [1..10]", *priority)
+	if *priority < 0 || *priority > 10 {
+		return fmt.Errorf("enqueue: priority %d out of range [0..10]", *priority)
 	}
 	if *dbPath == "" {
 		return fmt.Errorf("enqueue: -db path is required")

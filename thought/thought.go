@@ -54,7 +54,10 @@ type Thought struct {
 	Result string
 	// Metadata is arbitrary key-value metadata (origin tagging, ...).
 	Metadata map[string]string
-	// Priority ranges 1..10 (1 = highest).
+	// Priority ranges 0..10 (0 = highest, ascending in urgency as the
+	// number falls; ADR 0035 decision 1). The named bands are 0 = urgent
+	// (a preemption cancels), 1 = "respond to me", 2+ = planned work (a
+	// preemption steers).
 	Priority int
 	// Status is the lifecycle state.
 	Status ThoughtStatus
@@ -114,6 +117,38 @@ type Thought struct {
 	// cancellation: snapshot progress into Checkpoint and return; the
 	// worker then parks the thought (running → paused).
 	PreemptRequested bool
+	// SteerRequested is set by the queue when a strictly-higher-priority
+	// thought preempts this running thought in the steering band (priority
+	// ≥1, ADR 0035 decision 3). Unlike PreemptRequested it is advisory: the
+	// victim is TOLD to put its work down at the turn boundary and chooses
+	// its stopping point. It is never paired with a context cancellation —
+	// steering is the alternative to cancellation, not a prelude to it — so
+	// a victim that ignores the steer keeps running (a guidance failure,
+	// owned by the core thoughts skill, not a fallback cancel).
+	SteerRequested bool
+	// PreemptedBy names the thought whose arrival parked this one, when the
+	// park was a preemption (ADR 0035 decision 7). It is the release edge:
+	// when that preemptor reaches a terminal state the victim is resumed
+	// automatically. Empty for a deliberate park (operator, thoughts_update,
+	// a shelf), which is never auto-resumed. Latest preemptor wins: a victim
+	// parked again by a newer arrival is released by that arrival, not by
+	// the whole stack of preemptors it has ever had.
+	PreemptedBy string
+	// HandoffNote is the runtime-synthesised handoff written at park time
+	// (ADR 0035 decision 3): a mechanical note built from the thought's
+	// prompt, its context, and whatever result it had reached, so a resumed
+	// thought is never contextless. It is a FLOOR, not the mechanism — a
+	// thought's own writes are the ceiling — and it is deliberately separate
+	// from Context so "what I was told" (the connector's immutable enqueue
+	// context) is not conflated with "what I concluded". It is surfaced into
+	// the resumed run's prompt.
+	HandoffNote string
+	// ParkReason records why a paused thought is paused. It is how the queue
+	// distinguishes a preemption park (auto-resumable) from a deliberate one
+	// (operator, thoughts_update, shelf — never auto-resumed, ADR 0035
+	// decision 8). Empty means the park predates this field or the record
+	// was never stamped; such a thought is treated as deliberately parked.
+	ParkReason ParkReason
 
 	// Origin is the verified principal that CAUSED this thought (ADR 0022
 	// decision 2). It is recorded when the thought is enqueued — from the
@@ -183,6 +218,23 @@ func (t *Thought) InheritFrom(parent *Thought) {
 	t.Lineage = lineage
 }
 
+// ParkReason records why a thought was parked, so a preemption park (which
+// the queue releases automatically when its preemptor finishes) is
+// distinguishable from a deliberate one (which nothing may resurrect,
+// ADR 0035 decision 8).
+type ParkReason string
+
+const (
+	// ParkPreempted is a park caused by a strictly-higher-priority arrival.
+	// It carries PreemptedBy and is auto-resumed when that preemptor reaches
+	// a terminal state.
+	ParkPreempted ParkReason = "preempted"
+	// ParkDeliberate is any park a person or the navi chose — an operator
+	// action, a thoughts_update, or a plan shelving work. It is never
+	// auto-resumed: the queue must not resurrect work someone stopped.
+	ParkDeliberate ParkReason = "deliberate"
+)
+
 // OriginSelf / OriginTool tag thoughts the navi scheduled for itself
 // ("origin tagging"): self-directed work is distinguishable
 // from connector-sourced work in dashboards, and the queue clamps its
@@ -220,9 +272,14 @@ func (t *Thought) IsVerification() bool {
 // SelfScheduledHighBound is the default priority floor for self-scheduled
 // thoughts ("priority clamp"): any priority above it
 // (numerically lower) is clamped down, so self-directed work can never
-// preempt external work (preemption needs priority ≤
-// HighPriorityThreshold) or squat the reserved slots unless runtime
-// config grants it.
+// preempt external work (preemption needs a strictly-lower priority than
+// the victim) or squat the reserved slots unless runtime config grants it.
+//
+// ADR 0035 decision 5 keeps this clamp unchanged, and ADR 0036 decision 3
+// shows it needs no exception: a connector's ingress thought carries
+// external origin, so it is not self-scheduled and its hint survives the
+// clamp intact. The rule the clamp expresses is "work the navi discovers is
+// not more urgent than work it was given".
 const SelfScheduledHighBound = 5
 
 // Sentinel lifecycle errors.
@@ -312,10 +369,23 @@ func (t *Thought) Clone() *Thought {
 	return &out
 }
 
-// EffectivePriority returns the priority clamped to the 1-10 range.
+// IsPreemptionPark reports whether the thought is paused because it was
+// preempted (as opposed to paused deliberately). Only a preemption park is
+// eligible for automatic resumption (ADR 0035 decision 7).
+func (t *Thought) IsPreemptionPark() bool {
+	return t != nil && t.Status == ThoughtPaused && t.ParkReason == ParkPreempted && t.PreemptedBy != ""
+}
+
+// EffectivePriority returns the priority clamped to the 0-10 range. The
+// floor is 0, not 1: ADR 0035 decision 1 makes 0 the highest band (urgent),
+// and a clamp to 1 would silently promote every p0 into the p1 "respond to
+// me" band — collapsing the cancel/steer distinction the scheduler is built
+// on. Priority values are not validated elsewhere on the queue path, so an
+// unset (zero-valued) Priority reads as p0; callers that want planned work
+// must set 2+ explicitly.
 func (t *Thought) EffectivePriority() int {
-	if t.Priority < 1 {
-		return 1
+	if t.Priority < 0 {
+		return 0
 	}
 	if t.Priority > 10 {
 		return 10

@@ -142,8 +142,9 @@ func TestPreemptionOfChainHeadKeepsDependentsBlocked(t *testing.T) {
 	}
 
 	// Urgent external work preempts the running head (strictly higher
-	// priority: 1 < 3).
-	if err := q.Enqueue(newThought("urgent", 1)); err != nil {
+	// priority: 0 < 3). p0 is the cancel band (ADR 0035 decision 3), so the
+	// head is marked for cooperative cancellation.
+	if err := q.Enqueue(newThought("urgent", 0)); err != nil {
 		t.Fatal(err)
 	}
 	head, _ := q.GetThought("t1")
@@ -162,10 +163,10 @@ func TestPreemptionOfChainHeadKeepsDependentsBlocked(t *testing.T) {
 		t.Fatalf("dependent %s claimable while the chain head is parked", claimed.ID)
 	}
 
+	// The preemptor finishing releases the chain head automatically
+	// (ADR 0035 decision 7) — no operator resume — and the chain continues
+	// where it left off (ADR 0015).
 	if err := q.Complete("urgent", "done"); err != nil {
-		t.Fatal(err)
-	}
-	if err := q.Resume("t1"); err != nil {
 		t.Fatal(err)
 	}
 	if claimed, ok := q.Dequeue(); !ok || claimed.ID != "t1" {

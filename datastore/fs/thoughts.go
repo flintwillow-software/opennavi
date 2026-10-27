@@ -38,8 +38,16 @@ type thoughtDoc struct {
 	DeferUntil string            `yaml:"defer_until,omitempty"`
 	LogPath    string            `yaml:"log_path,omitempty"`
 	Checkpoint string            `yaml:"checkpoint,omitempty"` // base64
-	CreatedAt  string            `yaml:"created_at,omitempty"`
-	UpdatedAt  string            `yaml:"updated_at,omitempty"`
+	// Preemption and handoff record (NAVI-575/NAVI-581, ADR 0035 decisions
+	// 3 and 7): the park reason (preemption vs deliberate), the release
+	// edge, the runtime-synthesised handoff floor, and the advisory steer
+	// marker.
+	ParkReason     string `yaml:"park_reason,omitempty"`
+	PreemptedBy    string `yaml:"preempted_by,omitempty"`
+	HandoffNote    string `yaml:"handoff_note,omitempty"`
+	SteerRequested bool   `yaml:"steer_requested,omitempty"`
+	CreatedAt      string `yaml:"created_at,omitempty"`
+	UpdatedAt      string `yaml:"updated_at,omitempty"`
 
 	HasTranscript       bool   `yaml:"has_transcript,omitempty"`
 	Messages            int    `yaml:"messages,omitempty"`
@@ -194,6 +202,7 @@ func (t thoughts) DeleteThought(id string) error {
 	doc.Metadata, doc.Skills, doc.DependsOn = nil, nil, nil
 	doc.Priority, doc.Status, doc.Provider, doc.Model, doc.Mode = 0, "", "", "", ""
 	doc.Assembled, doc.DeferUntil, doc.LogPath, doc.Checkpoint = "", "", "", ""
+	doc.ParkReason, doc.PreemptedBy, doc.HandoffNote, doc.SteerRequested = "", "", "", false
 	doc.CreatedAt, doc.UpdatedAt = "", ""
 
 	if !doc.HasTranscript {
@@ -395,8 +404,14 @@ func rowDoc(th *thought.Thought) (thoughtDoc, error) {
 		Lineage:    th.Lineage,
 		DeferUntil: formatTime(th.DeferUntil),
 		LogPath:    th.LogPath,
-		CreatedAt:  formatTime(th.CreatedAt),
-		UpdatedAt:  formatTime(th.UpdatedAt),
+
+		ParkReason:     string(th.ParkReason),
+		PreemptedBy:    th.PreemptedBy,
+		HandoffNote:    th.HandoffNote,
+		SteerRequested: th.SteerRequested,
+
+		CreatedAt: formatTime(th.CreatedAt),
+		UpdatedAt: formatTime(th.UpdatedAt),
 	}
 	if len(th.Checkpoint) > 0 {
 		doc.Checkpoint = base64.StdEncoding.EncodeToString(th.Checkpoint)
@@ -454,6 +469,10 @@ func docThought(path string, doc *thoughtDoc) (*thought.Thought, error) {
 		}
 	}
 	var err error
+	th.ParkReason = thought.ParkReason(doc.ParkReason)
+	th.PreemptedBy = doc.PreemptedBy
+	th.HandoffNote = doc.HandoffNote
+	th.SteerRequested = doc.SteerRequested
 	if th.DeferUntil, err = parseTime(doc.DeferUntil); err != nil {
 		return nil, fmt.Errorf("fs: %s: defer_until: %w", path, err)
 	}

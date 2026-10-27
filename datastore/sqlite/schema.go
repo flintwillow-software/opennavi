@@ -305,6 +305,20 @@ var migrations = []string{
 	`ALTER TABLE thoughts ADD COLUMN origin TEXT`,
 	`ALTER TABLE thoughts ADD COLUMN lineage TEXT`,
 	`ALTER TABLE thoughts ADD COLUMN origin_info TEXT`,
+	// 21: the preemption and handoff record (NAVI-575/NAVI-581, ADR 0035
+	// decisions 3 and 7). `park_reason` distinguishes a preemption park
+	// (auto-resumable) from a deliberate one (never auto-resumed);
+	// `preempted_by` is the release edge — the preemptor whose terminal state
+	// resumes this victim — and survives a restart so a preemption is not
+	// lost across a crash; `handoff_note` is the runtime-synthesised floor
+	// written at park time, kept separate from `context` so "what I was told"
+	// is not conflated with "what I concluded"; `steer_requested` is the
+	// advisory steer marker (a steered victim is told to park, not
+	// cancelled).
+	`ALTER TABLE thoughts ADD COLUMN park_reason TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN preempted_by TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN handoff_note TEXT`,
+	`ALTER TABLE thoughts ADD COLUMN steer_requested INTEGER`,
 }
 
 // migrate applies pending migrations inside a transaction. Max schema

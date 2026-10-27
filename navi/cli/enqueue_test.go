@@ -173,11 +173,16 @@ func TestRunEnqueueMultiWordPrompt(t *testing.T) {
 
 func TestRunEnqueuePriorityValidation(t *testing.T) {
 	dir := t.TempDir()
-	for _, p := range []string{"0", "11", "-1"} {
+	// 0 is the urgent band (ADR 0035 decision 1) and is valid; only values
+	// outside [0..10] are refused.
+	for _, p := range []string{"11", "-1"} {
 		err := Enqueue([]string{"-priority", p, "-db", dir + "/x.db", "task"})
 		if err == nil || !strings.Contains(err.Error(), "out of range") {
 			t.Errorf("priority %q: error = %v, want out-of-range", p, err)
 		}
+	}
+	if err := Enqueue([]string{"-priority", "0", "-db", dir + "/x.db", "task"}); err != nil {
+		t.Errorf("priority 0 (urgent band) must be accepted: %v", err)
 	}
 }
 

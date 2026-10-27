@@ -167,15 +167,29 @@ func (p *Pool) worker(n int) {
 
 		if err != nil {
 			if cancelled {
-				// Cancelled (preemption or Pool.Cancel): park the
-				// thought with the runner's checkpoint for resume.
-				if perr := p.queue.PauseWithCheckpoint(t.ID, t.Checkpoint); perr != nil {
+				// Cancelled (p0 preemption or Pool.Cancel): park the
+				// thought with the runner's checkpoint AND the
+				// runtime-synthesised handoff floor (ADR 0035 decision 3),
+				// so a resumed thought is never contextless.
+				if perr := p.queue.ParkWithHandoff(t.ID, t.Checkpoint, ParkPreempted); perr != nil {
 					p.emitPersistError(t.ID, perr)
 				}
 			} else {
 				if ferr := p.queue.Fail(t.ID, err.Error()); ferr != nil {
 					p.emitPersistError(t.ID, ferr)
 				}
+			}
+		} else if p.steerParked(t.ID) {
+			// The run returned normally, but this thought was steered to
+			// park (ADR 0035 decision 3) and did not park itself — either
+			// it has no park skill yet (NAVI-582) or it chose to finish
+			// the step and yield. Parking here is the runtime's side of
+			// "bounded by one turn": the victim ran to its next natural
+			// stopping point and yields there with its checkpoint. This is
+			// deliberately NOT a cancellation — the victim completed its
+			// current run — so no work is discarded.
+			if perr := p.queue.ParkWithHandoff(t.ID, t.Checkpoint, ParkPreempted); perr != nil {
+				p.emitPersistError(t.ID, perr)
 			}
 		} else {
 			if cerr := p.queue.Complete(t.ID, t.Result); cerr != nil {
@@ -186,6 +200,15 @@ func (p *Pool) worker(n int) {
 		// Slot freed — a pending thought may now be claimable.
 		p.wakeWorker()
 	}
+}
+
+// steerParked reports whether the thought still carries a pending steer
+// request when its run returned — i.e. it was steered and did not park
+// itself. A victim that parked itself (through the core thoughts skill) has
+// already cleared the flag, so this is a no-op for it.
+func (p *Pool) steerParked(thoughtID string) bool {
+	t, err := p.queue.GetThought(thoughtID)
+	return err == nil && t.SteerRequested
 }
 
 // emitPersistError surfaces persistence failures that would otherwise

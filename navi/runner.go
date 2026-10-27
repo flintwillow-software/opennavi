@@ -235,6 +235,15 @@ func userPrompt(t *thought.Thought) string {
 	if t.Context != "" {
 		body += "\n\n" + t.Context
 	}
+	// A resumed thought is never contextless (ADR 0035 decision 3): the park
+	// wrote a handoff note — the thought's own, or the runtime's mechanical
+	// floor — and it is surfaced here, delimited from Context so "what I was
+	// told" is not confused with "what the previous run concluded". It is
+	// written at park time, not resume time, because the running state is gone
+	// by resume.
+	if t.HandoffNote != "" {
+		body += "\n\n--- handoff from the previous run (it was interrupted) ---\n" + t.HandoffNote
+	}
 	return body
 }
 

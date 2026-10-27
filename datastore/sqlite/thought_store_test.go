@@ -419,3 +419,124 @@ func TestThoughtStoreDependsOnRoundTrip(t *testing.T) {
 	}
 	t.Fatal("t-dep missing from LoadThoughts")
 }
+
+// TestThoughtStorePreemptionFieldsRoundTrip: the preemption and handoff
+// record (NAVI-575/NAVI-581, ADR 0035 decisions 3 and 7) survives a restart,
+// so a preemption is not lost across a crash — the release edge must be there
+// for the resumed process to unwind it.
+func TestThoughtStorePreemptionFieldsRoundTrip(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	want := &thought.Thought{
+		ID:             "t-pre",
+		Prompt:         "half-done migration",
+		Status:         thought.ThoughtPaused,
+		Priority:       5,
+		ParkReason:     thought.ParkPreempted,
+		PreemptedBy:    "t-urgent",
+		HandoffNote:    "interrupted; the migration is half-applied",
+		SteerRequested: true,
+		CreatedAt:      testNow(),
+		UpdatedAt:      testNow(),
+	}
+	if err := ts.SaveThought(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ts.LoadThought("t-pre")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ParkReason != thought.ParkPreempted {
+		t.Errorf("park_reason = %q, want %q", got.ParkReason, thought.ParkPreempted)
+	}
+	if got.PreemptedBy != "t-urgent" {
+		t.Errorf("preempted_by = %q, want t-urgent", got.PreemptedBy)
+	}
+	if got.HandoffNote != "interrupted; the migration is half-applied" {
+		t.Errorf("handoff_note = %q", got.HandoffNote)
+	}
+	if !got.SteerRequested {
+		t.Error("steer_requested did not survive the round trip")
+	}
+
+	// A thought with no preemption record stays clean rather than picking up
+	// a zero-value reason.
+	if err := ts.SaveThought(&thought.Thought{ID: "t-clean", Prompt: "x", Status: thought.ThoughtPending, CreatedAt: testNow(), UpdatedAt: testNow()}); err != nil {
+		t.Fatal(err)
+	}
+	clean, err := ts.LoadThought("t-clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean.ParkReason != "" || clean.PreemptedBy != "" || clean.HandoffNote != "" || clean.SteerRequested {
+		t.Fatalf("clean thought picked up preemption state: %+v", clean)
+	}
+}
+
+// TestLoadThoughtsOrdersByArrivalNotActivity pins the ADR 0035 decision 4
+// query change: LoadThoughts orders by (priority, created_at), so a restart
+// resumes from the TOP of the queue — oldest-first within a band — rather than
+// from whatever was last touched. Ordering by updated_at (the previous rule)
+// would promote the recently-touched thought.
+func TestLoadThoughtsOrdersByArrivalNotActivity(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	base := time.Now().UTC()
+
+	// Same priority, and the two signals DISAGREE: "older" arrived first but
+	// was touched most recently (a status change / retry / metadata write),
+	// while "younger" arrived second and was never touched again. Arrival
+	// order is [older, younger]; last-activity order is [younger, older], so
+	// this test fails if the query reverts to updated_at.
+	older := &thought.Thought{
+		ID: "older", Prompt: "first", Priority: 4, Status: thought.ThoughtPending,
+		CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour),
+	}
+	younger := &thought.Thought{
+		ID: "younger", Prompt: "second", Priority: 4, Status: thought.ThoughtPending,
+		CreatedAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Minute),
+	}
+	for _, th := range []*thought.Thought{younger, older} {
+		if err := ts.SaveThought(th); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := ts.LoadThoughts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, x := range all {
+		if x.ID == "older" || x.ID == "younger" {
+			order = append(order, x.ID)
+		}
+	}
+	if len(order) != 2 || order[0] != "older" || order[1] != "younger" {
+		t.Fatalf("LoadThoughts order = %v, want [older younger] (arrival, not last activity)", order)
+	}
+}
+
+// TestLoadThoughtsOrdersMostUrgentFirst pins the primary key across bands.
+func TestLoadThoughtsOrdersMostUrgentFirst(t *testing.T) {
+	_, ts := openThoughtStore(t)
+	base := time.Now().UTC()
+	urgentYoung := &thought.Thought{ID: "urgent", Prompt: "u", Priority: 1, Status: thought.ThoughtPending, CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)}
+	plannedOld := &thought.Thought{ID: "planned", Prompt: "p", Priority: 8, Status: thought.ThoughtPending, CreatedAt: base, UpdatedAt: base}
+	for _, th := range []*thought.Thought{urgentYoung, plannedOld} {
+		if err := ts.SaveThought(th); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := ts.LoadThoughts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, x := range all {
+		if x.ID == "urgent" || x.ID == "planned" {
+			order = append(order, x.ID)
+		}
+	}
+	if len(order) != 2 || order[0] != "urgent" {
+		t.Fatalf("LoadThoughts order = %v, want the more urgent first", order)
+	}
+}
