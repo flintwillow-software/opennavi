@@ -59,8 +59,11 @@ a conclusion the ingress thought can reach itself. What actually happens is
 simpler:
 
 1. **thought1** (p2) is running.
-2. **thought2** (p1) arrives, is strictly more urgent, and **preempts thought1**
-   (which parks with a checkpoint — ADR 0035).
+2. **thought2** (p1) arrives and is strictly more urgent, so thought1 is
+   **steered to park** — not cancelled (ADR 0035 decision 3: a p0 cancels, a p1
+   steers). thought1 finishes the step it is in, writes what the next thought
+   needs, and parks with a stated reason. It chooses the stopping point, which
+   is what makes the handoff good.
 3. **thought2 runs.** It reads the event, judges it, and — if the work is not
    actually urgent — does the *cheap* part: answer the source (reply in the
    thread, acknowledge the issue), schedule a follow-up for the real work, and
@@ -70,7 +73,7 @@ simpler:
 The navi is interrupted, but the interruption is **cheap**, and the preempted
 work resumes because its preemptor was short-lived. No mode, no extra authority,
 no extra thought per event — the behaviour falls out of strict preemption
-(ADR 0035 decision 2) plus automatic resumption (ADR 0035 decision 7) plus a
+(ADR 0035 decision 2) plus automatic resumption (ADR 0035 decision 8) plus a
 triaging thought that knows to get out of the way.
 
 A thought may of course judge the opposite — *"this is a real outage"* — and
@@ -169,7 +172,7 @@ simply do the work. Same mechanism, opposite conclusion.
   was given* — with no new authority, no new mode, and no new capability surface
   to review.
 - **The interrupt is cheap because the triaging thought is short.** A preemption
-  costs the victim a context switch, not its progress (ADR 0035 decision 7), and
+  costs the victim a context switch, not its progress (ADR 0035 decision 8), and
   the preemptor is expected to finish quickly — read, decide, maybe answer the
   source, schedule, exit. The model pays off only if triaging thoughts stay
   short; a triaging thought that starts doing the work holds the victim parked
