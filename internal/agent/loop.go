@@ -100,6 +100,20 @@ loop:
 
 			case EventToolCall:
 				if ev.Tool != nil {
+					// A Complete update carries the fully accumulated
+					// arguments for a call already seen. OpenAI-compatible
+					// providers stream arguments in fragments, so the first
+					// update for a call has empty or partial Input and only
+					// the final one has the whole JSON body — replacing is
+					// what makes the tool receive usable arguments instead
+					// of "".
+					if ev.Tool.Complete {
+						if idx := indexToolCall(toolCalls, ev.Tool.ToolCallID); idx >= 0 {
+							toolCalls[idx].Arguments = ev.Tool.Input
+							fullMessage.ToolCalls[idx].Arguments = ev.Tool.Input
+							continue
+						}
+					}
 					tc := ToolCall{Name: ev.Tool.Name, Arguments: ev.Tool.Input}
 					// Synthesize a unique call ID when the provider doesn't
 					// supply one (Ollama never does): tc_<turn>_<index>.
@@ -189,4 +203,21 @@ loop:
 		}
 		// Tool calls present: loop again so the model sees the results.
 	}
+}
+
+// indexToolCall returns the position of the call with the given provider id,
+// or -1 when there is none. It is how a Complete update finds the call its
+// partial start created, so fragmented arguments replace rather than
+// duplicate. An empty id never matches: a provider that supplies no id gets a
+// synthesized one per call, and matching "" would collapse distinct calls.
+func indexToolCall(calls []ToolCall, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range calls {
+		if calls[i].ToolCallID == id {
+			return i
+		}
+	}
+	return -1
 }

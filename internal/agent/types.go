@@ -178,6 +178,14 @@ type ToolUpdate struct {
 	Input      json.RawMessage `json:"input,omitempty"`
 	Result     string          `json:"result,omitempty"`
 	IsError    bool            `json:"is_error,omitempty"`
+	// Complete marks a ToolCall update that carries the fully accumulated
+	// arguments, superseding any partial input already recorded for the same
+	// call. OpenAI-compatible providers stream arguments in fragments, so the
+	// first update for a call has an empty or partial Input and only the
+	// final one has the whole JSON body. A false value is a partial/start
+	// update. Ollama sends everything at once, so for it Complete is
+	// redundant and harmless.
+	Complete bool `json:"complete,omitempty"`
 }
 
 // AgentState tracks the runtime state of an agent.

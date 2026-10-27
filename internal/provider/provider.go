@@ -136,7 +136,9 @@ func (s *Set) build(p model.Provider) (llm.Provider, error) {
 		if endpoint == "" {
 			endpoint = llm.DefaultOpenRouterURL
 		}
-		return llm.NewOpenRouterProviderWithClient(endpoint, secret, http.DefaultClient), nil
+		op := llm.NewOpenRouterProviderWithClient(endpoint, secret, http.DefaultClient)
+		op.Model = p.Model
+		return op, nil
 
 	case "mock":
 		// The mock provider exists for tests and for CI runs that must
