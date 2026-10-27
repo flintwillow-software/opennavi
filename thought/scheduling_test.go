@@ -669,6 +669,32 @@ func TestDeleteReleasesStrandedVictims(t *testing.T) {
 	}
 }
 
+// TestStaleSteerDoesNotSurviveAFailedRun: a steer is consumed by the run it
+// was delivered to. A steered thought whose run FAILED must not carry the
+// flag into a retry, or the pool would park it as a preemption park on behalf
+// of a preemptor that is long gone.
+func TestStaleSteerDoesNotSurviveAFailedRun(t *testing.T) {
+	q, err := NewQueue(Config{MaxConcurrent: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = q.Enqueue(newThought("victim", 5))
+	_, _ = q.Dequeue()
+	_ = q.Enqueue(newThought("respond", 1))
+	if got, _ := q.GetThought("victim"); !got.SteerRequested {
+		t.Fatal("setup: victim was not steered")
+	}
+
+	// The victim's run errors instead of parking itself.
+	if err := q.Fail("victim", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.GetThought("victim")
+	if got.SteerRequested {
+		t.Fatal("a failed run left the steer flag set; a retry would be spuriously parked")
+	}
+}
+
 // ── pool-level: a steered victim parks at its turn boundary ─────────────
 
 // TestPoolSteeredVictimParksAtTurnBoundary: a steered victim that returns from

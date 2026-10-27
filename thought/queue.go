@@ -802,6 +802,7 @@ func (q *Queue) Complete(id string, result string) error {
 	t.SlotID = ""
 	t.WorkerID = ""
 	t.PreemptRequested = false
+	t.SteerRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.terminal = append(q.terminal, t)
 	// NAVI-338: dirty mark.
@@ -836,6 +837,10 @@ func (q *Queue) Fail(id string, detail string) error {
 	t.SlotID = ""
 	t.WorkerID = ""
 	t.PreemptRequested = false
+	// A steer is consumed by the run it was delivered to: a retried thought
+	// must not be parked by a stale steer from a preemptor that is long
+	// gone.
+	t.SteerRequested = false
 	q.running = append(q.running[:idx], q.running[idx+1:]...)
 	q.pending = append(q.pending, t) // failed awaits Retry
 	collect(&evts, EventFailed, id, detail)
