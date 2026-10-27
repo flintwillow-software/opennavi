@@ -80,6 +80,10 @@ func (m *MemoryStore) Recall(q datastore.RecallQuery) ([]datastore.MemoryRecord,
 	query := `SELECT id, scope, subject, content, source, tags, importance, expires_at, created_at, updated_at
 		FROM memories WHERE 1=1`
 	args := []any{}
+	if q.ID != "" {
+		query += ` AND id = ?`
+		args = append(args, q.ID)
+	}
 	if q.Scope != "" {
 		query += ` AND scope = ?`
 		args = append(args, string(q.Scope))

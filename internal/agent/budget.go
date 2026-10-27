@@ -9,7 +9,7 @@ const defaultBudgetWarning = 0.8
 // a follow-up thought, carrying the handoff in short-term memory.
 const budgetNotice = "System notice: this thought is approaching its context budget. " +
 	"Finish a coherent unit of work now. Write what the next thought needs into " +
-	"short-term memory with memory_write, and queue follow-up thoughts with " +
+	"short-term memory with stm_write, and queue follow-up thoughts with " +
 	"thoughts_create, declaring the skills each should load. Do not try to hold " +
 	"the whole task in this thought."
 

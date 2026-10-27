@@ -200,9 +200,21 @@ func (n *Navi) assembleMemory() error {
 	}
 	n.shortMemory = svc
 
-	tools, err := memory.Tools(svc)
+	// The long-term tier (ADR 0037 decision 2): the searched archive, reached
+	// only through a tool call and never injected. It is built alongside the
+	// short-term service so both tiers' tools are declared together, and it
+	// holds no cache — a cached archive entry would risk leaking into the
+	// always-loaded set, which is the context cost the tier boundary exists to
+	// avoid.
+	lt, err := memory.NewLongTerm(n.Datastores.handle.Memory(), subject)
 	if err != nil {
-		return fmt.Errorf("navi: short-term memory tools: %w", err)
+		return fmt.Errorf("navi: long-term memory: %w", err)
+	}
+	n.longMemory = lt
+
+	tools, err := memory.Tools(svc, lt)
+	if err != nil {
+		return fmt.Errorf("navi: memory tools: %w", err)
 	}
 	for _, t := range tools {
 		if err := n.Tools.Add(t); err != nil {

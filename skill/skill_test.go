@@ -52,7 +52,7 @@ func TestCoreThoughtsTeachesHowToObeyASteer(t *testing.T) {
 	}{
 		{"it is a yield, not an abandonment", []string{"put this work down", "not mean the work is cancelled"}},
 		{"finish the step you are in", []string{"Finish the step you are in", "mid-edit"}},
-		{"write what the next run needs", []string{"memory_write", "what the next run needs"}},
+		{"write what the next run needs", []string{"stm_write", "what the next run needs"}},
 		{"park with a stated reason", []string{"pause", "reason"}},
 		{"you will be resumed", []string{"resumed", "checkpoint"}},
 		{"do not run on to a finish", []string{"Do not", "try to finish the work first"}},

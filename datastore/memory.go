@@ -59,6 +59,12 @@ type MemoryRecord struct {
 // RecallQuery selects memory records. Zero fields are ignored; Query is a
 // literal substring match on Content unless a backend supports more.
 type RecallQuery struct {
+	// ID selects exactly one record by id, when set. It is how a caller
+	// reads a specific entry it already knows the id of (a search hit it
+	// wants in full) without scanning the archive — a substring query would
+	// be the wrong tool, and a bounded recall would miss the row entirely.
+	// Empty means "no id constraint".
+	ID string
 	// Scope filters by ownership scope.
 	Scope Scope
 	// Subject filters by owning principal; the zero Ref is ignored.
