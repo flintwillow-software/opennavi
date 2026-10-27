@@ -1116,16 +1116,21 @@ func (q *Queue) preempt(victimID string, by *Thought, evts *[]Event) {
 	q.pendingSteers = append(q.pendingSteers, victimID)
 }
 
-// SteerInstruction is the provisional steer text delivered to a victim that
-// a strictly-higher-priority thought preempts (ADR 0035 decision 3). It is
-// deliberately minimal and MUST be replaced by the core thoughts skill's
-// guidance (NAVI-582), which owns the actionable wording every running
-// thought can obey: put the work down, record what the next thought needs,
-// and park. It lives here for now so the queue-side mechanism is testable
-// on its own.
+// SteerInstruction is the message delivered to a victim that a
+// strictly-higher-priority thought preempts (ADR 0035 decision 3).
 //
-// PROVISIONAL — NAVI-582 owns this wording.
-const SteerInstruction = "A more urgent thought has arrived. Put this work down at a natural stopping point: finish the step you are in, record anything the next thought will need, and park this thought. It will be resumed when the urgent work is done."
+// It is deliberately SHORT: the procedure lives in the core thoughts skill
+// (`skill.CoreThoughts`, the "Being interrupted" section), which is auto-loaded
+// and therefore already in front of every thought. Repeating the procedure here
+// would give two copies of the same instruction to keep in step, and the
+// injected copy would be the one that drifted — a thought would then be told to
+// park in terms its skill does not teach. This message states what is happening
+// and points at the guidance; the guidance owns how to obey it.
+//
+// It must stay ACTIONABLE on its own terms: a steered thought that cannot tell
+// it is being asked to yield keeps running while the more urgent work waits,
+// which is worse than a cancellation.
+const SteerInstruction = "More urgent work has arrived and this thought is being asked to yield. Put your work down at a natural stopping point — finish the step you are in, record what the next run needs, park this thought with a stated reason, and stop. You will be resumed from your checkpoint once the urgent work is done. See the 'Being interrupted' guidance in your core thoughts skill."
 
 // deliverSteers invokes the steering bridge for each victim parked in the
 // steering band. MUST be called without q.mu held: the router is injected

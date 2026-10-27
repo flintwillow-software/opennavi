@@ -3,6 +3,7 @@ package thought
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -755,4 +756,27 @@ func TestPoolSteeredVictimParksAtTurnBoundary(t *testing.T) {
 		g, _ := q.GetThought("victim")
 		return g != nil && g.Status == ThoughtComplete
 	}, "steered victim should auto-resume and complete")
+}
+
+// TestSteerInstructionPointsAtTheSkillGuidance is the anti-drift guard between
+// the two halves of NAVI-582: the message the queue injects, and the procedure
+// the core thoughts skill teaches. The injected message must stay short and
+// point at the guidance rather than restating it, or the two copies diverge and
+// a thought is told to park in terms its skill does not teach.
+func TestSteerInstructionPointsAtTheSkillGuidance(t *testing.T) {
+	// The instruction must be actionable on its own terms (ADR 0035 decision
+	// 3): a thought that cannot tell it is being asked to yield keeps running.
+	for _, want := range []string{"yield", "put your work down", "park", "resumed"} {
+		if !strings.Contains(strings.ToLower(SteerInstruction), want) {
+			t.Errorf("SteerInstruction does not say %q: %q", want, SteerInstruction)
+		}
+	}
+	// And it must point at the guidance, which owns the procedure.
+	if !strings.Contains(SteerInstruction, "core thoughts skill") {
+		t.Errorf("SteerInstruction does not point at the skill guidance, so the two will drift: %q", SteerInstruction)
+	}
+	// Short enough to be a pointer rather than a second copy of the procedure.
+	if len(SteerInstruction) > 600 {
+		t.Errorf("SteerInstruction is %d chars — it is restating the procedure rather than pointing at it", len(SteerInstruction))
+	}
 }
