@@ -99,8 +99,15 @@ type Subscription struct {
 	Principal principal.Ref
 	// Prompt is the thought prompt for an event. Empty = a generated prompt.
 	Prompt string
-	// Priority is the enqueued thought's priority (1-10; 0 = 3).
-	Priority int
+	// Priority is an ADVISORY priority hint for the thoughts this
+	// subscription spawns (ADR 0035 decision 5, ADR 0036 decision 2). Nil
+	// (unset) lands at connector.DefaultPriority; a value is used verbatim,
+	// including a deliberate 0 for the urgent band. An issue's OWN priority
+	// wins over this hint when Huly states one — the hint is the fallback for
+	// events that carry no priority of their own (a mention, a comment). A
+	// hint is a starting position, not a verdict: only the running thought
+	// can see the queue and revise it.
+	Priority connector.PriorityHint
 }
 
 // declares reports whether the subscription names an event kind.
@@ -123,6 +130,10 @@ type inboundEvent struct {
 	Body       string
 	Author     string
 	Status     string
+	// Priority is the ISSUE's own priority name (Huly's scale), when the
+	// event came from an issue. Empty for an event that has none (a mention
+	// or a comment), so the subscription's hint is the fallback.
+	Priority string
 }
 
 // dedupeKey is the event identity the seen-set is keyed on (ADR 0023 decision
@@ -168,6 +179,9 @@ func (e inboundEvent) contextText() string {
 func validateSubscription(s Subscription) error {
 	if strings.TrimSpace(s.Name) == "" {
 		return fmt.Errorf("subscription requires a name")
+	}
+	if s.Priority != nil && !connector.ValidPriority(*s.Priority) {
+		return fmt.Errorf("subscription %q: priority %d is outside the 0..10 scale", s.Name, *s.Priority)
 	}
 	intent := s.Intent
 	if intent == "" {
@@ -374,12 +388,34 @@ func issueEvent(kind EventKind, is map[string]any) inboundEvent {
 		Identifier: stringField(is, "identifier"),
 		Title:      stringField(is, "title"),
 		Status:     stringField(is, "status"),
+		Priority:   issuePriorityName(is),
 	}
 	if kind == EventIssueStatusChanged {
 		// Two different status changes on one issue are two events.
 		ev.ID = stringField(is, "_id") + ":" + ev.Status
 	}
 	return ev
+}
+
+// issuePriorityName reads an issue's own priority as its Huly name, so the
+// priority hint can be derived from the issue rather than the subscription
+// (ADR 0035 decision 5). Huly stores it as a number on its own scale
+// (urgent=1 .. low=4, no-priority=0); an unset or unrecognised value returns
+// "", which the hint resolver reads as "no opinion" and falls back to the
+// subscription's declared hint.
+func issuePriorityName(is map[string]any) string {
+	v, ok := is["priority"]
+	if !ok {
+		return ""
+	}
+	switch t := v.(type) {
+	case float64: // JSON numbers
+		return priorityToString(int(t))
+	case string:
+		return t
+	default:
+		return ""
+	}
 }
 
 // commentEvent projects a comment document to a normalized event.
@@ -489,10 +525,14 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, ev inbou
 		actor = ref
 	}
 	t := &thought.Thought{
-		ID:        fmt.Sprintf("huly-%s-%s-%s", sub.Name, ev.Kind, ev.ID),
-		Prompt:    prompt,
+		ID:     fmt.Sprintf("huly-%s-%s-%s", sub.Name, ev.Kind, ev.ID),
+		Prompt: prompt,
+		// An issue's own priority wins; the subscription's hint is the
+		// fallback for events with no priority of their own (ADR 0035
+		// decision 5, ADR 0036 decision 2). Advisory: the triaging thought
+		// may revise it once it has seen the queue.
+		Priority:  connector.HintForEventPriority(ev.Priority, sub.Priority),
 		Context:   ev.contextText(),
-		Priority:  sub.Priority,
 		Status:    thought.ThoughtPending,
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.UTC(),

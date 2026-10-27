@@ -24,8 +24,12 @@ type Schedule struct {
 	Expr string
 	// Prompt is the thought prompt the schedule enqueues.
 	Prompt string
-	// Priority is the enqueued thought's priority (1-10; 0 = 3).
-	Priority int
+	// Priority is an ADVISORY priority hint for the thoughts this schedule
+	// enqueues (ADR 0035 decision 5). Nil (unset) lands at
+	// connector.DefaultPriority; a value is used verbatim, including a
+	// deliberate 0 for the urgent band. A hint is a starting position, not a
+	// verdict: only the running thought can see the queue and revise it.
+	Priority connector.PriorityHint
 	// TZ is the IANA timezone ("" = time.Local).
 	TZ string
 	// Disabled schedules are registered but never fire.
@@ -94,10 +98,15 @@ func (c *Connector) Start(ctx context.Context, deps connector.Deps) error {
 	}
 	for _, def := range c.cfg.Schedules {
 		if err := s.Add(scheduleSpec{
-			Name:     def.Name,
-			Expr:     def.Expr,
-			Prompt:   def.Prompt,
-			Priority: def.Priority,
+			Name:   def.Name,
+			Expr:   def.Expr,
+			Prompt: def.Prompt,
+			// Resolve the advisory hint to a concrete priority at the door
+			// (ADR 0035 decision 5): unset lands at the default, and a
+			// deliberate 0 survives as the urgent band. The scheduler works
+			// with a resolved int so it cannot re-introduce the
+			// "0 means default" ambiguity.
+			Priority: connector.ResolvePriority(def.Priority),
 			TZ:       def.TZ,
 			Disabled: def.Disabled,
 		}); err != nil {

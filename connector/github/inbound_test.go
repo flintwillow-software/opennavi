@@ -573,3 +573,69 @@ func TestMentionsIsWordBoundedAndIgnoresNoise(t *testing.T) {
 		t.Error("an empty login must not match")
 	}
 }
+
+// TestInboundPriorityHint pins NAVI-579 for the GitHub connector: the declared
+// hint reaches the thought, and an unset hint lands at the planned-work default
+// rather than the urgent band.
+func TestInboundPriorityHint(t *testing.T) {
+	cases := []struct {
+		name string
+		hint connector.PriorityHint
+		want int
+	}{
+		{"unset is the default", nil, connector.DefaultPriority},
+		{"a declared hint is verbatim", connector.PriorityValue(1), 1},
+		{"deliberate urgent survives", connector.PriorityValue(0), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := testToken(t)
+			ref := "GITHUB_TOKEN"
+			srv := commentServer(t, `[{"id":42,"body":"hey @navi take a look","html_url":"https://github.com/acme/widgets/issues/7#issuecomment-42","user":{"login":"alice"}}]`)
+			q := &fakeTS{}
+			c := New(Config{
+				BaseURL:      srv.URL,
+				Credential:   ref,
+				Env:          envWith(ref, tok),
+				HTTPClient:   srv.Client(),
+				PollInterval: 20 * time.Millisecond,
+				Subscriptions: []Subscription{{
+					Name: "issues", Repository: "acme/widgets",
+					Events: []EventKind{EventIssueMention}, Mention: "navi",
+					Priority: tc.hint,
+				}},
+			})
+			if err := c.Start(context.Background(), connector.Deps{ThoughtSystem: q}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = c.Stop() }()
+
+			th := waitForThought(t, q)
+			if th.Priority != tc.want {
+				t.Fatalf("priority = %d (effective %d), want %d", th.Priority, th.EffectivePriority(), tc.want)
+			}
+		})
+	}
+}
+
+// TestGithubSubscriptionPriorityOutOfRangeIsRejected mirrors the Huly check: a
+// hint outside the queue's scale is a composition error.
+func TestGithubSubscriptionPriorityOutOfRangeIsRejected(t *testing.T) {
+	base := Subscription{
+		Name: "x", Repository: "acme/widgets",
+		Events: []EventKind{EventIssueMention}, Mention: "navi",
+	}
+	for _, p := range []int{-1, 11} {
+		s := base
+		s.Priority = connector.PriorityValue(p)
+		err := validateSubscription(s)
+		if err == nil || !strings.Contains(err.Error(), "0..10") {
+			t.Errorf("priority %d: error = %v, want an out-of-range rejection", p, err)
+		}
+	}
+	s := base
+	s.Priority = connector.PriorityValue(0)
+	if err := validateSubscription(s); err != nil {
+		t.Fatalf("a deliberate urgent hint must validate: %v", err)
+	}
+}
