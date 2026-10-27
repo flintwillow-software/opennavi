@@ -16,11 +16,18 @@ func TestOpenRouterStreamContent(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
-		if r.Header.Get("X-Title") != "OpenNavi" {
+		if r.Header.Get("X-Title") != "OpenNAVI" {
 			t.Errorf("X-Title = %q", r.Header.Get("X-Title"))
 		}
-		if r.Header.Get("HTTP-Referer") == "" {
-			t.Error("HTTP-Referer missing")
+		if r.Header.Get("X-OpenRouter-Title") != "OpenNAVI" {
+			t.Errorf("X-OpenRouter-Title = %q", r.Header.Get("X-OpenRouter-Title"))
+		}
+		// The referer is the app's identity on openrouter.ai — pin it.
+		if r.Header.Get("HTTP-Referer") != "https://opennavi.io" {
+			t.Errorf("HTTP-Referer = %q", r.Header.Get("HTTP-Referer"))
+		}
+		if r.Header.Get("X-OpenRouter-Categories") != "personal-agent" {
+			t.Errorf("X-OpenRouter-Categories = %q", r.Header.Get("X-OpenRouter-Categories"))
 		}
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			t.Errorf("path = %q", r.URL.Path)
