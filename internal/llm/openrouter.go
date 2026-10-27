@@ -132,8 +132,15 @@ func (p *OpenRouterProvider) newRequest(ctx context.Context, method, path string
 	if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
-	req.Header.Set("HTTP-Referer", "https://opennavi.dev")
-	req.Header.Set("X-Title", "OpenNavi")
+	// App attribution — see https://openrouter.ai/docs/app-attribution.
+	// HTTP-Referer is the app's unique identifier and cannot be changed
+	// by header once the app page exists (contact support to move it).
+	req.Header.Set("HTTP-Referer", "https://opennavi.io")
+	// X-OpenRouter-Title is the current name; X-Title is kept for
+	// backwards compatibility with older OpenRouter backends.
+	req.Header.Set("X-OpenRouter-Title", "OpenNAVI")
+	req.Header.Set("X-Title", "OpenNAVI")
+	req.Header.Set("X-OpenRouter-Categories", "personal-agent")
 	return req, nil
 }
 
