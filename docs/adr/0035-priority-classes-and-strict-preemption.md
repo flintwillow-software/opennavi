@@ -233,6 +233,45 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    Interaction with ADR 0015: resuming the head of a chain releases the chain,
    so the plan continues where it left off.
 
+9. **A resumed thought rejoins the queue at its priority — it does not jump it.**
+   `Resume` moves a thought from paused back to **pending** (`thought/queue.go:588`),
+   where it competes on priority like anything else. So "go back to what I was
+   doing" means *rejoin at your priority*, not *be next*:
+
+   - if the victim is now the most urgent pending thought, it runs next, which
+     is the common case (a p2 parked by a p1 resumes as soon as the p1 finishes);
+   - if something more urgent arrived while it was parked, that goes first and
+     the victim waits.
+
+   **Priority is respected over resumption.** A stale p7 must not resume ahead of
+   a fresh p3 merely because it was interrupted earlier — being interrupted does
+   not promote a thought. Combined with decision 4 (a resumed thought keeps its
+   original arrival time), a resumed thought is ordered exactly as if it had
+   never been parked, except that it now carries a checkpoint.
+
+10. **Equal priority does not preempt; slots decide what runs concurrently.**
+    `preemptCandidate` (``thought/queue.go:811`) requires a victim with **strictly
+    lower** priority (``r.EffectivePriority() <= t.EffectivePriority()` → skip), so a p0
+    arriving while another p0 runs does **not** preempt it. Two equally urgent
+    things do not outrank each other, and interrupting one to start the other
+    would swap a nearly-finished urgent task for a fresh one — strictly worse.
+
+    What happens instead depends on **slots**, and that is the intended answer:
+    **slots are slots.** A p0 with a free slot runs immediately, in parallel with
+    the running p0; with no free slot it queues behind and starts when one frees.
+    The navi's default is `MaxConcurrent: 2` (``navi/navi.go:374``), so two p0s
+    run concurrently by default.
+
+    So **p0 is not a mutex**: "the navi is handling exactly one urgent thing at a
+    time" is not a guarantee, and should not be assumed. Concurrency is governed
+    by capacity, uniformly, at every priority.
+
+    A **paused** thought can never be preempted — `preemptCandidate` iterates
+    `q.running` only. That is correct rather than a gap: a parked thought is
+    already stopped, so there is nothing to stop. It is also why a p0 arriving
+    while its predecessor is *parked* does not "re-preempt" it; the parked
+    thought simply waits in `paused` until its preemptor chain unwinds.
+
 ## Consequences
 
 - **The queue becomes explainable.** "Why did this run before that" has an
@@ -262,6 +301,23 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
   act on (put the work down, record what the next needs, park). Without it, a
   steered thought receives a message it does not know how to obey — which is
   worse than a cancellation, because it keeps running and ignores the message.
+- **Being interrupted does not promote a thought.** A resumed thought rejoins
+  at its own priority and keeps its original arrival time, so it is ordered
+  exactly as if it had never been parked. The trade is deliberate: an
+  interrupted thought does not leapfrog newer, more urgent work, so "I will come
+  back to that" means "I will come back when it is that thought's turn" rather
+  than "immediately after". This is what keeps a long-parked thought from
+  returning with stale precedence.
+- **Concurrency is capacity, not priority.** A p0 with a free slot runs
+  alongside a running p0, because slots are slots. So p0 is **not** a mutex and
+  "one urgent thing at a time" is not guaranteed — with the default
+  `MaxConcurrent: 2`, two p0s run concurrently. Anything that needs serialisation
+  must get it from capacity, not from the priority scheme.
+- **A parked thought is inert.** It cannot be preempted (preemption walks
+  `q.running` only), so a new arrival never "re-preempts" it. It waits in
+  `paused` until the preemption chain that parked it unwinds. This is correct —
+  there is nothing to stop in a stopped thought — but it does mean a deep chain
+  of preemptions parks work for longer than the top of the chain suggests.
 - **An interrupt costs a context switch, not progress** — but only once
   automatic resumption exists (decision 8). Until it does, every preemption is a
   **permanent** loss of the victim's forward progress, which makes the strict
