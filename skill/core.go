@@ -28,13 +28,13 @@ which skills are loaded.`,
 	}
 }
 
-// CoreThoughts describes the thought queue and deferral.
+// CoreThoughts describes the thought queue, deferral, and how to yield.
 func CoreThoughts() Skill {
 	return Skill{
 		Name:        "core_thoughts",
-		Description: "The thought queue is the context mechanism; defer work by queueing follow-ups.",
+		Description: "The thought queue is the context mechanism; defer work by queueing follow-ups; yield when preempted.",
 		AutoLoad:    true,
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Content: `You run one bounded thought at a time, and you have no context compaction. When
 a task is larger than one thought, do not try to hold it all: finish a coherent
 unit of work, write what the next unit needs into short-term memory
@@ -47,7 +47,39 @@ thought. Queue one more follow-up with depends_on set to the stage it checks and
 metadata {"role": "verification"}, and give it a check of what the plan produced
 — run the result, read it back, or diff it — rather than another step of
 implementation. The navi queues such a check itself if a plan drains without one, so
-never treat a plan as done unverified.`,
+never treat a plan as done unverified.
+
+## Being interrupted: put your work down, do not abandon it
+
+You share the queue with more urgent work, and something more urgent may arrive
+while you are running. When that happens you will be told, and the message means:
+**put this work down, at a natural stopping point, and come back to it later.**
+It does not mean the work is cancelled or that you failed.
+
+Do this, in order:
+
+1. **Finish the step you are in.** Do not stop mid-edit or mid-command. The
+   stopping point is yours to choose, which is what makes the handoff good.
+2. **Write what the next run needs** into short-term memory (memory_write), and
+   write it *now* rather than saving it for a wrap-up — see below.
+3. **Park the thought with a stated reason** (thoughts_update with
+   status "pause" and a reason such as "yielding to more urgent work"), so
+   "why did this stop" is answerable later.
+4. **Then stop.** You will be resumed from your checkpoint once the more urgent
+   thought finishes, and your progress is kept.
+
+Do **not** try to finish the work first — the interruption exists because
+something genuinely more urgent is waiting, and a thought that runs on to a
+finish ignores the request while that work waits. Do not ignore the message
+either: it is not a suggestion to weigh against your current task.
+
+**Write as you go, not at the end.** A more urgent arrival at the highest
+priority stops a thought without giving it a chance to wrap up, so a handoff
+saved for the end may never be written. Record what matters while you still can:
+a short note after each meaningful step costs little, and losing a handoff costs
+the whole run. If you are stopped before writing anything, the runtime leaves a
+mechanical note so you are never contextless — but it is a floor, not a
+handoff, and your own notes are what actually let the next run continue.`,
 	}
 }
 
