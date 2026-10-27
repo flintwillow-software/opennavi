@@ -88,9 +88,11 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    comparison in `preemptCandidate` becomes the whole rule, and the
    `EffectivePriority() > HighPriorityThreshold` early return goes away.
 
-3. **Two ways to yield, and the difference is whether the victim gets to think.**
-   This is the operator's distinction, and it is the sharper half of the rule:
-   *a p0 is Ctrl-C and then park; anything else is steer to park.*
+3. **Two ways to yield: a p0 cancels, anything else steers — and both leave a
+   handoff note.** This is the operator's distinction, and it is the sharper half
+   of the rule: *a p0 is Ctrl-C and then park; anything else is steer to park.*
+   A connector should **always prefer p1** when it wants to interrupt; p0 is for
+   the special case.
 
    - **A p0 cancels.** The victim is stopped **immediately** — `EventPreempted`
      → context cancel → the runner snapshots its checkpoint → `Pause`. It does
@@ -122,6 +124,32 @@ expresses *arrival*, and a strictly more urgent thing always gets to interrupt.
    down, record what the next thought needs, and park. That is a **guidance**
    obligation carried by the core thoughts skill, not something each connector
    invents — the same instruction has to work for every running thought.
+
+   **A p0 parks with a runtime-synthesised handoff note.** This is the change
+   that gives p0 the *resilience* of a steered yield while keeping its
+   immediacy. The obstacle is that a **cancelled context cannot make an LLM
+   call**, so the victim cannot write its own note after being cancelled — and
+   waiting for one would make p0 no faster than a p1, defeating its purpose.
+
+   So the **runtime** writes the note, at park time, from what it already has:
+   the thought's prompt, its checkpointed messages, and whatever result it had
+   reached. No model call, so no added latency, which is the property p0 exists
+   to preserve. The note is mechanical and therefore worse than one the victim
+   would have written — but it is **guaranteed**, and it lands even when the
+   victim was mid-tool-call and could not have responded at all.
+
+   **The note is written on both paths, as a floor.** A steered thought is
+   *expected* to write its own handoff, and usually will; the runtime note
+   covers the case where it did not (it was mid-step, it forgot, its budget ran
+   out). A floor that exists on only one path is a floor nothing can rely on, so
+   the resume guarantee — "a resumed thought is never contextless" — holds
+   uniformly rather than depending on how the interruption happened.
+
+   This also changes what the memory guidance should say (ADR 0037): a thought
+   should write what matters **as it goes**, not only when wrapping up, because
+   a p0 will not give it the chance to write a final note. The runtime note is
+   the floor; the thought's own writes are the ceiling, and a thought that wrote
+   well as it went leaves a good handoff however it was interrupted.
 
    The threshold constant is retained only if it still marks something real;
    otherwise it is deleted rather than left as a misleading vestige.

@@ -148,6 +148,19 @@ memory, and today there is nowhere.
    taken deliberately: the operator's model is that a navi *manages* its memory
    tiers, which is a tool-shaped job.
 
+10. **A thought writes as it goes, not only at the end.** Guidance encourages
+    writing what matters **while the thought can**, rather than saving the
+    handoff for a wrap-up. The reason is
+    [ADR 0035](./0035-priority-classes-and-strict-preemption.md) decision 3: a
+    p0 preemption **cancels** a thought and gives it no chance to write a final
+    note. A runtime-synthesised floor covers that case (ADR 0035), but it is
+    mechanical — the thought's own writes are the real handoff, and a thought
+    that deferred them may lose them entirely.
+
+    The context-churn cost of more frequent writes is accepted deliberately.
+    Short-term memory is the inter-thought carrier, and losing a handoff costs
+    far more than carrying a note.
+
 ## Consequences
 
 - **The navi can park and retrieve.** A conclusion it cannot act on now goes
@@ -158,6 +171,13 @@ memory, and today there is nowhere.
   queried, which is what the design was always about.
 - **`ScopeNavi` and `ScopeMemories` become reachable**, closing the gap where
   four scopes existed in the datastore and two were usable.
+- **The resume guarantee does not depend on the model choosing to write.** A
+  p0 preemption cancels the thought and gives it no opportunity to write a final
+  note (ADR 0035 decision 3), so the **runtime** synthesises a mechanical handoff
+  at park time — no model call, so p0 keeps its immediacy. That note is a floor,
+  not the mechanism: a thought's own writes, made as it goes, are the ceiling and
+  are what actually make a resume good. Guidance therefore encourages writing
+  mid-thought rather than deferring to a wrap-up.
 - **The handoff depends on the model choosing to write.** With no runtime pass,
   a thought that does not call the tool leaves nothing for its successor. The
   queue's deferral idiom is only as good as the skill that teaches it, which
@@ -214,9 +234,16 @@ memory, and today there is nowhere.
    no long-term tier at all is undecided.
 4. **Pointer lifecycle.** How a short-term pointer is invalidated when its
    long-term target is pruned, and whether pointers expire.
-5. **Mid-thought vs. end-of-thought writes.** This ADR permits both; whether
-   guidance should discourage mid-thought writes (context churn) or encourage
-   them (write it before you forget it) is not settled.
+5. ~~**Mid-thought vs. end-of-thought writes.**~~ **Settled: write as you go.**
+   Guidance encourages mid-thought writes rather than deferring everything to a
+   wrap-up. The reason is [ADR 0035](./0035-priority-classes-and-strict-preemption.md)
+   decision 3: a p0 preemption **cancels** the thought and does not give it the
+   chance to write a final note, so a thought that saved its handoff for the end
+   may lose it. A runtime-synthesised floor exists for exactly that case, but it
+   is mechanical and worse than what the thought itself would write — so the
+   thought's own writes, made while it still can, are the real handoff. The
+   context-churn cost is accepted: short-term memory is the inter-thought
+   carrier, and losing a handoff costs far more than carrying a note.
 6. **Prune tooling.** Whether pruning is one tool with a filter, or explicit
    per-entry removal, and whether the operator has a separate surface.
 7. **Cross-thought context.** [ADR 0013](./0013-the-thought-queue-is-the-context-mechanism.md)
