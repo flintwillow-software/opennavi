@@ -368,12 +368,30 @@ func (c *Connector) pollSubscription(ctx context.Context, cl *Client, seen *seen
 			text := proseMirrorText(raw)
 			author := stringField(cm, "createdBy")
 			issueID := stringField(cm, "attachedTo")
-			if sub.declares(EventIssueMentioned) && mentionsPerson(raw, personID) {
-				out = append(out, commentEvent(EventIssueMentioned, cm, text, author))
+
+			// ONE comment is ONE event, however many declared kinds describe
+			// it. A comment that both mentions the navi and sits on an issue
+			// assigned to it matches two kinds, and emitting both spawned two
+			// thoughts for one stimulus (NAVI-585) — the dedupe keys and the
+			// deterministic thought ids are per-KIND, so neither idempotency
+			// layer could collapse them.
+			//
+			// The kinds are precedence-ordered, most specific first: a mention
+			// is the sharper signal, and "a comment on my issue" is the weaker
+			// description of the same thing. The first match wins, so exactly
+			// one event is emitted and the two layers agree by construction.
+			// Precedence only chooses between kinds that BOTH match, so a
+			// subscription declaring one of them is unaffected.
+			var kind EventKind
+			switch {
+			case sub.declares(EventIssueMentioned) && mentionsPerson(raw, personID):
+				kind = EventIssueMentioned
+			case sub.declares(EventCommentOnMyIssue) && mine[issueID]:
+				kind = EventCommentOnMyIssue
+			default:
+				continue
 			}
-			if sub.declares(EventCommentOnMyIssue) && mine[issueID] {
-				out = append(out, commentEvent(EventCommentOnMyIssue, cm, text, author))
-			}
+			out = append(out, commentEvent(kind, cm, text, author))
 		}
 	}
 	return out, nil
@@ -427,6 +445,14 @@ func commentEvent(kind EventKind, cm map[string]any, text, author string) inboun
 		Body:    text,
 		Author:  author,
 	}
+}
+
+// commentDerived reports whether an event kind is derived from a COMMENT, as
+// opposed to from an issue. The two comment kinds are two descriptions of one
+// stimulus, so a comment-derived thought is identified by the comment, not by
+// the kind (NAVI-585).
+func commentDerived(kind EventKind) bool {
+	return kind == EventIssueMentioned || kind == EventCommentOnMyIssue
 }
 
 // mentionsPerson reports whether a comment's raw ProseMirror markup names the
@@ -525,7 +551,7 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, ev inbou
 		actor = ref
 	}
 	t := &thought.Thought{
-		ID:     fmt.Sprintf("huly-%s-%s-%s", sub.Name, ev.Kind, ev.ID),
+		ID:     thoughtID(sub.Name, ev),
 		Prompt: prompt,
 		// An issue's own priority wins; the subscription's hint is the
 		// fallback for events with no priority of their own (ADR 0035
@@ -550,6 +576,25 @@ func (c *Connector) enqueueEvent(deps connector.Deps, sub Subscription, ev inbou
 		t.Metadata["identifier"] = ev.Identifier
 	}
 	return deps.ThoughtSystem.Enqueue(t)
+}
+
+// thoughtID is the deterministic thought id for an event: the second
+// idempotency backstop ADR 0023 decision 5 describes, so a redelivery that
+// slips past the seen-set still collides on the queue rather than spawning a
+// second thought.
+//
+// A comment-derived event is keyed on the COMMENT, not the kind (NAVI-585).
+// The two comment kinds are two descriptions of one stimulus, so a
+// kind-bearing id would let the same comment enqueue twice under two ids —
+// which is exactly what happened before the precedence rule, and is why this
+// backstop did not catch it. Issue-derived kinds keep their kind in the id,
+// because an issue legitimately produces several distinct events (assigned,
+// then a status change).
+func thoughtID(subName string, ev inboundEvent) string {
+	if commentDerived(ev.Kind) {
+		return fmt.Sprintf("huly-%s-comment-%s", subName, ev.ID)
+	}
+	return fmt.Sprintf("huly-%s-%s-%s", subName, ev.Kind, ev.ID)
 }
 
 // defaultPrompt is the thought prompt for an event when the subscription does

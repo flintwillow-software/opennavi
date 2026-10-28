@@ -554,12 +554,19 @@ func TestInboundSelfCommentsAreIgnored(t *testing.T) {
 	seen, _ := newSeenStore(nil)
 	pollOnceNow(t, c, ts, seen, time.Hour)
 
-	if got := ts.count(); got != 2 {
-		t.Fatalf("enqueued %d thoughts, want 2 (the self comment is filtered for both kinds)", got)
+	// TWO comments were posted, one authored by the navi itself. Exactly one
+	// thought is correct: the self-authored comment is filtered, and the
+	// other comment is ONE event (NAVI-585 — it matched both declared kinds,
+	// and one stimulus must not spawn two thoughts).
+	if got := ts.count(); got != 1 {
+		t.Fatalf("enqueued %d thoughts, want 1 (the self comment filtered, the other comment counted once)", got)
 	}
 	for _, th := range ts.GetThoughts() {
 		if strings.Contains(th.ID, "self") {
 			t.Errorf("a self-authored comment re-entered as %s", th.ID)
+		}
+		if th.ID != "huly-m-comment-other" {
+			t.Errorf("unexpected thought %s", th.ID)
 		}
 	}
 }
@@ -762,5 +769,186 @@ func TestSubscriptionPriorityOutOfRangeIsRejected(t *testing.T) {
 		Priority: connector.PriorityValue(0),
 	}); err != nil {
 		t.Fatalf("a deliberate urgent hint must validate: %v", err)
+	}
+}
+
+// ── NAVI-585: one comment is one event ──────────────────────────────────
+
+// TestInboundOneCommentMatchingTwoKindsSpawnsOneThought is the regression: a
+// comment that both mentions the navi AND sits on an issue assigned to it
+// matched two declared kinds, and each kind spawned a thought. Both idempotency
+// layers are per-kind (dedupe key and deterministic thought id), so neither
+// could collapse them.
+func TestInboundOneCommentMatchingTwoKindsSpawnsOneThought(t *testing.T) {
+	const personID = "6aa2a3038376b1c099c0403d"
+	f := newFakeHuly(t)
+	// The fixture issue IS assigned to the navi, so `mine[issueID]` is true,
+	// and the comment mentions the navi — both kinds match.
+	f.comments = []map[string]any{mentionComment("both", "social-9", 6000, personID)}
+
+	ts := &fakeTS{}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "m", Project: "NAVI",
+		Events: []EventKind{EventIssueMentioned, EventCommentOnMyIssue},
+	}}})
+	seen, _ := newSeenStore(nil)
+	pollOnceNow(t, c, ts, seen, time.Hour)
+
+	if got := ts.count(); got != 1 {
+		var ids []string
+		for _, th := range ts.GetThoughts() {
+			ids = append(ids, th.ID)
+		}
+		t.Fatalf("enqueued %d thoughts for one comment, want 1: %v", got, ids)
+	}
+	// The more specific kind survives: a mention is the sharper signal.
+	th := ts.GetThoughts()[0]
+	if th.Metadata["event"] != string(EventIssueMentioned) {
+		t.Fatalf("event = %q, want the more specific %q", th.Metadata["event"], EventIssueMentioned)
+	}
+}
+
+// TestInboundCommentKindStillFiresAlone: precedence must not suppress a kind
+// that is the ONLY match.
+func TestInboundCommentKindStillFiresAlone(t *testing.T) {
+	const personID = "6aa2a3038376b1c099c0403d"
+	f := newFakeHuly(t)
+	// A comment on the navi's issue that does NOT mention it.
+	f.comments = []map[string]any{{
+		"_id": "plain", "attachedTo": "6acd168268c57585aac3fa3f", "createdBy": "social-9",
+		"createdOn": 6000, "message": "no mention here, just a comment",
+	}}
+
+	ts := &fakeTS{}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "m", Project: "NAVI",
+		Events: []EventKind{EventIssueMentioned, EventCommentOnMyIssue},
+	}}})
+	seen, _ := newSeenStore(nil)
+	pollOnceNow(t, c, ts, seen, time.Hour)
+
+	if got := ts.count(); got != 1 {
+		t.Fatalf("enqueued %d thoughts, want 1 (a non-mention comment on my issue)", got)
+	}
+	if th := ts.GetThoughts()[0]; th.Metadata["event"] != string(EventCommentOnMyIssue) {
+		t.Fatalf("event = %q, want %q", th.Metadata["event"], EventCommentOnMyIssue)
+	}
+}
+
+// TestInboundMentionKindStillFiresAlone: a mention on an issue that is NOT the
+// navi's still fires the mention kind.
+func TestInboundMentionKindStillFiresAlone(t *testing.T) {
+	const personID = "6aa2a3038376b1c099c0403d"
+	f := newFakeHuly(t)
+	cm := mentionComment("elsewhere", "social-9", 6000, personID)
+	cm["attachedTo"] = "some-other-issue" // not the navi's
+	f.comments = []map[string]any{cm}
+
+	ts := &fakeTS{}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "m", Project: "NAVI",
+		Events: []EventKind{EventIssueMentioned, EventCommentOnMyIssue},
+	}}})
+	seen, _ := newSeenStore(nil)
+	pollOnceNow(t, c, ts, seen, time.Hour)
+
+	if got := ts.count(); got != 1 {
+		t.Fatalf("enqueued %d thoughts, want 1 (a mention elsewhere)", got)
+	}
+	if th := ts.GetThoughts()[0]; th.Metadata["event"] != string(EventIssueMentioned) {
+		t.Fatalf("event = %q, want %q", th.Metadata["event"], EventIssueMentioned)
+	}
+}
+
+// TestInboundTwoCommentsStillSpawnTwoThoughts: the fix must not over-collapse.
+// Two DIFFERENT comments are two stimuli.
+func TestInboundTwoCommentsStillSpawnTwoThoughts(t *testing.T) {
+	const personID = "6aa2a3038376b1c099c0403d"
+	f := newFakeHuly(t)
+	f.comments = []map[string]any{
+		mentionComment("first", "social-9", 6000, personID),
+		mentionComment("second", "social-9", 7000, personID),
+	}
+
+	ts := &fakeTS{}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "m", Project: "NAVI",
+		Events: []EventKind{EventIssueMentioned, EventCommentOnMyIssue},
+	}}})
+	seen, _ := newSeenStore(nil)
+	pollOnceNow(t, c, ts, seen, time.Hour)
+
+	if got := ts.count(); got != 2 {
+		var ids []string
+		for _, th := range ts.GetThoughts() {
+			ids = append(ids, th.ID)
+		}
+		t.Fatalf("enqueued %d thoughts for two comments, want 2: %v", got, ids)
+	}
+}
+
+// TestInboundCommentThoughtIDIsKindIndependent pins the second backstop: a
+// comment-derived thought is keyed on the COMMENT, so even if two events for
+// one comment ever reached the enqueue path the second would collide on the
+// queue rather than spawning a thought.
+func TestInboundCommentThoughtIDIsKindIndependent(t *testing.T) {
+	cm := map[string]any{"_id": "abc", "attachedTo": "issue-1", "createdBy": "x", "message": "m"}
+	mention := commentEvent(EventIssueMentioned, cm, "m", "x")
+	comment := commentEvent(EventCommentOnMyIssue, cm, "m", "x")
+
+	if thoughtID("s", mention) != thoughtID("s", comment) {
+		t.Fatalf("the two comment kinds produce different thought ids (%q vs %q), so the id backstop cannot collapse them",
+			thoughtID("s", mention), thoughtID("s", comment))
+	}
+	if got := thoughtID("s", mention); got != "huly-s-comment-abc" {
+		t.Fatalf("comment thought id = %q, want huly-s-comment-abc", got)
+	}
+	// Issue-derived kinds KEEP the kind, because one issue legitimately
+	// produces several distinct events (assigned, then a status change).
+	assigned := inboundEvent{Kind: EventIssueAssigned, ID: "i1", IssueID: "i1"}
+	status := inboundEvent{Kind: EventIssueStatusChanged, ID: "i1:done", IssueID: "i1"}
+	if thoughtID("s", assigned) == thoughtID("s", status) {
+		t.Fatal("issue-derived kinds must keep distinct thought ids")
+	}
+}
+
+// TestInboundDuplicateCommentIDIsCollapsedByTheQueueBackstop: the id backstop
+// is independent of the precedence rule. If two comment-derived events for one
+// comment ever reach the enqueue path, the second collides on the queue (the
+// deterministic id is the same) and is reported as a duplicate rather than
+// spawning a second thought — the belt to precedence's braces.
+//
+// It drives a REAL queue, because the guarantee is the queue's duplicate-id
+// path: the fake thought system the other tests use appends blindly and could
+// not exercise it.
+func TestInboundDuplicateCommentIDIsCollapsedByTheQueueBackstop(t *testing.T) {
+	const personID = "6aa2a3038376b1c099c0403d"
+	f := newFakeHuly(t)
+	f.comments = []map[string]any{mentionComment("dup", "social-9", 6000, personID)}
+
+	q, err := thought.NewQueue(thought.Config{MaxConcurrent: 2, SlotExhaustion: thought.PolicyQueue}, thought.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := inboundClient(t, f, Config{Subscriptions: []Subscription{{
+		Name: "m", Project: "NAVI",
+		Events: []EventKind{EventIssueMentioned, EventCommentOnMyIssue},
+	}}})
+
+	cm := f.comments[0]
+	mention := commentEvent(EventIssueMentioned, cm, "m", "social-9")
+	comment := commentEvent(EventCommentOnMyIssue, cm, "m", "social-9")
+	deps := connector.Deps{ThoughtSystem: q}
+
+	if err := c.enqueueEvent(deps, c.cfg.Subscriptions[0], mention, c.clock()); err != nil {
+		t.Fatal(err)
+	}
+	// The same comment described by the other kind: the id must collide.
+	err = c.enqueueEvent(deps, c.cfg.Subscriptions[0], comment, c.clock())
+	if !errors.Is(err, thought.ErrDuplicateID) {
+		t.Fatalf("second event for the same comment returned %v, want ErrDuplicateID", err)
+	}
+	if got := len(q.GetThoughts()); got != 1 {
+		t.Fatalf("queued %d thoughts, want 1 (the id backstop collapsed them)", got)
 	}
 }
