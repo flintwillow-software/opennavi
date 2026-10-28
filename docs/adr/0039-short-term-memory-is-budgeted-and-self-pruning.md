@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: '2026-10-28'
 supersedes: []
 tags:
@@ -255,8 +255,8 @@ having to remember.
 ## Related
 
 - [ADR 0037](./0037-memory-tiers-load-timing-and-management.md) — memory tiers, load timing, and management; decision 6 is the bound this implements, and decision 9 the no-runtime-pass stance open question 1 revisits
-- [ADR 0035](./0035-priority-classes-and-strict-preemption.md) — priority classes and strict preemption; decision 5's clamp is superseded by decision 6 here
-- [ADR 0036](./0036-a-connector-event-triages-itself.md) — the ingress thought and the clamp; decision 3 is superseded as it applies to the clamp only
+- [ADR 0035](./0035-priority-classes-and-strict-preemption.md) — priority classes and strict preemption; **decision 5's self-scheduled clamp is superseded by decision 6 here**. The rest of 0035 stands unchanged, which is why that record keeps `status: accepted` rather than becoming `superseded`: this is a *partial* supersession, and marking the whole record replaced would misstate what remains in force (the bands, strictly-higher-wins, the ordering, and automatic resumption are all untouched).
+- [ADR 0036](./0036-a-connector-event-triages-itself.md) — the ingress thought and the clamp; **decision 3 is superseded only as it applies to the clamp**. Its ingress-hint reasoning stands: a connector's thought is still not self-scheduled, so its hint still survives intact. For the same reason as 0035, that record keeps `status: accepted`.
 - [ADR 0016](./0016-a-plan-closes-with-a-verification-thought.md) — the plan-closing check this ADR's second cleanup trigger hangs beside
 - [ADR 0011](./0011-persistence-is-a-datastore-component.md) — retention stance; decision 11's "pruned by an explicit act" is what `ltm_prune` follows
 - [memory.md](../architecture/memory.md) — the two-tier model
