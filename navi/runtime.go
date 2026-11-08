@@ -187,13 +187,35 @@ func (n *Navi) assembleMemory() error {
 	if err != nil {
 		return fmt.Errorf("navi: short-term memory subject: %w", err)
 	}
+	// The token counter the budget gate uses is the same one assembly
+	// truncation and the deferral notice use, so the three agree on how full
+	// a thought is (ADR 0039 decision 3).
+	var counter memory.TokenCounter
+	if n.tokenizer != nil {
+		counter = n.tokenizer
+	}
+
+	// The cleanup scheduler (ADR 0039 decisions 4-8): the memory service
+	// wakes it when a scope is over budget, and the runtime's completion
+	// listener wakes it when a plan drains. It is built BEFORE the service so
+	// the hydrate-time over-budget report has somewhere to land, and its event
+	// listener is registered in New.
+	n.cleanup = newCleanup(n)
+
 	svc, err := memory.New(memory.Config{
 		Memory:  n.Datastores.handle.Memory(),
 		Submit:  n.Datastores.handle.Submit,
 		Subject: subject,
+		// Per-scope budgets (ADR 0039 decision 2), declared with
+		// WithShortTermMemoryBudget; a scope with none gets the default.
+		Budgets: n.stmBudget,
+		Counter: counter,
 		// Live view (ADR 0017 decision 6): a persisted memory mutation is a
 		// create/update/delete delta on the object surface.
 		OnChange: n.memoryChanged,
+		// A scope found over budget — on a refused write or on hydrate —
+		// schedules a cleanup (ADR 0039 decision 4).
+		OnOverBudget: n.cleanup.signalOverBudget,
 	})
 	if err != nil {
 		return fmt.Errorf("navi: short-term memory: %w", err)

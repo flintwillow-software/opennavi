@@ -271,9 +271,37 @@ const (
 	// it. The runtime never queues a verification of a verification, so the
 	// tag bounds the plan automatically.
 	RoleVerification = "verification"
+	// RoleMemoryCleanup marks a short-term memory cleanup thought (ADR 0039
+	// decisions 4-8): a thought whose job is to bring a short-term scope back
+	// under budget. The runtime never queues a cleanup of a cleanup, so the
+	// tag bounds the mechanism (decision 5's no-recursion rule).
+	RoleMemoryCleanup = "memory_cleanup"
 	// MetadataPlan carries the synthesized verification's plan id.
 	MetadataPlan = "plan"
+	// MetadataCleanupScope names the short-term scope an over-budget cleanup
+	// targets, so the transcript says which tier was full (decision 8).
+	MetadataCleanupScope = "cleanup_scope"
+	// MetadataCleanupTrigger records WHY the cleanup exists — "over_budget"
+	// or "plan_closed" — so the two briefs are distinguishable in the
+	// transcript (decision 8).
+	MetadataCleanupTrigger = "cleanup_trigger"
 )
+
+// Cleanup triggers (MetadataCleanupTrigger values).
+const (
+	// CleanupOverBudget is the cleanup scheduled when a scope is found over
+	// budget, on a refused write or on hydrate (decision 4).
+	CleanupOverBudget = "over_budget"
+	// CleanupPlanClosed is the cleanup scheduled when a plan drains (decision
+	// 7), whose brief is the chain's residue rather than the whole tier.
+	CleanupPlanClosed = "plan_closed"
+)
+
+// IsMemoryCleanup reports whether the thought is a short-term memory cleanup
+// (metadata role memory_cleanup, ADR 0039 decision 5).
+func (t *Thought) IsMemoryCleanup() bool {
+	return t != nil && t.Metadata[MetadataRole] == RoleMemoryCleanup
+}
 
 // IsVerification reports whether the thought is a plan-closing check
 // (metadata role verification, ADR 0016).
@@ -281,18 +309,31 @@ func (t *Thought) IsVerification() bool {
 	return t != nil && t.Metadata[MetadataRole] == RoleVerification
 }
 
-// SelfScheduledHighBound is the default priority floor for self-scheduled
-// thoughts ("priority clamp"): any priority above it
-// (numerically lower) is clamped down, so self-directed work can never
-// preempt external work (preemption needs a strictly-lower priority than
-// the victim) or squat the reserved slots unless runtime config grants it.
+// SelfScheduledHighBound is the priority a self-scheduled thought gets when
+// it declares none (ADR 0039 decision 6). It is no longer a FLOOR.
 //
-// ADR 0035 decision 5 keeps this clamp unchanged, and ADR 0036 decision 3
-// shows it needs no exception: a connector's ingress thought carries
-// external origin, so it is not self-scheduled and its hint survives the
-// clamp intact. The rule the clamp expresses is "work the navi discovers is
-// not more urgent than work it was given".
+// The clamp it used to be (any self-scheduled priority above 5 clamped down
+// to 5) is removed: its threat model does not hold — a navi that can schedule
+// its own work is already trusted to act on the operator's behalf, and
+// "starving external work" is not a meaningful attack when the navi is the
+// thing doing the external work — while its cost is real, since housekeeping
+// the navi has identified (the memory cleanup this ADR introduces is exactly
+// that) cannot be asked for. The rule is unchanged in spirit — "work the navi
+// discovers should not outrank work it was given" — but it is now a DEFAULT
+// rather than a floor: a self-scheduled thought may declare any priority, and
+// only when it declares none does it land at p1.
+//
+// This supersedes ADR 0035 decision 5 and ADR 0036 decision 3 as they apply
+// to the clamp. It does NOT change the ingress-hint reasoning those decisions
+// rest on: a connector's thought is not self-scheduled, so its hint survives
+// intact.
 const SelfScheduledHighBound = 5
+
+// SelfScheduledDefault is the priority a self-scheduled thought that declares
+// none lands at: p1, the steering band (ADR 0035 decision 3). p1 is
+// housekeeping's band — it steers a running thought rather than cancelling it,
+// which is correct because bookkeeping must not cancel work.
+const SelfScheduledDefault = 1
 
 // Sentinel lifecycle errors.
 var (
@@ -405,17 +446,17 @@ func (t *Thought) EffectivePriority() int {
 	return t.Priority
 }
 
-// EffectiveSelfPriority clamps a self-scheduled thought's priority to the
-// conservative band: the navi cannot schedule itself ahead
-// of external work by default. The queue applies this inside Enqueue for
-// origin-tagged thoughts; the tool layer may also pre-clamp before
-// enqueue.
+// EffectiveSelfPriority returns a self-scheduled thought's priority. The
+// clamp is REMOVED (ADR 0039 decision 6): a declared priority — including p0 —
+// is honoured, because the threat model the clamp rested on does not hold.
+//
+// The "default to p1 when undeclared" rule lives at the CREATION sites
+// (thoughts_create and the runtime's synthesized thoughts), not here: Priority
+// is an int whose zero value is a legitimate p0, so this method cannot tell
+// "undeclared" from "declared urgent". A creation path that means "no
+// opinion" sets SelfScheduledDefault explicitly.
 func (t *Thought) EffectiveSelfPriority() int {
-	p := t.EffectivePriority()
-	if p < SelfScheduledHighBound {
-		return SelfScheduledHighBound
-	}
-	return p
+	return t.EffectivePriority()
 }
 
 // UnmetDependencies returns the ids among t.DependsOn that are not

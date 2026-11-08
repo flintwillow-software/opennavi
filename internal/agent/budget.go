@@ -20,12 +20,18 @@ func resolveBudgetWarning(f float64) float64 {
 	return f
 }
 
-// estimateMessagesTokens is the ~4-characters-per-token heuristic the navi's
-// assembly truncation also uses, so the notice and truncation agree on the
-// rough size.
-func estimateMessagesTokens(messages []AgentMessage) int {
+// estimateMessagesTokens sizes the transcript with the navi's declared token
+// counter when one is present, so the deferral notice, assembly truncation,
+// and the memory budgets all agree on how full a thought is (ADR 0039
+// decision 3). Without a counter it falls back to the ~4-characters-per-token
+// heuristic that shipped before.
+func estimateMessagesTokens(messages []AgentMessage, count func(string) int) int {
 	total := 0
 	for _, m := range messages {
+		if count != nil {
+			total += count(m.Content)
+			continue
+		}
 		total += (len(m.Content) + 3) / 4
 	}
 	return total

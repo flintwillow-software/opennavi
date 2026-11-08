@@ -97,6 +97,16 @@ type Navi struct {
 	// (WithThoughtBudget); <= 0 disables truncation and the deferral notice.
 	thoughtBudget int
 
+	// tokenizer is the declared token counter (WithTokenizer), shared by
+	// memory budgets, assembly truncation, and the agent's deferral notice so
+	// the three agree (ADR 0039 decision 3). Nil means the heuristic.
+	tokenizer llm.Tokenizer
+
+	// stmBudget overrides the per-scope short-term memory budgets
+	// (WithShortTermMemoryBudget), keyed by scope. A scope absent from the
+	// map uses defaultShortTermMemoryBudget.
+	stmBudget map[datastore.Scope]int
+
 	// webhookAddr is the declared webhook listener address (WithWebhooks);
 	// empty = the navi serves no webhook ingress. webhooks is the shared
 	// router that listener serves and every connector registers its route
@@ -185,6 +195,11 @@ type Navi struct {
 	planClose      *planClose
 	planCloseCheck bool
 
+	// cleanup is the short-term memory cleanup scheduler (ADR 0039 decisions
+	// 4-8), started with the workers. Nil when the navi declares no
+	// short-term memory.
+	cleanup *cleanup
+
 	mu      sync.Mutex
 	serving bool
 	initErr error
@@ -244,6 +259,37 @@ func WithShortTermMemory() Option {
 // both; the default is DefaultThoughtBudget.
 func WithThoughtBudget(tokens int) Option {
 	return func(n *Navi) { n.thoughtBudget = tokens }
+}
+
+// WithTokenizer declares the token counter the runtime uses everywhere it
+// sizes context: the short-term memory budgets, assembly truncation, and the
+// deferral notice (ADR 0039 decision 3). All three must agree on how full a
+// thought is, which is why there is one counter rather than three estimates.
+// A navi that declares none gets the heuristic fallback.
+func WithTokenizer(tok llm.Tokenizer) Option {
+	return func(n *Navi) {
+		if tok != nil {
+			n.tokenizer = tok
+		}
+	}
+}
+
+// WithShortTermMemoryBudget sets the token budget for one short-term memory
+// scope (ADR 0039 decision 2). Budgets are per-scope so a burst of working
+// state cannot consume the room reserved for notes about the human. A scope
+// with no declared budget uses DefaultShortTermMemoryBudget. A write that
+// would push a scope over its budget is refused; removals and long-term
+// transitions are never gated (decision 1).
+func WithShortTermMemoryBudget(scope datastore.Scope, tokens int) Option {
+	return func(n *Navi) {
+		if tokens <= 0 {
+			return
+		}
+		if n.stmBudget == nil {
+			n.stmBudget = map[datastore.Scope]int{}
+		}
+		n.stmBudget[scope] = tokens
+	}
 }
 
 // WithProviderFallback declares a fallback provider for thoughts that name
@@ -433,6 +479,20 @@ func New(name string, opts ...Option) *Navi {
 		n.Thoughts.OnEvent(func(ev thought.Event) {
 			if ev.Kind == thought.EventCompleted {
 				n.planClose.signal(ev.ThoughtID)
+			}
+		})
+	}
+	// The memory cleanup scheduler (ADR 0039 decisions 4-8) listens for
+	// completions (the plan-closed trigger) and is woken by the memory
+	// service when a scope is over budget (the over-budget trigger). It
+	// sweeps on its own goroutine for the same reason planClose does. It is
+	// built by assembleMemory — AFTER New — so the listener is registered
+	// whenever the navi declares short-term memory and reads n.cleanup at
+	// event time.
+	if n.Thoughts != nil && n.shortTermMemory {
+		n.Thoughts.OnEvent(func(ev thought.Event) {
+			if ev.Kind == thought.EventCompleted && n.cleanup != nil {
+				n.cleanup.signalCompleted(ev.ThoughtID)
 			}
 		})
 	}
@@ -834,6 +894,18 @@ func (n *Navi) serve(ctx context.Context) error {
 		}()
 	}
 
+	// The memory cleanup scheduler (ADR 0039 decisions 4-8): the over-budget
+	// trigger is already registered with the memory service; this is its
+	// plan-closed trigger and its sweep loop.
+	var cleanupDone chan struct{}
+	if n.cleanup != nil {
+		cleanupDone = make(chan struct{})
+		go func() {
+			defer close(cleanupDone)
+			n.cleanup.run(ctx)
+		}()
+	}
+
 	<-ctx.Done()
 
 	// Stop the doors first, then let in-flight executions finish: a
@@ -843,6 +915,9 @@ func (n *Navi) serve(ctx context.Context) error {
 	workers.Wait()
 	if planCloseDone != nil {
 		<-planCloseDone
+	}
+	if cleanupDone != nil {
+		<-cleanupDone
 	}
 
 	// Final drain after the pool stops: the flushers persist whatever the

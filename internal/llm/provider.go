@@ -37,8 +37,9 @@ type Provider interface {
 
 // TokenCounter counts tokens for a message sequence or plain text
 // Per-provider implementations: exact API-reported counts
-// where available, tiktoken for OpenAI-compatible models (deferred —
-// new dependency), heuristic estimation otherwise.
+// where available, tiktoken for OpenAI-compatible models, heuristic
+// estimation otherwise. The tiktoken form is TiktokenTokenizer (ADR 0039
+// decision 3); a navi that declares no Tokenizer gets the heuristic.
 type TokenCounter interface {
 	CountTokens(messages []Message) int
 	CountText(text string) int

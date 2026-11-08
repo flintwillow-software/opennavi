@@ -15,9 +15,9 @@
 // Safety rails: thoughts created through
 // thoughts_create are tagged `origin: tool` so self-directed work is
 // distinguishable from connector-sourced work, and the queue clamps
-// their priority to the conservative band (EffectiveSelfPriority —
-// self-scheduled work never preempts external work). Priority updates
-// apply the same clamp for origin-tagged thoughts.
+// their priority defaults to p1 when undeclared (EffectiveSelfPriority, ADR
+// 0039 decision 6). Priority updates apply the same default for origin-tagged
+// thoughts.
 package thoughts
 
 import (
@@ -207,7 +207,7 @@ func createDef() registry.ToolDefinition {
 	}`))
 	return registry.ToolDefinition{
 		Name:          "thoughts_create",
-		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, priority, skills to load, dependencies, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. depends_on names thoughts this one waits for: the thought is queued now but the scheduler will not claim it until each dependency has completed, which is how a plan of thoughts keeps its order with more than one worker and with preemption in play (a paused dependency is not complete). Pass the ids returned by earlier thoughts_create calls to chain stages. Self-scheduled work is tagged origin:tool and its priority clamped to the conservative band (it never preempts external work). One-shot deferral only — recurring schedules belong to cron.",
+		Description:   "Enqueues a new durable thought for the navi: prompt (required), optional context, metadata, priority, skills to load, dependencies, plus an optional defer_until timestamp (RFC 3339) — deferred thoughts are queued immediately but not claimable until they are due, surviving restarts. depends_on names thoughts this one waits for: the thought is queued now but the scheduler will not claim it until each dependency has completed, which is how a plan of thoughts keeps its order with more than one worker and with preemption in play (a paused dependency is not complete). Pass the ids returned by earlier thoughts_create calls to chain stages. Self-scheduled work is tagged origin:tool and defaults to p1 when no priority is given (declare one explicitly — including p0 — when the work is urgent). One-shot deferral only — recurring schedules belong to cron.",
 		InputSchema:   schema,
 		OutputFormat:  "json",
 		Access:        registry.AccessWrite,
@@ -215,9 +215,9 @@ func createDef() registry.ToolDefinition {
 		Recovery:      "none",
 		Mode:          registry.ToolModeSequential,
 		Tags:          []string{"thoughts", "queue", "scheduling"},
-		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional context, skills, depends_on, defer_until, clamped priority)",
+		PromptSnippet: "thoughts_create — enqueue a durable follow-up thought (optional context, skills, depends_on, defer_until, priority)",
 		PromptGuidelines: []string{
-			"Priority is clamped to the conservative band for self-scheduled thoughts — urgent external work always wins.",
+			"Self-scheduled work defaults to p1 when you declare no priority; declare a priority explicitly when the work is urgent (p0) or clearly less urgent.",
 			"A plan is a chain: create the first stage, then pass its returned id in depends_on when creating the next, so a later stage never runs before an earlier one has finished.",
 			"Close a plan with a verification thought: depends_on set to the stage it checks and metadata {\"role\": \"verification\"}, carrying a concrete check of the result rather than another implementation step.",
 			"Use skills to tell a follow-up which compiled-in skills to load; an unknown name fails the thought.",
@@ -247,7 +247,7 @@ func updateDef() registry.ToolDefinition {
 	}`))
 	return registry.ToolDefinition{
 		Name:          "thoughts_update",
-		Description:   "Applies partial updates to a queued thought by id: priority change (clamped for self-scheduled work, same reordering/preemption rules as the queue's BumpPriority), lifecycle transitions (pause a running thought — park-with-checkpoint; resume a paused one; cancel a non-terminal one), a stated reason for a park, a metadata merge, and context append. Omitted fields are left unchanged. Give a reason when you shelve work: it is recorded on the thought, so \"why did the navi decide to come back to this\" is answerable rather than inferred from a bare paused.",
+		Description:   "Applies partial updates to a queued thought by id: priority change (self-scheduled work defaults to p1 when no priority is declared; the same reordering/preemption rules as the queue's BumpPriority), lifecycle transitions (pause a running thought — park-with-checkpoint; resume a paused one; cancel a non-terminal one), a stated reason for a park, a metadata merge, and context append. Omitted fields are left unchanged. Give a reason when you shelve work: it is recorded on the thought, so \"why did the navi decide to come back to this\" is answerable rather than inferred from a bare paused.",
 		InputSchema:   schema,
 		OutputFormat:  "json",
 		Access:        registry.AccessWrite,
@@ -539,8 +539,8 @@ func handleSearch(ctx context.Context, args map[string]any, handle registry.Queu
 }
 
 // handleCreate implements thoughts_create: enqueue a durable
-// thought tagged origin:tool — the queue clamps self-scheduled
-// priority at Enqueue. Optional defer_until makes the
+// thought tagged origin:tool — Enqueue defaults an undeclared self-scheduled
+// priority to p1 (ADR 0039 decision 6). Optional defer_until makes the
 // thought durable-but-not-claimable until the timestamp passes.
 func handleCreate(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	prompt, err := stringField(args, "prompt")
@@ -548,11 +548,15 @@ func handleCreate(ctx context.Context, args map[string]any, handle registry.Queu
 		return "", fmt.Errorf("thoughts_create: %w", err)
 	}
 	t := &thought.Thought{
-		ID:        newThoughtID(),
-		Prompt:    prompt,
-		Priority:  4, // normal band; Enqueue clamps origin-tagged work
-		Status:    thought.ThoughtPending,
-		Metadata:  map[string]string{"origin": thought.OriginTool},
+		ID:       newThoughtID(),
+		Prompt:   prompt,
+		Status:   thought.ThoughtPending,
+		Metadata: map[string]string{"origin": thought.OriginTool},
+		// A self-scheduled thought that declares no priority defaults to p1
+		// (ADR 0039 decision 6) — the steering band, because housekeeping
+		// must not cancel work. A declared priority (including p0) overwrites
+		// this below.
+		Priority:  thought.SelfScheduledDefault,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
@@ -630,9 +634,9 @@ func handleCreate(ctx context.Context, args map[string]any, handle registry.Queu
 }
 
 // handleUpdate implements thoughts_update: partial updates
-// by id — clamped priority, lifecycle transitions, context append.
+// by id — priority (defaulting for self-scheduled work), lifecycle transitions, context append.
 // Mutations go through the queue's public API; snapshot reads provide
-// the values the clamp needs (GetThought returns clones).
+// the values the priority default needs (GetThought returns clones).
 func handleUpdate(ctx context.Context, args map[string]any, handle registry.QueueHandle) (string, error) {
 	id, err := stringField(args, "id")
 	if err != nil {
@@ -646,15 +650,10 @@ func handleUpdate(ctx context.Context, args map[string]any, handle registry.Queu
 		if err != nil {
 			return "", fmt.Errorf("thoughts_update: invalid priority: %w", err)
 		}
-		// Clamp: self-scheduled work never outranks
-		// external work. Apply the same band Enqueue applies.
-		if snap, gerr := q.GetThought(id); gerr == nil {
-			if origin, ok := snap.Metadata["origin"]; ok && (origin == thought.OriginSelf || origin == thought.OriginTool) {
-				if p < thought.SelfScheduledHighBound {
-					p = thought.SelfScheduledHighBound
-				}
-			}
-		}
+		// No clamp and no default here: an explicit priority from
+		// thoughts_update is a DECLARED priority, including p0 (ADR 0039
+		// decision 6). The default applies only at creation, when the field is
+		// absent — a caller naming a priority means it.
 		if err := q.BumpPriority(id, p); err != nil {
 			return "", fmt.Errorf("thoughts_update: priority: %w", err)
 		}

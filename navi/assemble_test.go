@@ -103,8 +103,8 @@ func TestTruncationIsReported(t *testing.T) {
 	if !strings.Contains(th.Assembled, "[context truncated: over the 20-token budget]") {
 		t.Fatalf("truncation was not reported: %q", th.Assembled)
 	}
-	if estimateTokens(th.Assembled) > 20*2 {
-		t.Fatalf("truncated context still far over budget: %d tokens", estimateTokens(th.Assembled))
+	if n.countTokens(th.Assembled) > 20*2 {
+		t.Fatalf("truncated context still far over budget: %d tokens", n.countTokens(th.Assembled))
 	}
 }
 

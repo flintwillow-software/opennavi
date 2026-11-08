@@ -366,14 +366,18 @@ func TestIncrementallyStagedPlanClosesAgainstFinalSinks(t *testing.T) {
 	defer r.releaseAll()               // drain the holds before shutdown
 
 	// Stage 1, one thought at a time: t1 runs (and holds), left queues behind.
-	stagePrio(t, n, "t1", 1)
+	// Stages are p0 so the p1 occupiers below cannot preempt them.
+	stagePrio(t, n, "t1", 0)
 	waitStatus(t, n, "t1", "running")
-	stagePrio(t, n, "left", 2, "t1")
+	stagePrio(t, n, "left", 0, "t1")
 
-	// Occupiers for both workers around the drain.
-	stagePrio(t, n, "hold-1", 3)
-	stagePrio(t, n, "hold-2", thought.SelfScheduledHighBound)
-	stagePrio(t, n, "hold-3", thought.SelfScheduledHighBound)
+	// Occupiers for both workers around the drain. The synthesized check is p1
+	// (the self-scheduled default, ADR 0039 decision 6); the occupiers share
+	// that band but are enqueued earlier, so the queue's (priority, created_at)
+	// order gives them the free worker and no worker claims the check.
+	stagePrio(t, n, "hold-1", 1)
+	stagePrio(t, n, "hold-2", 1)
+	stagePrio(t, n, "hold-3", 1)
 
 	r.release("t1")
 	waitStatus(t, n, "left", "complete")
@@ -386,7 +390,7 @@ func TestIncrementallyStagedPlanClosesAgainstFinalSinks(t *testing.T) {
 	}
 
 	// Stage 2: the plan forks on t1, past the drained {t1, left} plan.
-	stagePrio(t, n, "right", 4, "t1")
+	stagePrio(t, n, "right", 0, "t1")
 	r.release("hold-1")
 	waitStatus(t, n, "right", "complete")
 

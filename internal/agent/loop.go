@@ -41,7 +41,7 @@ loop:
 		// unit, write the handoff, and queue follow-ups.
 		if !budgetWarned && a.budgetWarning > 0 && a.Config.ContextBudget > 0 {
 			threshold := int(float64(a.Config.ContextBudget) * a.budgetWarning)
-			if estimateMessagesTokens(a.state.Messages) >= threshold {
+			if estimateMessagesTokens(a.state.Messages, a.Config.CountText) >= threshold {
 				a.setState(a.state.AppendMessage(AgentMessage{Role: RoleUser, Content: budgetNotice}))
 				budgetWarned = true
 			}
