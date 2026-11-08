@@ -103,6 +103,21 @@ cost you pay on every future thought: keep it small, keep it deliberate, and
 consolidate rather than accumulating near-duplicates. Most thoughts should write
 nothing at all. This is where the handoff to your next thought goes.
 
+**Short-term memory is BOUNDED, and the bound is enforced at the write.** Each
+scope has a token budget. A write that would push a scope over budget is refused
+with an error naming the budget — nothing you already kept is ever deleted to
+make room. Removals and moves to long-term are never blocked, so a scope over
+budget is always recoverable: remove what is stale and move what matters, and you
+can write again. When a scope goes over, the runtime schedules a cleanup thought
+to prompt exactly that — it tells you to tidy; you decide what to keep. Note that
+a cleanup that tries to REWRITE notes rather than remove them can be refused:
+rewriting is not reducing, and its additions count against the budget like any
+other write.
+
+**The asymmetry between the tiers is deliberate.** Short-term is bounded because
+it costs context on every thought; long-term is unbounded because it costs
+nothing until you search it. Do not assume the tiers behave alike.
+
 **Long-term memory — a knowledge base you search.** Written with ltm_write and
 found with ltm_search, in two scopes: memories (facts and learned information)
 and navi (notes about another navi — how to communicate, delegate, collaborate).
@@ -124,7 +139,13 @@ after each meaningful step costs little; losing a handoff costs the whole run.
 
 **Retention is deliberate.** Nothing prunes your memory for you. Remove short-term
 notes with stm_write (remove=true) and archive entries with ltm_prune. Search
-before pruning — it is permanent.`,
+before pruning — it is permanent.
+
+**A drained plan gets a cleanup thought.** When a chain of thoughts you queued
+finishes, the runtime schedules a cleanup whose brief is that chain's residue:
+move what it produced into long-term memory and remove the working state that
+produced it. The notes a chain wrote as it went are exactly the notes that should
+not outlive it.`,
 	}
 }
 

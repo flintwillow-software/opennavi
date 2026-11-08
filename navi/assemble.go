@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/flintwillow-software/opennavi/internal/llm"
 	"github.com/flintwillow-software/opennavi/thought"
 )
 
@@ -92,11 +93,15 @@ func (n *Navi) parentThought(t *thought.Thought) *thought.Thought {
 // with a visible marker. Truncation is never silent.
 func (n *Navi) truncateContext(block string) string {
 	budget := n.thoughtBudget
-	if budget <= 0 || estimateTokens(block) <= budget {
+	if budget <= 0 || n.countTokens(block) <= budget {
 		return block
 	}
 
-	keep := budget * 4
+	// Cut proportionally to the overage using the same counter that decided
+	// we are over, then trim at a rune boundary. A counted counter returns
+	// the real token count, so the byte budget is estimated by ratio rather
+	// than the old fixed 4-bytes-per-token guess.
+	keep := len(block) * budget / n.countTokens(block)
 	if keep > len(block) {
 		keep = len(block)
 	}
@@ -107,6 +112,11 @@ func (n *Navi) truncateContext(block string) string {
 	return strings.TrimRight(block[:keep], " \n") + marker
 }
 
-// estimateTokens is the ~4-characters-per-token heuristic the agent's budget
-// notice also uses, so assembly and the notice agree on the rough size.
-func estimateTokens(s string) int { return (len(s) + 3) / 4 }
+// countTokens sizes a string with the navi's declared tokenizer, or the
+// heuristic when none is declared (ADR 0039 decision 3). It is the single
+// entry point so assembly truncation, the memory budgets, and the agent's
+// deferral notice all agree on how full a thought is — the ADR notes that
+// two independent estimates could disagree, which is the bug this closes.
+func (n *Navi) countTokens(s string) int {
+	return llm.CountText(n.tokenizer, s)
+}

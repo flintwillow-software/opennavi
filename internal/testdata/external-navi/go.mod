@@ -7,7 +7,12 @@ require (
 	github.com/flintwillow-software/opennavi v0.1.0
 )
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require (
+	github.com/dlclark/regexp2 v1.10.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/pkoukk/tiktoken-go v0.1.8 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
 
 // CI/local-dev only: this module simulates an EXTERNAL navi repo that
 // composes the public root and a third-party component. Replaces are

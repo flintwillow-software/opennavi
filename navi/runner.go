@@ -88,6 +88,9 @@ func (r *AgentRunner) Run(ctx context.Context, t *thought.Thought) error {
 		Model:         sel.model,
 		SystemPrompt:  t.Assembled,
 		ContextBudget: r.navi.thoughtBudget,
+		// The same counter the memory budgets and assembly truncation use, so
+		// the deferral notice fires at the right size (ADR 0039 decision 3).
+		CountText: r.navi.countTokens,
 		// Per-model request options (ADR 0034) travel with the selection:
 		// they belong to the model actually chosen, so a thought that
 		// overrode the model carries that model's options, not the

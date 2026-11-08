@@ -155,6 +155,10 @@ type AgentConfig struct {
 	// BudgetWarning is the fraction of ContextBudget at which the deferral
 	// notice fires (default 0.8).
 	BudgetWarning float64 `json:"budget_warning,omitempty"`
+	// CountText, when set, sizes a message's content in tokens so the
+	// deferral notice agrees with assembly truncation and the memory budgets
+	// (ADR 0039 decision 3). Nil means the heuristic fallback.
+	CountText func(string) int `json:"-"`
 }
 
 // DefaultMaxTurns is the effective MaxTurns when unset.

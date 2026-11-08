@@ -15,15 +15,83 @@
 package memory
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/flintwillow-software/opennavi/datastore"
 	"github.com/flintwillow-software/opennavi/principal"
 )
+
+// DefaultShortTermMemoryBudget is the per-scope token budget a short-term
+// scope gets when the navi declares none (ADR 0039 decision 2). It is
+// deliberately small: the tier is injected into every thought, so it is a
+// context cost paid by all future work. 2000 tokens is roughly 5% of the
+// default 16k thought budget — room for the notes that matter, not a
+// transcript.
+const DefaultShortTermMemoryBudget = 2000
+
+// ErrOverBudget is returned by Write when an addition would push a scope over
+// its token budget (ADR 0039 decision 1). Removals and long-term transitions
+// are never gated, so a navi that is over budget can always bring itself back
+// under by removing — it simply cannot grow further until it does. The error
+// is loud and actionable rather than a silent eviction: nothing the navi kept
+// is ever destroyed to make room.
+var ErrOverBudget = errors.New("memory: short-term scope is over its token budget")
+
+// TokenCounter is the narrow token-counting seam ADR 0039 decision 3 puts in
+// front of the budget gate. It is satisfied by llm.Tokenizer; the memory
+// package does not depend on llm so the tier stays usable without a
+// tokenizer.
+type TokenCounter interface {
+	CountText(text string) int
+}
+
+// heuristicCounter is the fallback when the navi declares no tokenizer (ADR
+// 0039 decision 3: "the heuristic remains the fallback when none is
+// available"). It mirrors llm.HeuristicTokenCounter's prose ratio (~4 runes
+// per token) so a navi without a real counter still gets a sane bound rather
+// than none.
+type heuristicCounter struct{}
+
+func (heuristicCounter) CountText(text string) int {
+	if text == "" {
+		return 0
+	}
+	return (utf8.RuneCountInString(text) + 3) / 4
+}
+
+// countText sizes text with the declared counter, or the heuristic fallback.
+func (s *Service) countText(text string) int {
+	if s.counter == nil {
+		return heuristicCounter{}.CountText(text)
+	}
+	return s.counter.CountText(text)
+}
+
+// OverBudgetError names the scope, its budget, and the size the write would
+// have produced, so the refusal is actionable (ADR 0039 decision 1: "a
+// refused write with an actionable error").
+type OverBudgetError struct {
+	Scope  datastore.Scope
+	Budget int
+	Used   int
+	Adding int
+}
+
+func (e *OverBudgetError) Error() string {
+	return fmt.Sprintf(
+		"memory: %s scope is over its %d-token budget (using %d, this write adds %d) — remove or move notes to long-term memory with ltm_write before adding more; removals are never blocked",
+		e.Scope, e.Budget, e.Used, e.Adding)
+}
+
+// Is reports whether err is an over-budget refusal, so a caller can
+// distinguish "the tier is full" from a real failure.
+func (e *OverBudgetError) Is(target error) bool { return target == ErrOverBudget }
 
 // alwaysLoaded is the tier in front of the navi at every thought: notes
 // about the human, and the working state of the current interaction. The
@@ -60,14 +128,33 @@ type Config struct {
 	// writer's goroutine and must be cheap and must not re-enter the
 	// service.
 	OnChange func(rec datastore.MemoryRecord, change Change)
+
+	// Budgets declares the per-scope token budget (ADR 0039 decision 2). A
+	// scope absent from the map uses DefaultShortTermMemoryBudget. Only the
+	// always-loaded scopes are budgeted; a long-term scope is not gated.
+	Budgets map[datastore.Scope]int
+
+	// Counter counts tokens for the budget gate. Nil means the heuristic
+	// fallback (ADR 0039 decision 3), so the tier still works without a
+	// tokenizer.
+	Counter TokenCounter
+
+	// OnOverBudget, when set, is called when a scope is found over budget —
+	// on a refused write, or on hydrate of a persisted set that exceeds it.
+	// The runtime uses it to schedule a cleanup thought (ADR 0039 decision
+	// 4). It must not block.
+	OnOverBudget func(scope datastore.Scope)
 }
 
 // Service is the always-loaded short-term memory tier.
 type Service struct {
-	memory   datastore.Memory
-	submit   func(datastore.Write)
-	subject  principal.Ref
-	onChange func(datastore.MemoryRecord, Change)
+	memory       datastore.Memory
+	submit       func(datastore.Write)
+	subject      principal.Ref
+	onChange     func(datastore.MemoryRecord, Change)
+	budgets      map[datastore.Scope]int
+	counter      TokenCounter
+	onOverBudget func(datastore.Scope)
 
 	mu      sync.RWMutex
 	records map[string]datastore.MemoryRecord
@@ -86,15 +173,22 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("memory: a subject is required")
 	}
 	s := &Service{
-		memory:   cfg.Memory,
-		submit:   cfg.Submit,
-		subject:  cfg.Subject,
-		onChange: cfg.OnChange,
-		records:  map[string]datastore.MemoryRecord{},
+		memory:       cfg.Memory,
+		submit:       cfg.Submit,
+		subject:      cfg.Subject,
+		onChange:     cfg.OnChange,
+		budgets:      cfg.Budgets,
+		counter:      cfg.Counter,
+		onOverBudget: cfg.OnOverBudget,
+		records:      map[string]datastore.MemoryRecord{},
 	}
 	if err := s.hydrate(); err != nil {
 		return nil, err
 	}
+	// A persisted set that exceeds its budget is over budget from the start
+	// (ADR 0039 decision 4): the runtime schedules a cleanup rather than
+	// blocking, and the navi can still remove and move freely.
+	s.reportOverBudget()
 	return s, nil
 }
 
@@ -150,6 +244,15 @@ func (s *Service) Inject() string {
 
 // Write stores a record. It lands in RAM immediately (visible to the next
 // thought) and is staged on the ordered writer for persistence.
+//
+// The write is gated at the door, not the tier (ADR 0039 decision 1): a write
+// that would push the scope OVER its token budget is refused with
+// ErrOverBudget, and the tier's existing contents are never destroyed. A
+// REPLACEMENT of an existing note is measured as the delta, so rewriting a
+// note in place is not penalised for the text it already occupies — only the
+// growth counts. Removals (Remove) and long-term transitions (ltm_write, the
+// separate LongTerm service) are never gated, so a navi that is over budget
+// can always bring itself back under.
 func (s *Service) Write(rec datastore.MemoryRecord) (datastore.MemoryRecord, error) {
 	if !loadable(rec.Scope) {
 		return datastore.MemoryRecord{}, fmt.Errorf("memory: scope %q is not part of short-term memory (want user or session)", rec.Scope)
@@ -157,6 +260,29 @@ func (s *Service) Write(rec datastore.MemoryRecord) (datastore.MemoryRecord, err
 	now := time.Now().UTC()
 
 	s.mu.Lock()
+	// Measure the addition: the new note's size, minus what an in-place
+	// replacement already occupies. Computed under the lock so two concurrent
+	// writes cannot both pass the gate and then overshoot together.
+	var replacing int
+	if rec.ID != "" {
+		if prev, ok := s.records[rec.ID]; ok {
+			replacing = s.countText(prev.Content)
+		}
+	}
+	adding := s.countText(rec.Content) - replacing
+	if adding < 0 {
+		adding = 0 // a shrinking replacement is not an addition
+	}
+	if err := s.checkBudgetLocked(rec.Scope, adding); err != nil {
+		s.mu.Unlock()
+		// A refused write is one of the two over-budget triggers (ADR 0039
+		// decision 4): tell the runtime so it can schedule a cleanup. Call
+		// out after releasing the lock.
+		if s.onOverBudget != nil {
+			s.onOverBudget(rec.Scope)
+		}
+		return datastore.MemoryRecord{}, err
+	}
 	change := ChangeUpdated
 	if rec.ID == "" {
 		rec.ID = datastore.NewID()
@@ -256,4 +382,77 @@ func loadable(scope datastore.Scope) bool {
 		}
 	}
 	return false
+}
+
+// budget returns the token budget for a scope, or the default when none was
+// declared (ADR 0039 decision 2).
+func (s *Service) budget(scope datastore.Scope) int {
+	if n, ok := s.budgets[scope]; ok && n > 0 {
+		return n
+	}
+	return DefaultShortTermMemoryBudget
+}
+
+// checkBudgetLocked refuses an addition that would push scope over budget. It
+// must be called with s.mu held. The rule is "over", not "at": a write that
+// lands exactly on the budget is allowed, so the bound is inclusive and the
+// navi is not refused a note that fits (ADR 0039 decision 1).
+func (s *Service) checkBudgetLocked(scope datastore.Scope, adding int) error {
+	used := s.scopeTokensLocked(scope)
+	budget := s.budget(scope)
+	if used+adding <= budget {
+		return nil
+	}
+	return &OverBudgetError{Scope: scope, Budget: budget, Used: used, Adding: adding}
+}
+
+// scopeTokensLocked sums the token count of every note in a scope. Must be
+// called with s.mu held.
+func (s *Service) scopeTokensLocked(scope datastore.Scope) int {
+	total := 0
+	for _, r := range s.records {
+		if r.Scope == scope {
+			total += s.countText(r.Content)
+		}
+	}
+	return total
+}
+
+// Usage reports the token usage and budget for a scope, so a navi can tell
+// how full it is before hitting the limit (ADR 0039 decision 4's "how full am
+// I" affordance).
+func (s *Service) Usage(scope datastore.Scope) (used, budget int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.scopeTokensLocked(scope), s.budget(scope)
+}
+
+// SetOverBudgetHook installs (or replaces) the over-budget observer after
+// construction, so the runtime can wire the cleanup scheduler without the
+// memory service depending on the navi. It is safe to call before serving
+// begins; it is not safe to call concurrently with a write.
+func (s *Service) SetOverBudgetHook(fn func(datastore.Scope)) {
+	s.mu.Lock()
+	s.onOverBudget = fn
+	s.mu.Unlock()
+}
+
+// reportOverBudget calls OnOverBudget for every always-loaded scope that is
+// already over budget. The runtime schedules a cleanup from it (ADR 0039
+// decision 4). It reads under the lock and calls out after releasing it.
+func (s *Service) reportOverBudget() {
+	if s.onOverBudget == nil {
+		return
+	}
+	s.mu.RLock()
+	over := make([]datastore.Scope, 0, len(alwaysLoaded))
+	for _, scope := range alwaysLoaded {
+		if s.scopeTokensLocked(scope) > s.budget(scope) {
+			over = append(over, scope)
+		}
+	}
+	s.mu.RUnlock()
+	for _, scope := range over {
+		s.onOverBudget(scope)
+	}
 }

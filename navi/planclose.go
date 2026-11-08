@@ -185,7 +185,7 @@ func (p *planClose) closeOne(id string, snapshot []*thought.Thought) {
 	check := &thought.Thought{
 		ID:        verifyIDPrefix + planID,
 		Prompt:    planClosePrompt(stages),
-		Priority:  thought.SelfScheduledHighBound, // the conservative band (Enqueue clamps too)
+		Priority:  thought.SelfScheduledDefault, // p1: housekeeping steers, it does not cancel
 		Status:    thought.ThoughtPending,
 		DependsOn: sinks,
 		Metadata: map[string]string{

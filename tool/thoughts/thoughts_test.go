@@ -199,8 +199,8 @@ func TestThoughtsCreateFollowUpWithOriginTag(t *testing.T) {
 	if got.Metadata["origin"] != thought.OriginTool {
 		t.Fatalf("origin metadata = %v, want tool", got.Metadata)
 	}
-	if got.Priority != thought.SelfScheduledHighBound {
-		t.Fatalf("priority = %d, want clamped to %d (self-scheduled band)", got.Priority, thought.SelfScheduledHighBound)
+	if got.Priority != 2 {
+		t.Fatalf("priority = %d, want declared 2 honoured (clamp removed, ADR 0039 decision 6)", got.Priority)
 	}
 	// Durable: persisted through the queue's datastore.
 	if got.Status != thought.ThoughtPending {
@@ -298,7 +298,7 @@ func timeMustParse(s string) time.Time {
 
 // ── thoughts_update ──────────────────────────────────────────
 
-func TestThoughtsUpdatePriorityClamped(t *testing.T) {
+func TestThoughtsUpdateSelfScheduledPriority(t *testing.T) {
 	q := routeQueue(t)
 	reg := toolRegistry(t, q)
 	out, _ := dispatch(t, reg, "thoughts_create", `{"prompt":"self work","priority":4}`)
@@ -306,13 +306,14 @@ func TestThoughtsUpdatePriorityClamped(t *testing.T) {
 	_ = json.Unmarshal([]byte(out), &created)
 	id := created["id"].(string)
 
-	// Update raises priority — clamped to the self-scheduled band.
-	if _, err := dispatch(t, reg, "thoughts_update", fmt.Sprintf(`{"id":%q,"priority":1}`, id)); err != nil {
+	// Update sets a priority — a self-scheduled thought honours a declared
+	// priority (ADR 0039 decision 6), so p0 is kept, not clamped.
+	if _, err := dispatch(t, reg, "thoughts_update", fmt.Sprintf(`{"id":%q,"priority":0}`, id)); err != nil {
 		t.Fatalf("thoughts_update(priority): %v", err)
 	}
 	got, _ := q.GetThought(id)
-	if got.Priority != thought.SelfScheduledHighBound {
-		t.Fatalf("updated priority = %d, want clamped %d", got.Priority, thought.SelfScheduledHighBound)
+	if got.Priority != 0 {
+		t.Fatalf("updated priority = %d, want 0 honoured (clamp removed)", got.Priority)
 	}
 }
 

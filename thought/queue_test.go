@@ -14,30 +14,19 @@ func newThought(id string, prio int) *Thought {
 }
 
 func TestEffectiveSelfPriority(t *testing.T) {
-	// Clamped into the conservative band from either side.
-	low := &Thought{Priority: 1}
-	if low.EffectiveSelfPriority() != SelfScheduledHighBound {
-		t.Errorf("prio 1 self-clamped to %d, want %d", low.EffectiveSelfPriority(), SelfScheduledHighBound)
+	// ADR 0039 decision 6: the clamp is REMOVED. Every declared priority —
+	// including p0 — passes through untouched. The "default to p1 when
+	// undeclared" rule lives at the creation sites, not here, because the
+	// zero value is a legitimate p0.
+	for _, p := range []int{0, 1, 2, 4, 5, 9, 10} {
+		tt := &Thought{Priority: p}
+		if got := tt.EffectiveSelfPriority(); got != p {
+			t.Errorf("prio %d self-mutated to %d — the clamp must be gone", p, got)
+		}
 	}
+	low := &Thought{Priority: 1}
 	if low.EffectivePriority() != 1 {
 		t.Errorf("plain EffectivePriority must be untouched: %d", low.EffectivePriority())
-	}
-	band := &Thought{Priority: SelfScheduledHighBound}
-	if band.EffectiveSelfPriority() != SelfScheduledHighBound {
-		t.Errorf("band boundary moved: %d", band.EffectiveSelfPriority())
-	}
-	high := &Thought{Priority: 9}
-	if high.EffectiveSelfPriority() != 9 || high.EffectiveSelfPriority() != high.EffectivePriority() {
-		t.Errorf("below-band priority must pass through: %d", high.EffectiveSelfPriority())
-	}
-	// The clamp never produces something above the band (numerically
-	// lower than SelfScheduledHighBound).
-	for _, p := range []int{1, 2, 3, 4, 5, 6, 10} {
-		tt := &Thought{Priority: p}
-		c := tt.EffectiveSelfPriority()
-		if c < SelfScheduledHighBound {
-			t.Errorf("prio %d self clamped to %d — outside band", p, c)
-		}
 	}
 }
 
@@ -170,15 +159,15 @@ func TestQueueDeferralSurvivesRestart(t *testing.T) {
 		t.Fatal("deferred thought claimable before its not-before time")
 	}
 }
-func TestEnqueueClampsSelfScheduledPriority(t *testing.T) {
+func TestEnqueueDefaultsSelfScheduledPriority(t *testing.T) {
 	q, err := NewQueue(Config{MaxConcurrent: 1, PrioritySlots: 1, SlotExhaustion: PolicyQueue}, NewMemoryStore())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Self-scheduled (origin: tool) at max priority is clamped into
-	// the conservative band.
-	self := newThought("self", 1)
+	// ADR 0039 decision 6: the clamp is gone, so a declared priority survives
+	// Enqueue untouched — including p0, which the old clamp promoted to p1.
+	self := newThought("self", 0)
 	self.Metadata = map[string]string{"origin": OriginTool}
 	if err := q.Enqueue(self); err != nil {
 		t.Fatal(err)
@@ -187,19 +176,19 @@ func TestEnqueueClampsSelfScheduledPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.EffectivePriority() != SelfScheduledHighBound {
-		t.Errorf("self priority = %d, want clamp band %d", got.EffectivePriority(), SelfScheduledHighBound)
+	if got.EffectivePriority() != 0 {
+		t.Errorf("declared p0 self priority = %d, want 0 honoured (clamp removed)", got.EffectivePriority())
 	}
 
-	// The `origin: self` spelling clamps the same way.
+	// The `origin: self` spelling behaves identically.
 	self2 := newThought("self2", 1)
 	self2.Metadata = map[string]string{"origin": OriginSelf}
 	if err := q.Enqueue(self2); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = q.GetThought("self2")
-	if got.EffectivePriority() != SelfScheduledHighBound {
-		t.Errorf("origin:self priority = %d, want %d", got.EffectivePriority(), SelfScheduledHighBound)
+	if got.EffectivePriority() != 1 {
+		t.Errorf("declared p1 self priority = %d, want 1 honoured", got.EffectivePriority())
 	}
 
 	// Untagged work keeps its priority — the clamp is scoped to
