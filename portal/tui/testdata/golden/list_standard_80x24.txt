@@ -1,0 +1,24 @@
+ navi · Thought (portal)  standard 80×24                                        
+────────────────────────────────────────────────────────────────────────────────
+    Id         Prompt           Status     Priority   Model      Updated at     
+ > t-run      summarise the r… running    2                     2026-11-0…      
+   t-pending  draft the migra… pending    4                     2026-11-0…      
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+  q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s…

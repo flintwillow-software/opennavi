@@ -8,10 +8,14 @@
 // mailbox itself, so a slow UI never blocks the queue fanout and an
 // idle portal is never blind (ADR 0019 decision 5).
 //
-// Bubble Tea (charmbracelet/bubbletea) is the repo's first
-// third-party dependency: an explicitly approved, documented exception
-// scoped to NAVI-319 (case-study thought-loop, Open Design Point #4).
-// The no-new-deps convention holds everywhere else.
+// This package uses the Charm stack: bubbletea (the runtime),
+// lipgloss (styling, layout, rune-width measurement), and bubbles
+// (viewport, textarea, help). Bubble Tea was the repo's first
+// third-party dependency, an explicitly approved, documented exception
+// scoped to NAVI-319 (case-study thought-loop, Open Design Point #4);
+// ADR 0038 decision 1 supersedes that "Bubble Tea only" scoping, so the
+// exception is now to the Charm stack as a whole — still confined to
+// this package. The no-new-deps convention holds everywhere else.
 package tui
 
 import (
@@ -309,6 +313,15 @@ type tuiModel struct {
 	enqMin    int
 	status    string
 	lost      bool
+
+	// width and height are the terminal size, from tea.WindowSizeMsg
+	// (NAVI-588). NewModel seeds them with a standard terminal so a model
+	// built before the first resize still renders; Bubble Tea then delivers
+	// the real size on start and on every resize.
+	width  int
+	height int
+	// theme is the single source of colour and text style (theme.go).
+	theme theme
 }
 
 // NewModel builds the model over a transport.
@@ -321,6 +334,13 @@ func NewModel(tr Transport) *tuiModel {
 		badges:      make(map[string]badge),
 		transcripts: make(map[string][]turn),
 		mode:        ModeList,
+		theme:       newTheme(),
+		// A model built before the first tea.WindowSizeMsg (a unit test, or
+		// the instant before Bubble Tea delivers the real size) renders at a
+		// standard terminal rather than at 0×0. The real size arrives as a
+		// WindowSizeMsg on start, so this is a floor, not an assumption.
+		width:  defaultWidth,
+		height: defaultHeight,
 	}
 	m.loadTypes()
 	return m
@@ -328,6 +348,14 @@ func NewModel(tr Transport) *tuiModel {
 
 // listPage bounds the page the list renders.
 const listPage = 200
+
+// defaultWidth and defaultHeight are the size a model renders at before the
+// terminal reports its own (see NewModel). 80×24 is the classic terminal and
+// sits in the standard form factor.
+const (
+	defaultWidth  = 80
+	defaultHeight = 24
+)
 
 // loadTypes caches the exposed descriptors. A remote surface fetches them
 // as its opening snapshot, so a failure is recorded and retried on the next
@@ -394,6 +422,13 @@ func (m *tuiModel) Init() tea.Cmd {
 // Update is the Elm update: keys and feed batches mutate the model.
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// The TUI is sized by the terminal, not by an assumed 80 columns
+		// (NAVI-588). Bubble Tea delivers this once on start and again on
+		// every resize.
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
 	case tea.KeyMsg:
 		if m.key(msg) {
 			return m, tea.Quit
@@ -655,11 +690,11 @@ func (m *tuiModel) addTurn(t turn) {
 	}
 }
 
+// clip shortens s to at most n display columns. It is width-aware, not
+// byte-aware, so it never splits a multi-byte rune (the NAVI-588 bug: the
+// old byte slice corrupted any clipped CJK or emoji value).
 func (m *tuiModel) clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
-	}
-	return s
+	return truncate(s, n, "…")
 }
 
 // sanitizeLine neutralizes control characters before SINGLE-LINE
@@ -1063,32 +1098,60 @@ func (m *tuiModel) doAction(action, id string, prio int) {
 	m.status = fmt.Sprintf("%s → %s", action, id)
 }
 
-// render draws the current screen (plain text; Bubble Tea repaints it
-// on every Update).
+// render draws the current screen into the terminal-sized frame (NAVI-588).
+// The frame owns the width, the height, and the chrome; a screen returns
+// body lines and never emits its own rule or sizes itself.
 func (m *tuiModel) render() string {
+	f := newFrame(m.width, m.height, m.theme)
+
 	title := "thought queue"
 	if t, ok := m.currentType(); ok && t.Label != "" {
 		title = t.Label
 	}
-	out := " navi · " + title + " (portal" + terminalSuffix(m) + ")\n"
-	out += repeat("-", 60) + "\n"
+	header := " " + m.theme.Title("navi") + " · " + sanitizeLine(title) +
+		m.theme.Subtle(" (portal"+terminalSuffix(m)+")") +
+		m.theme.Subtle("  "+f.form().String()+" "+itoa(f.width)+"×"+itoa(f.height))
+
+	// A terminal below the floor gets a notice rather than a corrupted row.
+	if f.tooNarrow() {
+		return f.render(header, []string{
+			"",
+			" " + m.theme.Warn("terminal too narrow") + " — " +
+				m.theme.Subtle("need at least "+itoa(narrowFloor)+" columns, have "+itoa(f.width)),
+		}, m.footerLine(f))
+	}
+
+	body := m.bodyLines(f)
+	return f.render(header, body, m.footerLine(f))
+}
+
+// bodyLines dispatches to the current screen and returns its body rows.
+func (m *tuiModel) bodyLines(f frame) []string {
 	switch m.mode {
-	case ModeList:
-		out += m.renderList()
 	case ModeDetail:
-		out += m.renderDetail()
+		return m.bodyDetail(f)
 	case ModeLive:
-		out += m.renderLive()
+		return m.bodyLive(f)
 	case ModeInput:
-		out += m.renderInput()
+		return m.bodyInput(f)
 	}
-	out += repeat("-", 60) + "\n"
+	return m.bodyList(f)
+}
+
+// footerLine is the status plus the (currently fixed) help line. The help
+// becomes generated from the keymap in a later slice (NAVI-593); it is one
+// place now so that change is local.
+func (m *tuiModel) footerLine(f frame) string {
+	line := " " + sanitizeLine(m.status)
 	if m.mode == ModeList && m.active != "" {
-		out += " ▸ " + sanitizeLine(m.activeID) + " · " + sanitizeLine(m.active) + "\n"
+		line = " " + m.theme.Marker("▸") + " " + sanitizeLine(m.activeID) +
+			" · " + sanitizeLine(m.active) + "   " + line
 	}
-	out += " " + sanitizeLine(m.status) + "\n"
-	out += " q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back\n"
-	return out
+	if f.tooNarrow() {
+		return line
+	}
+	help := " q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back"
+	return line + m.theme.Subtle(help)
 }
 
 func terminalSuffix(m *tuiModel) string {
@@ -1098,54 +1161,47 @@ func terminalSuffix(m *tuiModel) string {
 	return ""
 }
 
-func repeat(s string, n int) string {
-	out := ""
-	for i := 0; i < n; i++ {
-		out += s
-	}
-	return out
-}
+// itoa is strconv.Itoa without the import at every call site in the
+// renderer.
+func itoa(n int) string { return strconv.Itoa(n) }
 
-// renderList draws the selected type's page from the descriptor-resolved
+// bodyList draws the selected type's page from the descriptor-resolved
 // columns, decorating each row with the live overlay (status, a derived
 // blocked flag, a checkpoint marker, a running preview).
-func (m *tuiModel) renderList() string {
+func (m *tuiModel) bodyList(f frame) []string {
 	t, ok := m.currentType()
 	if !ok {
-		return " (waiting for the navi's object types…)\n"
+		return []string{" " + m.theme.Subtle("(waiting for the navi's object types…)")}
 	}
-	out := ""
+	var out []string
 	if len(m.types) > 1 {
-		out += " type: "
+		line := " type: "
 		for i, ty := range m.types {
 			if i > 0 {
-				out += " · "
+				line += " · "
 			}
 			label := ty.Label
 			if label == "" {
 				label = ty.Name
 			}
 			if i == m.typeIdx {
-				out += "[" + sanitizeLine(label) + "]"
+				line += m.theme.Selected("[" + sanitizeLine(label) + "]")
 			} else {
-				out += sanitizeLine(label)
+				line += sanitizeLine(label)
 			}
 		}
-		out += "\n"
+		out = append(out, line)
 	}
 	if len(m.list.Rows) == 0 {
-		return out + " (" + sanitizeLine(t.Name) + " empty)\n"
+		return append(out, " "+m.theme.Subtle("("+sanitizeLine(t.Name)+" empty)"))
 	}
-	out += "    "
-	for _, c := range m.list.Columns {
-		out += fmt.Sprintf("%-*s ", columnWidth(c), m.clip(sanitizeLine(c.Label), columnWidth(c)))
-	}
-	out += "\n"
+
+	// Columns are laid out from the descriptor's declared columns, sized by
+	// display width, and fitted to the frame so a wide value cannot push the
+	// rest off the screen (NAVI-588).
+	cols := m.columnLayout(f.width)
+	out = append(out, "    "+m.renderColumnHeader(cols))
 	for i, row := range m.list.Rows {
-		mark := " "
-		if i == m.sel {
-			mark = ">"
-		}
 		b := m.badges[row.ID]
 		flags := "  "
 		if b.checkpoint {
@@ -1154,41 +1210,221 @@ func (m *tuiModel) renderList() string {
 		if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
 			flags += "V"
 		}
-		out += " " + mark + " "
-		for _, c := range m.list.Columns {
-			value := cellValue(row, c.Field)
-			if c.Field == "status" {
+		mark := " "
+		if i == m.sel {
+			mark = m.theme.Marker(">")
+		}
+		line := " " + mark + " "
+		for _, c := range cols {
+			value := cellValue(row, c.column.Field)
+			if c.column.Field == "status" {
 				value = m.statusOf(row.ID)
 				if b.blocked {
 					value = "blocked"
 				}
 			}
-			out += fmt.Sprintf("%-*s ", columnWidth(c), m.clip(sanitizeLine(value), columnWidth(c)))
+			line += pad(sanitizeLine(value), c.width) + " "
 		}
-		out += flags + " "
-		if b.activity != "" {
-			out += " «" + m.clip(sanitizeLine(b.activity), 24)
+		line += flags + " "
+		if b.activity != "" && f.width >= activityMinFrame {
+			line += " «" + truncate(sanitizeLine(b.activity), activityReserve-2, "…")
 		}
-		out += "\n"
+		out = append(out, line)
 	}
 	return out
 }
 
-// columnWidth bounds a rendered column so one long value cannot push the rest
-// off the screen. A text column (a prompt) gets room; everything else sizes to
-// its label with a floor.
-func columnWidth(c view.Column) int {
+// laidOutColumn is a declared column paired with the width it was given.
+type laidOutColumn struct {
+	column view.Column
+	width  int
+}
+
+// columnLayout sizes the descriptor's columns to the frame. It reserves room
+// for the leading marker, the trailing flags, and the activity preview, then
+// distributes what is left. A text column absorbs the slack so a prompt has
+// room to be read; everything else keeps a floor so a header stays legible.
+func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
+	const (
+		leading = 4 // " > " plus the space before the first column
+		gap     = 1
+	)
+	cols := m.list.Columns
+	if len(cols) == 0 {
+		return nil
+	}
+
+	// The flags gutter (checkpoint / verification markers) is part of every
+	// row, so its room is reserved before the columns are sized — otherwise
+	// the markers are the first thing squeezed off the edge, and a flag that
+	// silently disappears is exactly the "advertised but does not work"
+	// defect this revamp exists to remove.
+	flags := flagsReserve
+
+	// The activity preview shares the row with the columns. Reserve room for
+	// it when there is any, so a running thought's preview is legible rather
+	// than squeezed to a single ellipsis at the edge; on a narrow terminal
+	// the preview is dropped instead of starving the columns.
+	activity := 0
+	if frameWidth >= activityMinFrame {
+		activity = activityReserve
+	}
+
+	avail := frameWidth - leading - flags - activity - gap // trailing space after the last column
+	if avail < 1 {
+		avail = 1
+	}
+
+	// On a narrow terminal, drop low-value columns rather than squeeze every
+	// one to illegibility: an id truncated to `t-pen…` and a status truncated
+	// to `runni…` tell the reader less than three whole columns would. The
+	// identity column and the text column are never dropped; the rest go from
+	// the end until the survivors fit at their floors.
+	keep := len(cols)
+	for keep > 2 {
+		if columnsMinTotal(cols[:keep], gap) <= avail {
+			break
+		}
+		keep--
+	}
+	cols = cols[:keep]
+
+	// Start every column at its natural width, capped.
+	out := make([]laidOutColumn, len(cols))
+	total := 0
+	textIdx := -1
+	for i, c := range cols {
+		w := naturalColumnWidth(c)
+		out[i] = laidOutColumn{column: c, width: w}
+		total += w + gap
+		if c.Kind == object.KindText {
+			textIdx = i
+		}
+	}
+	total -= gap // no trailing gap after the last column
+
+	// Too wide: shrink the text column first (it can spare width), then the
+	// widest remaining column, never below a per-column floor.
+	for total > avail {
+		shrunk := false
+		if textIdx >= 0 && out[textIdx].width > minTextColumn {
+			out[textIdx].width--
+			total--
+			shrunk = true
+		} else {
+			// Shrink the widest column that is still above its own floor, so
+			// width comes off the most generous column rather than off
+			// whichever happens to be first — and so the identity column keeps
+			// its wider floor while a date column gives up its slack.
+			widest, widestW := -1, 0
+			for i := range out {
+				floor := columnFloor(out[i].column)
+				if out[i].width <= floor {
+					continue
+				}
+				if out[i].width > widestW {
+					widest, widestW = i, out[i].width
+				}
+			}
+			if widest >= 0 {
+				out[widest].width--
+				total--
+				shrunk = true
+			}
+		}
+		if !shrunk {
+			break // every column is at its floor; the frame will clip
+		}
+	}
+
+	// Room left over goes to the text column, so a wide terminal shows more
+	// prompt rather than a stretched status column.
+	if textIdx >= 0 {
+		for total < avail {
+			out[textIdx].width++
+			total++
+		}
+	}
+	return out
+}
+
+const (
+	// minColumn is the narrowest a non-text column may be squeezed to.
+	minColumn = 6
+	// idColumnFloor is the narrowest an identity column may be squeezed to,
+	// so an id stays recognisable rather than being cut to a prefix.
+	idColumnFloor = 12
+	// minTextColumn is the narrowest the text column may be squeezed to
+	// before other columns start shrinking.
+	minTextColumn = 12
+	// maxColumn caps a column so one type cannot dominate a wide terminal.
+	maxColumn = 40
+)
+
+const (
+	// flagsReserve is the display columns held back for the row's marker
+	// gutter (a checkpoint `C` and a verification `V`).
+	flagsReserve = 4
+	// activityReserve is the display columns held back for the running
+	// activity preview on a row.
+	activityReserve = 16
+	// activityMinFrame is the frame width below which the preview is dropped
+	// so the columns keep their room.
+	activityMinFrame = 90
+)
+
+// columnsMinTotal is the total width a column set needs at its floors,
+// including the inter-column gaps. The layout uses it to decide how many
+// columns fit before it starts truncating them.
+func columnsMinTotal(cols []view.Column, gap int) int {
+	total := 0
+	for _, c := range cols {
+		total += columnFloor(c) + gap
+	}
+	if len(cols) > 0 {
+		total -= gap
+	}
+	return total
+}
+
+// columnFloor is the narrowest a column may be rendered. The identity column
+// gets a wider floor than the rest, because a row whose id is unreadable is
+// not a row a reader can act on.
+func columnFloor(c view.Column) int {
+	switch {
+	case c.Kind == object.KindText:
+		return minTextColumn
+	case c.Kind == object.KindRef || c.Field == "id":
+		// An identity column: readable ids, not `t-pen…`.
+		return idColumnFloor
+	}
+	return minColumn
+}
+
+// naturalColumnWidth is a column's preferred width: a text column wants
+// room, others size to their label with a floor.
+func naturalColumnWidth(c view.Column) int {
 	if c.Kind == object.KindText {
 		return 30
 	}
-	w := len(c.Label)
+	w := displayWidth(c.Label)
 	if w < 10 {
 		w = 10
 	}
-	if w > 30 {
-		w = 30
+	if w > maxColumn {
+		w = maxColumn
 	}
 	return w
+}
+
+// renderColumnHeader lays out the column labels at the same widths as the
+// rows, so the header and the body cannot drift.
+func (m *tuiModel) renderColumnHeader(cols []laidOutColumn) string {
+	line := ""
+	for _, c := range cols {
+		line += pad(m.theme.Subtle(sanitizeLine(c.column.Label)), c.width) + " "
+	}
+	return line
 }
 
 // cellValue reads one resolved cell from a toolkit row.
@@ -1201,68 +1437,107 @@ func cellValue(row view.Row, field string) string {
 	return ""
 }
 
-// renderDetail draws one object's descriptor-resolved sections and the actions
+// bodyDetail draws one object's descriptor-resolved sections and the actions
 // its type grants.
-func (m *tuiModel) renderDetail() string {
+func (m *tuiModel) bodyDetail(f frame) []string {
 	if m.detail == nil {
-		return ""
+		return nil
 	}
 	d := m.detail
 	label := d.Type.Label
 	if label == "" {
 		label = d.Type.Name
 	}
-	out := " " + sanitizeLine(label) + " · " + sanitizeLine(d.Title) + "\n"
+	out := []string{" " + m.theme.Title(sanitizeLine(label)) + " · " + sanitizeLine(d.Title)}
+	// The field-label column is sized to the frame so a long label cannot
+	// push the value off the edge.
+	labelW := 18
+	if f.width < 60 {
+		labelW = 12
+	}
+	if labelW > f.width/2 {
+		labelW = f.width / 2
+	}
 	for _, s := range d.Sections {
-		out += " " + sanitizeLine(s.Label) + "\n"
-		for _, f := range s.Fields {
-			out += fmt.Sprintf("   %-18s %s\n", sanitizeLine(f.Label), sanitizeLine(f.Value))
+		out = append(out, " "+m.theme.Subtle(sanitizeLine(s.Label)))
+		for _, field := range s.Fields {
+			line := "   " + pad(sanitizeLine(field.Label), labelW) + " " +
+				truncate(sanitizeLine(field.Value), f.width-4-labelW-1, "…")
+			out = append(out, line)
 		}
 	}
 	if len(d.Actions) > 0 {
-		out += " actions:"
+		line := " actions:"
 		for _, a := range d.Actions {
-			out += " " + sanitizeLine(a.Name)
+			name := sanitizeLine(a.Name)
 			if a.Confirm {
-				out += "!"
+				line += " " + m.theme.Confirm(name+"!")
+			} else {
+				line += " " + name
 			}
 		}
-		out += "\n"
+		out = append(out, line)
 	}
 	return out
 }
 
-func (m *tuiModel) renderInput() string {
-	if m.inputID != "" {
-		return fmt.Sprintf(" attach to %s > %s█\n", sanitizeLine(m.inputID), sanitizeLine(m.input))
+// bodyInput draws the enqueue / attach input stage.
+func (m *tuiModel) bodyInput(f frame) []string {
+	prompt := ""
+	switch {
+	case m.inputID != "":
+		prompt = " attach to " + sanitizeLine(m.inputID) + " > "
+	case m.stage == 1:
+		prompt = " priority 1-10 (default 4) > "
+	case m.stage == 2:
+		prompt = " defer minutes (0 = now) > "
+	default:
+		prompt = " new thought prompt > "
 	}
-	switch m.stage {
-	case 0:
-		return fmt.Sprintf(" new thought prompt > %s█\n", sanitizeLine(m.input))
-	case 1:
-		return fmt.Sprintf(" priority 1-10 (default 4) > %s█\n", sanitizeLine(m.input))
-	case 2:
-		return fmt.Sprintf(" defer minutes (0 = now) > %s█\n", sanitizeLine(m.input))
+	// The cursor sits after the text; the line is truncated so a long input
+	// does not overflow the frame.
+	text := sanitizeLine(m.input)
+	room := f.width - displayWidth(prompt) - 1
+	if room < 0 {
+		room = 0
 	}
-	return ""
+	return []string{"", prompt + truncate(text, room, "…") + m.theme.Marker("█")}
 }
 
-func (m *tuiModel) renderLive() string {
-	out := fmt.Sprintf(" chat: %s · live (esc returns)", m.liveID)
+// bodyLive draws the chat window: the reconstructed turns, tail-following
+// unless the user has scrolled back, sized to the frame.
+func (m *tuiModel) bodyLive(f frame) []string {
+	head := " " + m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
+		m.theme.Subtle(" · live (esc returns)")
 	if m.liveScroll > 0 {
-		out += fmt.Sprintf(" · scrolled −%d lines", m.liveScroll)
+		head += m.theme.Subtle(" · scrolled −" + itoa(m.liveScroll) + " lines")
 	}
-	out += "\n"
+
 	lines := m.chatLines()
 	if m.liveScroll >= len(lines) {
 		m.liveScroll = len(lines) - 1
 	}
-	start := len(lines) - m.liveScroll - 24 // tail window (24 lines)
+	if m.liveScroll < 0 {
+		m.liveScroll = 0
+	}
+	// The window is the body height minus the header line, so the chat fills
+	// whatever the terminal gives it rather than a fixed 24 lines.
+	window := f.bodyHeight() - 1
+	if window < 1 {
+		window = 1
+	}
+	end := len(lines) - m.liveScroll
+	start := end - window
 	if start < 0 {
 		start = 0
 	}
-	for i := start; i < len(lines); i++ {
-		out += " " + lines[i] + "\n"
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	out := []string{head}
+	for i := start; i < end; i++ {
+		out = append(out, " "+truncate(lines[i], f.width-1, "…"))
 	}
 	return out
 }
@@ -1277,24 +1552,24 @@ func (m *tuiModel) chatLines() []string {
 		switch t.role {
 		case TurnUser:
 			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, "▸ "+sanitizeLine(l))
+				lines = append(lines, m.theme.User("▸ "+sanitizeLine(l)))
 			}
 		case TurnAssistant:
 			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, "◂ "+l)
+				lines = append(lines, m.theme.Assistant("◂ "+l))
 			}
 		case TurnTool:
 			if t.tool != "" {
-				lines = append(lines, "  ⚙ "+sanitizeLine(t.tool))
+				lines = append(lines, m.theme.Tool("  ⚙ "+sanitizeLine(t.tool)))
 			}
 			if t.toolIn != "" {
-				lines = append(lines, "    in: "+sanitizeLine(t.toolIn))
+				lines = append(lines, m.theme.Tool("    in: "+sanitizeLine(t.toolIn)))
 			}
 			if t.toolOut != "" {
-				lines = append(lines, "    out: "+sanitizeLine(t.toolOut))
+				lines = append(lines, m.theme.Tool("    out: "+sanitizeLine(t.toolOut)))
 			}
 		case TurnSystem:
-			lines = append(lines, "  · "+sanitizeLine(t.text))
+			lines = append(lines, m.theme.System("  · "+sanitizeLine(t.text)))
 		}
 	}
 	if len(lines) == 0 {

@@ -197,6 +197,13 @@ func th(id string, prio int) *thought.Thought {
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 }
 
+// resize sends a terminal size to the model, as Bubble Tea does on start and
+// on every resize. Tests that assert on layout call it explicitly; a model
+// built without one renders at defaultWidth×defaultHeight.
+func resize(m *tuiModel, w, h int) {
+	_, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+}
+
 // drain applies the feed's pending events to the model, mirroring the
 // poll cmd (ReadAfter cursor semantics).
 func drain(m *tuiModel) {
@@ -844,8 +851,15 @@ func TestSanitizeRowNewlines(t *testing.T) {
 		t.Errorf("rows fused/merged: %d row lines for 2 thoughts:\n%s", nrows, view)
 	}
 	// The newline became a space; no literal \n inside the row.
-	if !strings.Contains(view, "hello world check this nice") {
-		t.Errorf("control chars not neutralized to spaces:\n%s", view)
+	// The sanitized prompt is present as ONE line of text. The assertion is
+	// made at a width where the prompt column is not truncated, because the
+	// point is that the control characters became spaces — not that a narrow
+	// terminal can show the whole value (which would contradict the column
+	// layout fitting the frame).
+	resize(m, 200, 24)
+	wide := m.View()
+	if !strings.Contains(wide, "hello world check this nice") {
+		t.Errorf("control chars not neutralized to spaces:\n%s", wide)
 	}
 	if strings.Contains(view, "hello\nworld") {
 		t.Error("literal newline leaked into a row")
