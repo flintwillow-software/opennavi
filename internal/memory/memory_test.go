@@ -185,11 +185,11 @@ func TestSTMToolSurface(t *testing.T) {
 	// The surface is split by TIER, not by operation: the tier decides whether
 	// a write costs context on every future thought, so it is in the tool name
 	// rather than a scope argument a caller can get wrong.
-	for _, want := range []string{"stm_write", "ltm_write", "ltm_search", "ltm_read", "ltm_prune"} {
+	for _, want := range []string{"stm_write", "ltm_write", "ltm_search", "ltm_read", "ltm_prune", "ltm_backfill"} {
 		toolNamed(t, tools, want)
 	}
-	if got := toolNames(tools); len(got) != 5 {
-		t.Fatalf("tool surface = %v, want exactly the five tier tools", got)
+	if got := toolNames(tools); len(got) != 6 {
+		t.Fatalf("tool surface = %v, want exactly the six tier tools", got)
 	}
 	// memory_write is gone, not aliased: one name per thing.
 	for _, tl := range tools {
