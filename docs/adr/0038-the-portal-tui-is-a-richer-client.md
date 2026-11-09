@@ -235,12 +235,13 @@ records the two factual corrections the review also made.
    default: below the floor the TUI says it is too narrow rather than
    corrupting the display.
 
-## Amendment — the five open questions, resolved
+## Amendment — two corrections to the Context
 
 **Recorded on review, before implementation (NAVI-586).** The decisions above
 were reviewed against the code and folded in the review's changes to decisions
-3 and 6; the two factual corrections and the resolution of the open questions
-are recorded here.
+3 and 6, and the open questions are resolved in the section above. What remains
+here is the review's two corrections to the Context, which are not changes to a
+decision and so are recorded rather than applied.
 
 Two details in the Context were **understated**, and implementation depends on
 them:
@@ -263,8 +264,6 @@ them:
 Decision 2 was verified directly, because it is the claim the whole revamp's
 safety rests on: the ADR 0017 object surface, the ADR 0019 stream, and the
 `portal/view` toolkit are untouched by anything this work requires. It holds.
-
-The five open questions resolve as follows:
 
 1. **Reasoning content comes from a distinct event kind.** The provider gains a
    reasoning-delta event, the agent event set gains a matching kind, and the
