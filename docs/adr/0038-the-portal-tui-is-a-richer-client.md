@@ -235,12 +235,13 @@ records the two factual corrections the review also made.
    default: below the floor the TUI says it is too narrow rather than
    corrupting the display.
 
-## Amendment — the five open questions, resolved
+## Amendment — two corrections to the Context
 
 **Recorded on review, before implementation (NAVI-586).** The decisions above
 were reviewed against the code and folded in the review's changes to decisions
-3 and 6; the two factual corrections and the resolution of the open questions
-are recorded here.
+3 and 6, and the open questions are resolved in the section above. What remains
+here is the review's two corrections to the Context, which are not changes to a
+decision and so are recorded rather than applied.
 
 Two details in the Context were **understated**, and implementation depends on
 them:
@@ -263,54 +264,3 @@ them:
 Decision 2 was verified directly, because it is the claim the whole revamp's
 safety rests on: the ADR 0017 object surface, the ADR 0019 stream, and the
 `portal/view` toolkit are untouched by anything this work requires. It holds.
-
-The five open questions resolve as follows:
-
-1. **Reasoning content comes from a distinct event kind.** The provider gains a
-   reasoning-delta event, the agent event set gains a matching kind, and the
-   portal maps it onto the existing `CategoryAgent` with its own `Kind` —
-   `agent_reasoning_delta` — rather than a flag on `content_delta`. A distinct
-   kind is the smaller change to every consumer: the TUI's event fold already
-   switches on `Kind`, so the reasoning role is one added case, whereas a flag
-   would require every reader of `content_delta` to learn about it. The
-   upstream work is NAVI-590; until it lands the reasoning role renders
-   nothing, exactly as decision 9 provides.
-2. **The queue filter's vocabulary is toggles, not a command language.** The
-   surface implements exactly two operators — equality and `$in`
-   (`navi/types.go`) — so the filter UI expresses exactly those and nothing
-   more, which is what keeps decision 4's "no new backend capability" honest.
-   A `:` command bar is **sugar over the same predicates**, added later as
-   NAVI-597 and required to produce an identical filter state rather than a
-   second code path. A query language implying operators the surface lacks
-   (`>=`, substring, negation) is an object-surface change under ADR 0017, not
-   a TUI change.
-3. **Mouse support is in scope.** Bubble Tea supports it and it is enabled for
-   the primary hit-targets: tab bar, list rows, the chat viewport, and detail
-   action rows. Because the same support is what would make **touch** viable,
-   hit-targets are kept **coarse** — a whole tab, row, or pane, never a
-   single cell — so touch is not foreclosed by a keyboard-only target grid.
-   Full gesture handling is deliberately not committed; NAVI-596 carries both
-   the mouse work and the touch constraint.
-4. **Navigation is tabs, not a sidebar or a palette.** A k9s-style persistent
-   tab bar: `1 home`, `2 queue`, `3 memory`, `4 status`. A sidebar is rejected
-   because it takes width from the conversation the home screen exists to show;
-   a palette is rejected as the *primary* navigation because it hides the
-   screen inventory behind a keystroke. **Detail is not a tab** — a thought's
-   detail or transcript is a pushed screen within whichever tab opened it, so
-   the tab bar always answers "where am I". **Settings is an overlay, not a
-   tab**: it holds appearance only (theme, colour profile, default sort,
-   narrow-floor behaviour), because a tab is state you are looking at and
-   settings is state you are changing about the UI. A network page becomes a
-   fifth tab once a `peer` object type exists (NAVI-594, NAVI-595); it is
-   **deliberately not built before then**, because a bespoke screen reading
-   peer state directly would be the first violation of decision 2 and would
-   falsify this ADR's safety claim on the first tab built after it.
-   The memory and status tabs are new work recorded as NAVI-599 and NAVI-598.
-   Status is the **one tab with a bespoke element** — queue depth, concurrency,
-   and stream health are model state rather than descriptors — and that is a
-   conscious exception, not an accident; if it grows large, the correct answer
-   is a read-only status type on the object surface rather than a private TUI
-   data path.
-5. **The narrow-terminal floor is 60 columns**, with the degraded layouts named
-   in the form factors above. This is a decision, not a default: below the
-   floor the TUI says it is too narrow rather than corrupting the display.
