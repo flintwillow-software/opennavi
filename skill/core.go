@@ -127,6 +127,13 @@ and find it later. ltm_search returns a bounded, ranked set with enough of each
 entry to judge relevance; ltm_read returns one entry in full once a hit looks
 worth reading.
 
+**Search matches WORDS, not fragments.** Each word you pass matches whole words
+and their prefixes — 'config' finds 'configuration' — but a mid-word fragment
+like 'onfig' finds nothing, and every word you pass must appear in the same
+entry. So search with the words a note would actually contain, and prefer a
+short query over a long one: adding a word can only narrow the result. Tag a
+note with the words you would search by, since that is what you will type.
+
 **The two are a system, through pointers.** When something belongs in long-term
 but matters to the thought in hand, leave a short-term note naming it — the topic
 and the tag or id you would search by — so a later thought knows to go looking.

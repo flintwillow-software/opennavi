@@ -276,3 +276,39 @@ This ADR settles open question 3 and the keyword-path question it raises. It doe
 4. **Dimension changes.** Decision 8 ignores mismatched vectors, which degrades
    silently. Whether a model change should instead *invalidate* the old vectors
    (with a reported count) is undecided.
+
+## Amendment — decision 3's prefix matching is explicit, not implicit
+
+**Recorded during implementation (slice 1), and it corrects a claim this ADR
+made.** Decision 3 says FTS5 `unicode61` "matches on token prefixes and word
+boundaries, so a query for `config` will match `configuration`". That is
+**not** what FTS5 does by default, and the first implementation proved it: FTS5
+matches whole **tokens**, so a bare `config` matches *nothing* against
+`configuration`. Prefix matching requires an explicit trailing `*` (`config*`).
+
+The decision itself is unchanged — the promised behaviour is still the
+delivered behaviour — but it is delivered by the implementation adding `*` to
+each term rather than by the tokenizer doing it for free. The term is quoted
+first and the `*` appended **outside** the quotes (`` `"config"*` ``), because
+inside the quotes it would be a literal asterisk. Quoting is what keeps a
+navi's ordinary prose from being parsed as FTS5 query syntax, and it is
+load-bearing: a search for `the flag is --dry-run` is a parse error unquoted
+(`-` is an operator) and a valid search quoted.
+
+So the two halves of decision 3's behaviour change hold, and the second is the
+one worth re-reading:
+
+- `config` finds `configuration` — **because the implementation appends `*`**,
+  not because the tokenizer is prefix-aware.
+- `onfig` does not find `configuration` — this one the tokenizer does give,
+  since a mid-word fragment is not a token.
+
+A term that is *only* punctuation (`` `--dry-run` ``) quotes to a phrase that
+matches nothing, which is deliberate: the tokenizer never produced that token,
+and stripping punctuation to find a near-match would search for something the
+caller did not write.
+
+This amendment is recorded rather than applied to decision 3 because an
+accepted ADR is not edited. It is not a supersession: the decision stands
+whole, and what changed is the record's *explanation* of how it is achieved —
+which is exactly the thing a later reader would otherwise get wrong.

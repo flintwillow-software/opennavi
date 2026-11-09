@@ -282,7 +282,10 @@ func ltmTools(lt *LongTerm) ([]tool.Tool, error) {
 				Description: "Search the long-term memory archive, returning a BOUNDED, ranked set of entries " +
 					"(default 10, at most 50) with enough of each to judge relevance. This is the tool for " +
 					"\"what do I already know about X\" — filter by content, scope, or tags. Read a specific hit in " +
-					"full with ltm_read. Nothing from the archive is ever in your context unless you search for it.",
+					"full with ltm_read. Nothing from the archive is ever in your context unless you search for it. " +
+					"Content matching is by WORD, not by fragment: each word matches whole words and their " +
+					"prefixes, so 'config' finds 'configuration' but 'onfig' finds nothing, and every word you " +
+					"pass must appear in the same entry. Search with the words a note would actually contain.",
 				InputSchema:   searchSchema,
 				OutputFormat:  "json",
 				Access:        tool.AccessReadOnly,
@@ -294,6 +297,7 @@ func ltmTools(lt *LongTerm) ([]tool.Tool, error) {
 				PromptSnippet: "ltm_search — bounded, ranked search of the long-term memory archive",
 				PromptGuidelines: []string{
 					"The result is bounded (at most 50). If it is truncated, narrow the query rather than paging.",
+					"Matching is by word, not by fragment — 'config' finds 'configuration', 'onfig' does not. Every word must appear in the same entry, so a shorter query matches more than a longer one.",
 				},
 				SourceInfo: tool.SourceInfo{Origin: tool.OriginBuiltin},
 			},
