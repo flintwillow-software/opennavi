@@ -62,6 +62,12 @@ func (s *Store) Thoughts() datastore.Thoughts   { return &ThoughtStore{store: s}
 func (s *Store) ToolState() datastore.ToolState { return &StatefulStore{db: s.db} }
 func (s *Store) Memory() datastore.Memory       { return &MemoryStore{store: s} }
 
+// VectorStore exposes the optional vector capability (ADR 0040 decision 7) as
+// its own accessor rather than as a method on the Memory view: it is a
+// capability this backend adds, not part of the memory contract, so a caller
+// asks for it explicitly and a backend without one is simply keyword-only.
+func (s *Store) VectorStore() datastore.VectorStore { return &VectorStore{store: s} }
+
 // ResetReads clears the transcript body-read counter
 // (conformance.ReadReporter).
 func (s *Store) ResetReads() { atomic.StoreInt64(&s.bodyReads, 0) }

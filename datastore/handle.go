@@ -159,6 +159,34 @@ func (d *Datastore) Memory() Memory {
 	return memoryHandle{d}
 }
 
+// VectorStore returns the active backend's optional vector index, or nil when
+// it has none (ADR 0040 decision 7).
+//
+// It is discovered by assertion rather than declared as part of Backend,
+// because a vector index is a capability a backend may add rather than
+// something every backend must have — the in-memory and filesystem backends
+// have no reason to implement one, and requiring it would turn "this backend
+// cannot do vectors" into a compile error instead of a runtime question. A nil
+// result is a supported configuration, not a failure: the archive is then
+// keyword-only (decision 2).
+func (d *Datastore) VectorStore() VectorStore {
+	d.mu.RLock()
+	b := d.backend
+	d.mu.RUnlock()
+	if b == nil {
+		return nil
+	}
+	if vs, ok := b.(VectorStore); ok {
+		return vs
+	}
+	// A backend that exposes vectors through its own accessor (sqlite does)
+	// rather than by satisfying the interface directly.
+	if p, ok := b.(interface{ VectorStore() VectorStore }); ok {
+		return p.VectorStore()
+	}
+	return nil
+}
+
 // ResidentTranscripts reports how many transcript bodies the lazy-transcript
 // layer currently holds: dirty writes awaiting the ordered writer, plus
 // hydrated bodies still referenced by a reader. Detail nothing is touching
