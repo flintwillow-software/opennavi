@@ -1,0 +1,20 @@
+ navi · Thought (portal)  standard 60×20                    
+────────────────────────────────────────────────────────────
+    Id         Prompt       Status   Priority Model         
+ > t-run      summarise t… running  2                       
+   t-pending  draft the m… pending  4                       
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+────────────────────────────────────────────────────────────
+  q quit · j/k move · enter open · t type · n new · a attac…
