@@ -134,6 +134,17 @@ entry. So search with the words a note would actually contain, and prefer a
 short query over a long one: adding a word can only narrow the result. Tag a
 note with the words you would search by, since that is what you will type.
 
+**Search may also match by MEANING, when this navi has an embedder.** If it
+does, your query is embedded and ranked against the stored entries as well, and
+the two rankings are combined — so a query phrased differently from the note
+can still find it. You do not need to do anything differently: search with the
+words you mean, and the meaning-based half covers the wording. It is an
+addition to the word match, never a replacement — an entry written before the
+embedder existed is still found by its words. Two consequences worth knowing:
+writing an entry costs an embedding call, so a write fails if the embedding
+model is unreachable; and a search quietly falls back to words alone if it is,
+so a temporarily worse result is not a bug you need to report.
+
 **The two are a system, through pointers.** When something belongs in long-term
 but matters to the thought in hand, leave a short-term note naming it — the topic
 and the tag or id you would search by — so a later thought knows to go looking.

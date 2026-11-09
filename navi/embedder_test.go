@@ -7,7 +7,9 @@ import (
 
 	"github.com/flintwillow-software/opennavi/datastore/inmem"
 	"github.com/flintwillow-software/opennavi/internal/llm"
+	"github.com/flintwillow-software/opennavi/internal/memory"
 	"github.com/flintwillow-software/opennavi/model"
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // stubEmbedder is a model.Embedder that returns a fixed vector, so the wiring
@@ -65,9 +67,62 @@ func TestWithEmbedderReachesTheArchive(t *testing.T) {
 	if got.Name() != "stub" {
 		t.Fatalf("archive embedder = %q, want stub", got.Name())
 	}
-	if !n.longMemory.Semantic() {
-		t.Error("Semantic() must be true when an embedder is declared")
+}
+
+// TestSemanticNeedsBothEmbedderAndVectorStore: Semantic() reports whether the
+// vector path can actually run, which needs an embedder AND a backend that can
+// store vectors. An embedder with nowhere to put a vector must not report a
+// capability it cannot deliver.
+func TestSemanticNeedsBothEmbedderAndVectorStore(t *testing.T) {
+	// inmem has no vector index, so an embedder alone is not enough.
+	n := buildMemoryNavi(t, WithEmbedder(stubEmbedder{dims: 768}))
+	if n.longMemory.Embedder() == nil {
+		t.Fatal("the embedder should still be recorded even without a vector store")
 	}
+	if n.longMemory.Semantic() {
+		t.Error("Semantic() must be false when the backend has no vector index")
+	}
+
+	// With a vector store as well, the vector path is available.
+	st := &stubVectors{}
+	lt, err := memory.NewLongTerm(inmem.New().Memory(), principal.MustParse("navi:x"), memory.LongTermConfig{
+		Embedder: stubEmbedder{dims: 4},
+		Vectors:  st,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lt.Semantic() {
+		t.Error("Semantic() must be true with both an embedder and a vector store")
+	}
+}
+
+// stubVectors is an in-memory datastore.VectorStore for wiring tests.
+type stubVectors struct {
+	put map[string][]float64
+}
+
+func (s *stubVectors) PutVector(id string, vec []float64) error {
+	if s.put == nil {
+		s.put = map[string][]float64{}
+	}
+	s.put[id] = vec
+	return nil
+}
+
+func (s *stubVectors) DeleteVector(id string) error {
+	delete(s.put, id)
+	return nil
+}
+
+func (s *stubVectors) Vectors(ids []string, dims int) (map[string][]float64, error) {
+	out := map[string][]float64{}
+	for _, id := range ids {
+		if v, ok := s.put[id]; ok && len(v) == dims {
+			out[id] = v
+		}
+	}
+	return out, nil
 }
 
 // TestNoEmbedderIsKeywordOnly is ADR 0040 decision 2: a navi with no embedder

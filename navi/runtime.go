@@ -233,6 +233,10 @@ func (n *Navi) assembleMemory() error {
 		// search, which is a supported configuration, not a degraded one
 		// (decision 2) — so this is passed through rather than required.
 		Embedder: n.embedder,
+		// The active backend's vector index, when it has one (decision 7).
+		// Discovered from the handle rather than assumed, so a backend
+		// without one is keyword-only rather than an assembly failure.
+		Vectors: n.Datastores.handle.VectorStore(),
 	})
 	if err != nil {
 		return fmt.Errorf("navi: long-term memory: %w", err)
