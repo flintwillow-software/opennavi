@@ -149,7 +149,7 @@ func TestInjectSeparatesScopes(t *testing.T) {
 // newLongTerm builds the archive tier over the same in-memory backend.
 func newLongTerm(t *testing.T, backend *inmem.Backend) *LongTerm {
 	t.Helper()
-	lt, err := NewLongTerm(backend.Memory(), principal.MustParse("navi:navi"))
+	lt, err := NewLongTerm(backend.Memory(), principal.MustParse("navi:navi"), LongTermConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

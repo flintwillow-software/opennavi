@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/flintwillow-software/opennavi/datastore"
+	"github.com/flintwillow-software/opennavi/model"
 	"github.com/flintwillow-software/opennavi/principal"
 )
 
@@ -20,20 +21,37 @@ import (
 // nothing and would risk a long-term entry leaking into the always-loaded set —
 // the exact context cost the tier boundary exists to avoid.
 type LongTerm struct {
-	memory  datastore.Memory
-	subject principal.Ref
+	memory   datastore.Memory
+	subject  principal.Ref
+	embedder model.Embedder
+}
+
+// LongTermConfig builds the archive's optional capabilities.
+type LongTermConfig struct {
+	// Embedder, when set, adds semantic recall to archive search (ADR 0040
+	// decision 1). Nil means keyword-only search, which is a supported
+	// configuration rather than a degraded one (decision 2) — a navi with no
+	// embedder loses nothing it had, it simply gains no vector path.
+	Embedder model.Embedder
 }
 
 // NewLongTerm builds the long-term tier over the datastore's memory view.
-func NewLongTerm(m datastore.Memory, subject principal.Ref) (*LongTerm, error) {
+func NewLongTerm(m datastore.Memory, subject principal.Ref, cfg LongTermConfig) (*LongTerm, error) {
 	if m == nil {
 		return nil, fmt.Errorf("memory: long-term tier requires a datastore memory view")
 	}
 	if subject.IsZero() {
 		return nil, fmt.Errorf("memory: long-term tier requires a subject")
 	}
-	return &LongTerm{memory: m, subject: subject}, nil
+	return &LongTerm{memory: m, subject: subject, embedder: cfg.Embedder}, nil
 }
+
+// Embedder reports the declared embedder, or nil when search is keyword-only.
+// It is how a caller asks "is semantic search available" without probing.
+func (l *LongTerm) Embedder() model.Embedder { return l.embedder }
+
+// Semantic reports whether semantic search is available.
+func (l *LongTerm) Semantic() bool { return l.embedder != nil }
 
 // longTermScopes are the scopes that belong to the searched archive. The `navi`
 // scope is long-term rather than always-injected because its load timing is a

@@ -228,7 +228,12 @@ func (n *Navi) assembleMemory() error {
 	// holds no cache — a cached archive entry would risk leaking into the
 	// always-loaded set, which is the context cost the tier boundary exists to
 	// avoid.
-	lt, err := memory.NewLongTerm(n.Datastores.handle.Memory(), subject)
+	lt, err := memory.NewLongTerm(n.Datastores.handle.Memory(), subject, memory.LongTermConfig{
+		// The declared embedder (ADR 0040 decision 1). Nil is keyword-only
+		// search, which is a supported configuration, not a degraded one
+		// (decision 2) — so this is passed through rather than required.
+		Embedder: n.embedder,
+	})
 	if err != nil {
 		return fmt.Errorf("navi: long-term memory: %w", err)
 	}

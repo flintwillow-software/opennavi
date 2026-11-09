@@ -107,6 +107,11 @@ type Navi struct {
 	// map uses defaultShortTermMemoryBudget.
 	stmBudget map[datastore.Scope]int
 
+	// embedder is the declared embedding model (WithEmbedder). Nil means
+	// keyword-only archive search, which is a supported configuration rather
+	// than a degraded one (ADR 0040 decision 2).
+	embedder model.Embedder
+
 	// webhookAddr is the declared webhook listener address (WithWebhooks);
 	// empty = the navi serves no webhook ingress. webhooks is the shared
 	// router that listener serves and every connector registers its route
@@ -270,6 +275,23 @@ func WithTokenizer(tok llm.Tokenizer) Option {
 	return func(n *Navi) {
 		if tok != nil {
 			n.tokenizer = tok
+		}
+	}
+}
+
+// WithEmbedder declares the embedding model the archive uses for semantic
+// search (ADR 0040 decision 1). The embedder is a contract the navi author
+// supplies — model.Embedder, implemented by model/ollama for a local Ollama —
+// because the alternative (the runtime picking one) would make the archive's
+// search quality a property of the deployment rather than a declared choice.
+//
+// A navi that declares no embedder still has an archive: search is by keyword,
+// which is what NAVI-578 shipped and is a supported configuration rather than a
+// degraded one (ADR 0040 decision 2). Declaring one adds semantic recall on top.
+func WithEmbedder(e model.Embedder) Option {
+	return func(n *Navi) {
+		if e != nil {
+			n.embedder = e
 		}
 	}
 }
