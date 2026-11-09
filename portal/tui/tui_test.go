@@ -352,8 +352,8 @@ func TestModelLiveView(t *testing.T) {
 	}
 	// The thought's Prompt is the opening user turn (chat-window
 	// rebuild-on-attach, NAVI-330).
-	if len(m.turns) == 0 || m.turns[0].role != TurnUser || !strings.Contains(m.turns[0].text, "task t3") {
-		t.Errorf("opening user turn missing: %+v", m.turns)
+	if len(m.chat.turns) == 0 || m.chat.turns[0].role != TurnUser || !strings.Contains(m.chat.turns[0].text, "task t3") {
+		t.Errorf("opening user turn missing: %+v", m.chat.turns)
 	}
 	// Assistant deltas accumulate into ONE assistant turn.
 	observe(broker, "t3", agent.AgentEvent{

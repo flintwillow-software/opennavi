@@ -286,17 +286,17 @@ type tuiModel struct {
 	sel    int
 	mode   ModeKind
 	liveID string
-	// turns is the reconstructed chat for the live view (NAVI-330):
-	// prompt as the opening user turn, assistant deltas accumulated,
-	// tool blocks, lifecycle system lines, steers as user turns.
-	// Presentation-only — the stream stays the source of truth.
-	turns []turn
+	// chat is the shared conversation component (NAVI-589, ADR 0038
+	// decision 5): home's running thought and a thought opened from the queue
+	// render through this one implementation, which owns the turns, the
+	// scroll viewport, and the per-turn blocks. Presentation-only — the
+	// stream stays the source of truth.
+	chat chat
 	// transcripts accumulates each thought's conversation from the event
 	// stream, regardless of which view is open, so a thought enqueued
 	// from the list still shows its response when opened after it ran.
 	// In-session only; durable restore is NAVI-353.
 	transcripts map[string][]turn
-	liveScroll  int // 0 = tail-follow; >0 = lines scrolled back
 	input       string
 	// active reports the running thought's inference activity in the
 	// home view status line (NAVI-335).
@@ -633,12 +633,28 @@ func (m *tuiModel) chatAgentEvent(ev portal.Event) {
 		} else {
 			add(turn{role: TurnAssistant, text: ev.Detail})
 		}
+	case "reasoning_delta", "agent_reasoning_delta":
+		// Reasoning content (ADR 0038 decision 9). The upstream event does
+		// not exist yet (NAVI-590), so this case is unreachable today — it is
+		// here so that landing the event is a change to the provider and the
+		// agent rather than to this fold. Accumulates like assistant text.
+		if n := len(tr); n > 0 && tr[n-1].role == TurnThinking {
+			tr[n-1].text += ev.Detail
+		} else {
+			add(turn{role: TurnThinking, text: ev.Detail, collapsed: false})
+		}
 	case "turn_start", "agent_start":
 		add(turn{role: TurnSystem, text: ev.Kind})
 	case "tool_call":
-		add(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), toolIn: ""})
+		add(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), collapsed: true})
 	case "tool_result":
-		add(turn{role: TurnTool, tool: "result", toolOut: m.clip(ev.Detail, 60)})
+		// A result lands on the trailing tool turn when there is one, so a
+		// call and its result are ONE block rather than two.
+		if n := len(tr); n > 0 && tr[n-1].role == TurnTool && tr[n-1].toolOut == "" {
+			tr[n-1].toolOut = ev.Detail
+		} else {
+			add(turn{role: TurnTool, tool: "result", toolOut: ev.Detail, collapsed: true})
+		}
 	case "agent_end":
 		add(turn{role: TurnSystem, text: "agent ended"})
 	case "error":
@@ -648,7 +664,7 @@ func (m *tuiModel) chatAgentEvent(ev portal.Event) {
 	}
 	m.transcripts[ev.ThoughtID] = tr
 	if m.liveID == ev.ThoughtID {
-		m.turns = tr
+		m.chat.reset(tr)
 	}
 }
 
@@ -678,15 +694,13 @@ func (m *tuiModel) homeAgentEvent(ev portal.Event) {
 	m.active = preview
 }
 
-// addTurn appends a chat turn, bounding the scrollback window; the
-// tail (scroll 0) auto-follows.
+// addTurn appends a chat turn to the open conversation, and mirrors it into
+// the thought's accumulated transcript so it survives a re-open. The chat
+// component owns the scrollback bound.
 func (m *tuiModel) addTurn(t turn) {
-	m.turns = append(m.turns, t)
-	if len(m.turns) > maxLiveTurns {
-		m.turns = m.turns[len(m.turns)-maxLiveTurns:]
-	}
+	m.chat.append(t)
 	if m.liveID != "" && m.transcripts != nil {
-		m.transcripts[m.liveID] = m.turns
+		m.transcripts[m.liveID] = m.chat.turns
 	}
 }
 
@@ -714,29 +728,6 @@ func sanitizeLine(s string) string {
 	}, s)
 }
 
-// key handles a key press; returns true when the user quits.
-// TurnRole renders one conversation turn in the live chat window.
-type TurnRole string
-
-const (
-	TurnUser      TurnRole = "user"
-	TurnAssistant TurnRole = "assistant"
-	TurnTool      TurnRole = "tool"
-	TurnSystem    TurnRole = "system"
-)
-
-// turn is one chat-window block (NAVI-330 presentation).
-type turn struct {
-	role    TurnRole
-	text    string // accumulated content (assistant deltas append here)
-	tool    string // tool name for tool turns
-	toolIn  string // input summary for tool turns
-	toolOut string // result for tool turns
-}
-
-// maxLiveTurns bounds the reconstructed chat (scrollback window).
-const maxLiveTurns = 80
-
 // enterLive opens a thought's conversation: the persisted transcript detail,
 // read through the object surface and resolved by the toolkit, so a completed
 // thought opened after the fact shows its full conversation and the in-process
@@ -745,7 +736,6 @@ const maxLiveTurns = 80
 func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
-	m.liveScroll = 0
 	if tr := m.transcripts[thoughtID]; len(tr) > 0 {
 		// The accumulated stream may have started mid-run: the prompt opens
 		// the conversation when nothing else does.
@@ -753,11 +743,12 @@ func (m *tuiModel) enterLive(thoughtID string) {
 			tr = append([]turn{{role: TurnUser, text: m.promptOf(thoughtID)}}, tr...)
 			m.transcripts[thoughtID] = tr
 		}
-		m.turns = tr
+		m.chat.reset(tr)
 		return
 	}
-	m.turns = m.seedTurns(thoughtID)
-	m.transcripts[thoughtID] = m.turns
+	tr := m.seedTurns(thoughtID)
+	m.transcripts[thoughtID] = tr
+	m.chat.reset(tr)
 }
 
 // seedTurns reads a thought's transcript through the surface and maps it to
@@ -857,6 +848,18 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		return false
 	}
 
+	// The chat has first refusal on its own scroll/fold keys while the
+	// conversation is open, so the same key does not mean two things
+	// depending on which screen happens to be showing (ADR 0038 decision 7:
+	// actions bind to the focused object, not to a mode). Quit and back stay
+	// the model's, so a reader can always leave.
+	if m.mode == ModeLive && k.String() != "q" && k.String() != "ctrl+c" &&
+		k.String() != "esc" && k.String() != "escape" && k.String() != "l" {
+		if m.chat.update(k) {
+			return false
+		}
+	}
+
 	switch k.String() {
 	case "q", "ctrl+c":
 		return true
@@ -866,17 +869,11 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.detail = nil
 		}
 	case "up", "k":
-		if m.mode == ModeLive {
-			m.liveScroll++
-		} else if m.mode == ModeList && m.sel > 0 {
+		if m.mode == ModeList && m.sel > 0 {
 			m.sel--
 		}
 	case "down", "j":
-		if m.mode == ModeLive {
-			if m.liveScroll > 0 {
-				m.liveScroll--
-			}
-		} else if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
+		if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
 			m.sel++
 		}
 	case "enter":
@@ -1504,78 +1501,39 @@ func (m *tuiModel) bodyInput(f frame) []string {
 	return []string{"", prompt + truncate(text, room, "…") + m.theme.Marker("█")}
 }
 
-// bodyLive draws the chat window: the reconstructed turns, tail-following
-// unless the user has scrolled back, sized to the frame.
+// bodyLive draws the conversation through the shared chat component: the
+// component renders the turn blocks and owns the scroll position, and this
+// only supplies the header and the viewport size.
 func (m *tuiModel) bodyLive(f frame) []string {
 	head := " " + m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
 		m.theme.Subtle(" · live (esc returns)")
-	if m.liveScroll > 0 {
-		head += m.theme.Subtle(" · scrolled −" + itoa(m.liveScroll) + " lines")
+	if m.chat.followSuspended() {
+		// The indicator is the promise that the view will not yank the reader
+		// to the bottom while they are reading history — and that it will
+		// resume once they return.
+		head += m.theme.Warn(" · paused (f to follow)")
+	} else {
+		head += m.theme.Subtle(" · following")
+	}
+	// The scrollback trim is reported here rather than in the content, which
+	// follows the tail and would scroll the notice out of sight.
+	if n := m.chat.trimNotice(); n != "" {
+		head += m.theme.Subtle(" " + n)
 	}
 
-	lines := m.chatLines()
-	if m.liveScroll >= len(lines) {
-		m.liveScroll = len(lines) - 1
+	// The viewport gets the body minus the header, so the chat fills whatever
+	// the terminal gives it.
+	rows := f.bodyHeight() - 1
+	if rows < 1 {
+		rows = 1
 	}
-	if m.liveScroll < 0 {
-		m.liveScroll = 0
-	}
-	// The window is the body height minus the header line, so the chat fills
-	// whatever the terminal gives it rather than a fixed 24 lines.
-	window := f.bodyHeight() - 1
-	if window < 1 {
-		window = 1
-	}
-	end := len(lines) - m.liveScroll
-	start := end - window
-	if start < 0 {
-		start = 0
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
+	m.chat.setSize(f.width-1, rows)
 
 	out := []string{head}
-	for i := start; i < end; i++ {
-		out = append(out, " "+truncate(lines[i], f.width-1, "…"))
+	for _, l := range m.chat.view(m.theme) {
+		out = append(out, " "+truncate(l, f.width-1, "…"))
 	}
 	return out
-}
-
-// chatLines flattens the reconstructed turns into display lines
-// (assistant content lines are indented; tool blocks offset).
-// Non-assistant lines are sanitized — the assistant content is the
-// legitimately multi-line context (NAVI-330/333 distinction).
-func (m *tuiModel) chatLines() []string {
-	lines := []string{}
-	for _, t := range m.turns {
-		switch t.role {
-		case TurnUser:
-			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, m.theme.User("▸ "+sanitizeLine(l)))
-			}
-		case TurnAssistant:
-			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, m.theme.Assistant("◂ "+l))
-			}
-		case TurnTool:
-			if t.tool != "" {
-				lines = append(lines, m.theme.Tool("  ⚙ "+sanitizeLine(t.tool)))
-			}
-			if t.toolIn != "" {
-				lines = append(lines, m.theme.Tool("    in: "+sanitizeLine(t.toolIn)))
-			}
-			if t.toolOut != "" {
-				lines = append(lines, m.theme.Tool("    out: "+sanitizeLine(t.toolOut)))
-			}
-		case TurnSystem:
-			lines = append(lines, m.theme.System("  · "+sanitizeLine(t.text)))
-		}
-	}
-	if len(lines) == 0 {
-		lines = append(lines, " (no conversation yet — stream events land here)")
-	}
-	return lines
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

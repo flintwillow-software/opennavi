@@ -134,6 +134,17 @@ func TestGoldenLiveChatAtFixedSizes(t *testing.T) {
 			if m.mode != ModeLive {
 				t.Fatalf("did not enter live view, mode=%s", m.mode)
 			}
+			// Give the conversation a shape worth pinning: a reasoning turn, an
+			// assistant turn with wrapping, a collapsed tool block, and a
+			// system line, so the golden exercises every role rather than an
+			// almost-empty viewport.
+			m.chat.reset([]turn{
+				{role: TurnUser, text: "summarise the release notes"},
+				{role: TurnThinking, text: "the user wants the highlights, not every commit"},
+				{role: TurnAssistant, text: "Here are the highlights:\n1. terminal sizing\n2. rune-correct columns"},
+				{role: TurnTool, tool: "note_write", toolIn: `{"title":"summary"}`, toolOut: "wrote summary", collapsed: true},
+				{role: TurnSystem, text: "turn_end"},
+			})
 			checkGolden(t, "live_"+size.name, m.View())
 		})
 	}

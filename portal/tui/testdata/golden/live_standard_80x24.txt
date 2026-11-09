@@ -1,18 +1,18 @@
  navi · Thought (portal)  standard 80×24                                        
 ────────────────────────────────────────────────────────────────────────────────
- chat · t-run · live (esc returns)                                              
+ chat · t-run · live (esc returns) · following                                  
  ▸ summarise the release notes                                                  
                                                                                 
+   ~ thinking                                                                   
+     the user wants the highlights, not every commit                            
                                                                                 
+ ◂ Here are the highlights:                                                     
+   1. terminal sizing                                                           
+   2. rune-correct columns                                                      
                                                                                 
+   ⚙ note_write · wrote summary  (enter to expand)                              
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+   · turn_end                                                                   
                                                                                 
                                                                                 
                                                                                 
