@@ -127,6 +127,16 @@ mechanism covers both entry points.
 The archive is both keyword- and vector-indexed, so the tool takes an embedder
 supplied by the navi author at construction. It is not a thin CRUD tool.
 
+Settled by [ADR 0040](../adr/0040-semantic-search-over-the-archive.md): the
+interface is `model.Embedder` (a public contract, implemented by
+`model/ollama` for a local Ollama) and is declared with `navi.WithEmbedder`.
+**A navi without one still has an archive** — search is by keyword, which is a
+supported configuration rather than a degraded one, so the tier's availability
+does not depend on a model being installed (decision 2). Keyword search itself
+runs through the `memories_fts` FTS5 index the store has maintained since
+migration 4, and matches by **word** rather than by fragment: `config` finds
+`configuration`, `onfig` does not (decision 3).
+
 Tracked as NAVI-350.
 
 ### The tiers are a system, not two stores

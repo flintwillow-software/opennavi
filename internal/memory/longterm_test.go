@@ -295,7 +295,7 @@ func TestLTMSearchNeverReturnsShortTermEntries(t *testing.T) {
 // knowledge; a caller must not be able to write into another principal's notes.
 func TestLongTermWriteForcesTheNavisOwnSubject(t *testing.T) {
 	backend := inmem.New()
-	lt, err := NewLongTerm(backend.Memory(), principal.MustParse("navi:mine"))
+	lt, err := NewLongTerm(backend.Memory(), principal.MustParse("navi:mine"), LongTermConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
