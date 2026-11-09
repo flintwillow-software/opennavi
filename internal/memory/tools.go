@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,12 @@ import (
 const (
 	ltmSearchDefaultLimit = 10
 	ltmSearchMaxLimit     = 50
+	// ltmBackfillDefaultLimit and ltmBackfillMaxLimit bound one backfill call.
+	// Each embedded entry is a network call to the embedder, so the bound is
+	// what keeps a backfill of a large archive from hanging a thought (ADR
+	// 0037 decision 3's reasoning, applied to a write-side batch).
+	ltmBackfillDefaultLimit = 20
+	ltmBackfillMaxLimit     = 100
 	// ltmExcerptMax caps each entry in a search result. A search returns
 	// enough of each entry to JUDGE relevance; the full text is ltm_read's
 	// job, which is why the two are separate tools.
@@ -247,6 +254,22 @@ func ltmTools(lt *LongTerm) ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	backfillSchema, err := tool.ParseSchema(json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"limit": {
+				"type": "integer",
+				"minimum": 1,
+				"maximum": 100,
+				"description": "How many entries to embed in this call (default 20, at most 100). Each one is an embedding call, so this bounds the work."
+			}
+		},
+		"additionalProperties": false
+	}`))
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		{
 			Def: tool.Def{
@@ -350,7 +373,95 @@ func ltmTools(lt *LongTerm) ([]tool.Tool, error) {
 				return handleLTMPrune(ctx, lt, args)
 			},
 		},
+		{
+			Def: tool.Def{
+				Name: "ltm_backfill",
+				Description: "Embed archive entries that have no vector, so search can find them by meaning as well " +
+					"as by word. Entries written before this navi had an embedding model are keyword-searchable and not " +
+					"semantic-searchable, and that is normal rather than a fault. This is the deliberate way to fix it: " +
+					"nothing embeds the archive on its own. Bounded per call (each entry costs an embedding call), and " +
+					"reports how many entries still need it, so call it repeatedly until 'remaining' is 0. Does nothing " +
+					"if this navi has no embedding model declared.",
+				InputSchema:   backfillSchema,
+				OutputFormat:  "json",
+				Access:        tool.AccessWrite,
+				Timeout:       120 * time.Second,
+				Recovery:      "none",
+				Mode:          tool.ToolModeSequential,
+				Tags:          []string{"memory", "long-term", "archive", "embeddings"},
+				Version:       "0.1.0",
+				PromptSnippet: "ltm_backfill — embed archive entries that have no vector yet",
+				PromptGuidelines: []string{
+					"This is not required for search to work — entries without a vector are still found by their words. Run it when semantic recall is worth the embedding calls.",
+					"Call it repeatedly until 'remaining' is 0; one call embeds at most 'limit' entries.",
+				},
+				SourceInfo: tool.SourceInfo{Origin: tool.OriginBuiltin},
+			},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return handleLTMBackfill(ctx, lt, args)
+			},
+		},
 	}, nil
+}
+
+func handleLTMBackfill(ctx context.Context, lt *LongTerm, args map[string]any) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	limit := ltmBackfillDefaultLimit
+	if raw, ok := args["limit"]; ok {
+		n, ok := raw.(float64)
+		if !ok {
+			return "", fmt.Errorf("ltm_backfill: limit must be an integer")
+		}
+		limit = int(n)
+	}
+	// The bound is enforced here, not trusted from the caller, for the same
+	// reason ltm_search's is: a request beyond the cap is honoured at the cap.
+	if limit <= 0 {
+		limit = ltmBackfillDefaultLimit
+	}
+	if limit > ltmBackfillMaxLimit {
+		limit = ltmBackfillMaxLimit
+	}
+
+	res, err := lt.Backfill(limit)
+	if err != nil {
+		return "", err
+	}
+
+	type embedded struct {
+		ID      string `json:"id"`
+		Excerpt string `json:"excerpt"`
+	}
+	type failure struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	entries := make([]embedded, 0, len(res.Embedded))
+	for _, rec := range res.Embedded {
+		entries = append(entries, embedded{ID: rec.ID, Excerpt: excerpt(rec.Content)})
+	}
+	// Deterministic order, so the same call reports the same thing.
+	failed := make([]failure, 0, len(res.Failed))
+	for id, err := range res.Failed {
+		failed = append(failed, failure{ID: id, Error: err.Error()})
+	}
+	sort.Slice(failed, func(i, j int) bool { return failed[i].ID < failed[j].ID })
+
+	out := struct {
+		Embedded  int        `json:"embedded"`
+		Skipped   int        `json:"skipped"`
+		Remaining int        `json:"remaining"`
+		Entries   []embedded `json:"entries"`
+		Failed    []failure  `json:"failed,omitempty"`
+	}{len(res.Embedded), res.Skipped, res.Remaining, entries, failed}
+
+	body, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func handleLTMWrite(ctx context.Context, lt *LongTerm, args map[string]any) (string, error) {

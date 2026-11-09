@@ -145,6 +145,12 @@ writing an entry costs an embedding call, so a write fails if the embedding
 model is unreachable; and a search quietly falls back to words alone if it is,
 so a temporarily worse result is not a bug you need to report.
 
+Notes you wrote BEFORE this navi had an embedding model have no vector, so they
+are found by their words only. That is normal, not a fault, and ltm_backfill
+fixes it deliberately — it embeds a bounded batch at a time and tells you how
+many entries still need it. Nothing embeds the archive on its own; run it when
+semantic recall over old notes is worth the embedding calls.
+
 **The two are a system, through pointers.** When something belongs in long-term
 but matters to the thought in hand, leave a short-term note naming it — the topic
 and the tag or id you would search by — so a later thought knows to go looking.

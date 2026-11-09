@@ -299,6 +299,99 @@ func idsOf(recs []datastore.MemoryRecord) []string {
 	return out
 }
 
+// BackfillResult reports what a backfill embedded.
+type BackfillResult struct {
+	// Embedded is the entries that gained a vector in this call.
+	Embedded []datastore.MemoryRecord
+	// Skipped is how many candidates were examined and left alone — either
+	// because they already had a vector of the active dimension, or because
+	// the limit was reached.
+	Skipped int
+	// Remaining is how many more entries still lack a vector after this call,
+	// so a caller can tell "the archive is fully embedded" from "there is
+	// more" without a second call. It is a fact about the archive, not a
+	// restatement of the limit.
+	Remaining int
+	// Failed is the ids whose embedding errored. A backfill is a batch, so one
+	// unreachable moment should not abandon the rest; the failures are
+	// reported so they can be retried rather than silently lost.
+	Failed map[string]error
+}
+
+// Backfill embeds archive entries that have no vector, up to limit entries.
+//
+// It exists because an archive is heterogeneous by design (ADR 0040 decision 5):
+// an entry written before an embedder was declared is keyword-searchable and not
+// semantic-searchable, and that is not an error. This is the **explicit**
+// remedy — a tool the operator or the navi invokes deliberately — and
+// deliberately not a background pass: a job that embeds the whole archive on
+// startup is exactly the "runtime pass that decides what matters without the
+// reasoning the thought just did" ADR 0037 decision 9 rejects.
+//
+// It is bounded for the same reason every other archive operation is (ADR 0037
+// decision 3): each entry costs a network call to the embedder, so an unbounded
+// backfill of a large archive would be a way to hang a thought rather than
+// inform it. A caller that wants the whole archive embedded calls this until
+// Remaining is zero, and can see how far it has to go.
+//
+// A failure on one entry does not abandon the batch — the failures are collected
+// and reported, because an archive is embedded over time and a single
+// unreachable moment should not lose the rest of the work.
+func (l *LongTerm) Backfill(limit int) (BackfillResult, error) {
+	res := BackfillResult{Failed: map[string]error{}}
+	if !l.Semantic() {
+		return res, fmt.Errorf("memory: backfill requires both an embedder and a vector index")
+	}
+	if limit <= 0 {
+		return res, fmt.Errorf("memory: backfill requires a positive limit")
+	}
+
+	// Every archive entry, unranked: the candidates are "what has no vector",
+	// which is a property of the archive rather than of a query.
+	recs, err := l.Search(SearchQuery{})
+	if err != nil {
+		return res, err
+	}
+	dims := l.embedder.Dimensions()
+
+	// One lookup for the whole candidate set, so the loop below does not do a
+	// query per entry.
+	ids := make([]string, 0, len(recs))
+	for _, r := range recs {
+		ids = append(ids, r.ID)
+	}
+	have, err := l.vectors.Vectors(ids, dims)
+	if err != nil {
+		return res, err
+	}
+
+	for _, rec := range recs {
+		if len(res.Embedded) >= limit {
+			res.Skipped++
+			continue
+		}
+		if _, ok := have[rec.ID]; ok {
+			res.Skipped++
+			continue
+		}
+		vec, err := l.embedder.Embed(context.Background(), rec.Content)
+		if err != nil {
+			res.Failed[rec.ID] = err
+			continue
+		}
+		if err := l.vectors.PutVector(rec.ID, vec); err != nil {
+			res.Failed[rec.ID] = err
+			continue
+		}
+		res.Embedded = append(res.Embedded, rec)
+	}
+	res.Remaining = len(recs) - len(have) - len(res.Embedded)
+	if res.Remaining < 0 {
+		res.Remaining = 0
+	}
+	return res, nil
+}
+
 // Prune removes archive entries matching the filter, and returns what it
 // removed so the caller can report it (ADR 0037 decision 7: retention is a
 // deliberate act, never a background heuristic — so this is a tool, and the
