@@ -22,7 +22,10 @@ const (
 	frameHeaderRows = 1 // the optional header line inside the panel
 	frameBorderRows = 2 // the top and bottom panel edges
 	frameFooterRows = 1 // the status/help line below the panel
-	frameInputRows  = 1 // the optional input line below the panel
+	frameInputRows  = 1 // the optional input line inside the panel
+	// frameInputSpacerRows is the blank row between the body and the input, so
+	// the composer is not pressed against the conversation it belongs to.
+	frameInputSpacerRows = 1
 	// frameBaseChrome includes the vertical padding rows, which are part of
 	// the panel's chrome rather than its content.
 	frameBaseChrome = frameBorderRows + frameFooterRows + 2*panelPadY
@@ -156,14 +159,17 @@ func (f frame) innerWidth() int {
 }
 
 // chromeRows is the chrome this frame actually spends: the borders and footer
-// always, the header row only when there is something to say in it.
+// always, the header row only when there is something to say in it, and the
+// input block (a blank spacer plus the input line) only when the frame takes
+// typing. It is the ONE place the chrome is counted, so render's own layout
+// cannot drift from what bodyHeight hands a screen.
 func (f frame) chromeRows() int {
 	n := frameBaseChrome
 	if f.hasHeader {
 		n += frameHeaderRows
 	}
 	if f.inputPrompt != "" {
-		n += frameInputRows
+		n += frameInputRows + frameInputSpacerRows
 	}
 	return n
 }
@@ -189,108 +195,185 @@ func (f frame) tooNarrow() bool { return f.width < narrowFloor }
 // body.
 func (f frame) tooShort() bool { return f.height < f.chromeRows()+minBodyRows }
 
-// render assembles header + rule + body + rule + footer, each line fitted to
-// the frame width and the whole thing fitted to the frame height. body is
-// clipped to bodyHeight rows and every one of its lines is truncated to the
-// width, so a screen cannot overflow the frame even if it tries.
+// render assembles the panel: a lipgloss-drawn rounded border with the title
+// and status set into its top edge, the body inside, and the footer beneath.
+//
+// The panel box is lipgloss's (Style.Border/Width/Height/Padding), not hand-
+// drawn runes. Width and Height are the CONTENT box — lipgloss draws the
+// border outside them and padding inside — so the style is given the terminal
+// size less the border, which is the one piece of arithmetic this function
+// owns. The frame's contract is unchanged and is what the goldens assert: the
+// output is EXACTLY height lines of EXACTLY width display columns.
 func (f frame) render(header string, body []string, footer string) string {
-	// The screen is ONE panel with a clipped-corner frame: a titled top edge,
-	// side rails, and a bottom edge. This is the augmented-ui treatment — a
-	// notched module rather than a plain box — applied to opencode's
-	// structure, where the chrome exists to divide the view rather than to
-	// decorate it.
-	b := borderClipped()
-	rail := f.theme.Subtle
-
-	// The title is left-aligned on the top edge and the status is
-	// right-aligned, with the rule filling between them. The status is
-	// dropped before the title is, because the title says where you are and
-	// the status only says how the view is behaving.
-	title := f.theme.panelTitle(f.title)
-	status := ""
-	if f.status != "" {
-		// The suffix's colour is the screen's choice (see statusStyle), so a
-		// lifecycle state reads the same here as it does in a table cell.
-		st := f.statusStyle
-		if st == nil {
-			st = f.theme.Subtle
-		}
-		status = st("┤ " + f.status + " ├")
+	// The panel's inner box: everything but the footer, which sits outside the
+	// border. lipgloss's Width/Height exclude the border (2 cells) and include
+	// padding, so the border is what gets subtracted here.
+	panelH := f.height - frameFooterRows
+	contentW := f.width - 2 // left and right border
+	contentH := panelH - 2  // top and bottom border
+	if contentW < 1 {
+		contentW = 1
 	}
-	fill := f.width - 2 - 2*panelPad - displayWidth(title) - displayWidth(status)
-	if fill < 0 {
-		// Not enough room for both: drop the status, then let the title clip.
-		status = ""
-		fill = f.width - 2 - 2*panelPad - displayWidth(title)
-	}
-	// The title sits inside the corner with a gutter, matching the body, so
-	// the label lines up with the content beneath it rather than with the
-	// frame's own edge.
-	top := b.TopLeft + strings.Repeat(b.Top, panelPad) + title +
-		strings.Repeat(b.Top, maxInt(0, fill)) + status +
-		strings.Repeat(b.Top, panelPad) + b.TopRight
-
-	// Every interior line is railed on BOTH sides, with a gutter between the
-	// rail and the content. The gutter is what stops the panel from reading as
-	// a cramped box: content pressed against the rail has no margin, and the
-	// eye has nothing to separate the frame from what it frames.
-	//
-	// The gutter is symmetric — the same on the left and the right — so a
-	// centred or right-aligned cell lines up with the same margin as a
-	// left-aligned one.
-	const gutter = panelPad
-	inner := maxInt(1, f.width-2*gutter-2)
-	line := func(content string) string {
-		return pad(rail(b.Left)+strings.Repeat(" ", gutter)+
-			pad(content, inner)+strings.Repeat(" ", gutter)+rail(b.Right), f.width)
+	if contentH < 1 {
+		contentH = 1
 	}
 
-	lines := make([]string, 0, f.height)
-	lines = append(lines, pad(top, f.width))
-	// Blank rows inside the panel, top and bottom, so the content is not
-	// pressed against the frame's own edges. Without them the first body line
-	// reads as part of the border and the last as part of the footer.
+	// The panel's content: vertical padding rows top and bottom, the optional
+	// header row, then the body clipped to what is left, then the input line.
+	// Every line is laid out to the content width by lipgloss, so a screen
+	// cannot overflow the frame even if it tries.
+	inner := make([]string, 0, contentH)
 	for i := 0; i < panelPadY; i++ {
-		lines = append(lines, line(""))
+		inner = append(inner, "")
 	}
 	if f.hasHeader {
-		lines = append(lines, line(header))
+		inner = append(inner, fit(header, contentW-2*panelPad))
 	}
-
-	bh := f.bodyHeight()
-	for i := 0; i < bh; i++ {
+	// The body takes exactly the rows bodyHeight() promises a screen, so the
+	// layout a screen sized itself against and the layout render produces are
+	// the same number by construction rather than by two matching sums.
+	bodyRows := f.bodyHeight()
+	// The content box is contentH rows and already holds the padding, header,
+	// and input block; the body gets what is left of it.
+	if room := contentH - len(inner) - panelPadY - inputBlockRows(f); room < bodyRows {
+		bodyRows = room
+	}
+	if bodyRows < 0 {
+		bodyRows = 0
+	}
+	// Body lines are fitted to the content width BEFORE the panel style sees
+	// them. lipgloss's Width WRAPS overflow rather than clipping it, so an
+	// over-long line would consume extra rows and push the bottom border and
+	// footer out of the frame — which is exactly what a narrow terminal does
+	// to the too-narrow notice. Fitting first keeps one row per line.
+	for i := 0; i < bodyRows; i++ {
 		var content string
 		if i < len(body) {
 			content = body[i]
 		}
-		lines = append(lines, line(content))
+		inner = append(inner, fit(content, contentW-2*panelPad))
 	}
-
-	// The input line sits inside the panel above the bottom edge, where a
-	// chat's composer belongs: it reads as part of the conversation rather
-	// than as a separate bar, and the panel's own frame contains it.
 	if f.inputPrompt != "" {
-		lines = append(lines, line(""))
-		lines = append(lines, line(f.inputPrompt+" "+f.input))
+		inner = append(inner, "")
+		inner = append(inner, fit(f.inputPrompt+" "+f.input, contentW-2*panelPad))
 	}
-
 	for i := 0; i < panelPadY; i++ {
-		lines = append(lines, line(""))
+		inner = append(inner, "")
 	}
-	bottom := b.BottomLeft + strings.Repeat(b.Bottom, maxInt(0, f.width-2)) + b.BottomRight
-	lines = append(lines, pad(bottom, f.width))
-	lines = append(lines, pad(footer, f.width))
+	// The content box is exactly contentH rows; pad or clip to it so the
+	// border always closes on the row the frame promised.
+	for len(inner) < contentH {
+		inner = append(inner, "")
+	}
+	if len(inner) > contentH {
+		inner = inner[:contentH]
+	}
 
-	// The frame promises exactly `height` lines; clip if a caller's chrome
-	// arithmetic ever disagrees, and pad if the terminal is taller than the
-	// chrome plus the floor.
+	panel := f.theme.panelStyle().
+		Padding(0, panelPad).
+		Width(contentW).
+		Height(contentH).
+		Render(strings.Join(inner, "\n"))
+
+	lines := strings.Split(panel, "\n")
+	// Replace lipgloss's plain top edge with a titled one. lipgloss has no
+	// titled-border primitive, so the label is composited onto the edge with
+	// JoinHorizontal over width-fitted blocks — the library's own composition
+	// rather than character arithmetic.
+	if len(lines) > 0 {
+		lines[0] = f.titledEdge()
+	}
+	// And the bottom edge keeps lipgloss's runes; only the top carries a label.
+	for len(lines) < panelH {
+		lines = append(lines, "")
+	}
+	if len(lines) > panelH {
+		lines = lines[:panelH]
+	}
+	// The footer is fitted, NOT sanitized: its dynamic parts are sanitized at
+	// their source (footerLine), and running sanitizeLine over the composed
+	// line would rewrite the ESC byte of its own styling into a literal `[` —
+	// sanitizeLine neutralizes control characters, and an escape sequence is
+	// one.
+	lines = append(lines, fit(footer, f.width))
+
+	// The contract: exactly height lines of exactly width columns.
 	if len(lines) > f.height {
 		lines = lines[:f.height]
 	}
 	for len(lines) < f.height {
 		lines = append(lines, strings.Repeat(" ", f.width))
 	}
+	for i, l := range lines {
+		lines[i] = fit(l, f.width)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// inputBlockRows is the rows the input block spends inside the panel: a blank
+// spacer and the input line itself. Zero when the frame takes no typing.
+func inputBlockRows(f frame) int {
+	if f.inputPrompt == "" {
+		return 0
+	}
+	return frameInputRows + frameInputSpacerRows
+}
+
+// titledEdge draws the panel's top edge with the title and status set into it:
+// `╭─┤ title ├────┤ status ├─╮`. The label and the status are fitted blocks
+// joined with the border's own rule runes, so the edge is exactly the frame
+// width whatever the label's length.
+//
+// lipgloss has no titled-border primitive, so this composites one — but from
+// styled blocks and the border's own runes, with the widths measured by
+// lipgloss.Width, rather than from character arithmetic on a private
+// vocabulary of glyphs. When there is no status the status segment is absent
+// entirely, not an empty `┤ ├` pair.
+func (f frame) titledEdge() string {
+	b := panelBorder()
+	rule := f.theme.border // the border's own runes, in the chrome colour
+
+	const pad = panelPad
+	left := rule(b.TopLeft + strings.Repeat(b.Top, pad))
+	right := rule(strings.Repeat(b.Top, pad) + b.TopRight)
+
+	title := f.theme.panelTitle(f.title)
+	status := f.theme.panelStatus(f.status, f.statusStyle)
+
+	// Each labelled block is `┤ <label> ├`, with the runes styled as border and
+	// the label in its own style. An absent label contributes no block at all,
+	// so an untitled panel is a plain edge rather than a dangling `┤ ├`.
+	block := func(label string) string {
+		if label == "" {
+			return ""
+		}
+		return rule(b.Top+"┤ ") + label + rule(" "+b.Top)
+	}
+	titleBlock := block(title)
+	statusBlock := block(status)
+
+	// The status is dropped before the title is, because the title says where
+	// you are and the status only says how the view is behaving.
+	compose := func(t, s string) string {
+		return left + t + rule(b.Top) + s + right
+	}
+	edge := compose(titleBlock, statusBlock)
+	if displayWidth(edge) > f.width && statusBlock != "" {
+		edge = compose(titleBlock, "")
+	}
+	// Pad the run between the blocks so the edge reaches the frame width.
+	if gap := f.width - displayWidth(edge); gap > 0 {
+		// Rebuild with the filler inserted before the status (or before the
+		// right corner when there is none), so the status stays flush right.
+		tail := statusBlock + right
+		head := left + titleBlock
+		if statusBlock == "" {
+			head = left + titleBlock
+		}
+		head += rule(b.Top)
+		edge = head + rule(strings.Repeat(b.Top, gap)) + tail
+	}
+	return fit(edge, f.width)
 }
 
 // splitColumns divides available width into a left pane of leftFrac and a
@@ -326,9 +409,9 @@ func (f frame) joinColumns(left []string, leftW int, right []string, rightW int,
 		if i < len(right) {
 			r = right[i]
 		}
-		line := pad(l, leftW)
+		line := fit(l, leftW)
 		if rightW > 0 {
-			line += " " + pad(r, rightW)
+			line += " " + fit(r, rightW)
 		}
 		out = append(out, line)
 	}

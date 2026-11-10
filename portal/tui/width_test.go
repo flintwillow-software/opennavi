@@ -112,14 +112,16 @@ func TestTruncateRespectsDisplayWidth(t *testing.T) {
 	}
 }
 
-// TestPadProducesExactWidth pins the padding helper: the result is always
+// TestFitProducesExactWidth pins the fitting helper: the result is always
 // exactly the requested display width, which is what keeps columns aligned.
-func TestPadProducesExactWidth(t *testing.T) {
+// It is lipgloss's MaxWidth/Width under the hood, so this is the assertion
+// that the library's layout gives the guarantee the grid depends on.
+func TestFitProducesExactWidth(t *testing.T) {
 	for _, s := range []string{"", "a", "hello", "日本語", "🎉🎉", "mixed 日 🎉 text", "a very long value that must be cut"} {
 		for _, w := range []int{1, 5, 10, 20} {
-			got := pad(s, w)
+			got := fit(s, w)
 			if gw := displayWidth(got); gw != w {
-				t.Errorf("pad(%q, %d) = %q, width %d, want %d", s, w, got, gw, w)
+				t.Errorf("fit(%q, %d) = %q, width %d, want %d", s, w, got, gw, w)
 			}
 		}
 	}

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/flintwillow-software/opennavi/object"
 	"github.com/flintwillow-software/opennavi/portal"
@@ -2210,20 +2211,24 @@ func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
 // the tail would render every row as the same constant prefix and leave the
 // reader unable to tell two records apart — which is what made a list of three
 // different thoughts look like three copies of one row.
+// alignCell lays a cell value out to exactly width display columns, aligned by
+// the column's kind. It is lipgloss's own Align/Width/MaxWidth rather than
+// hand-written space arithmetic: the style truncates by display width and pads
+// to the same width, so a wide rune cannot shift the columns after it
+// (NAVI-588) and the escape codes a styled cell carries never count toward the
+// width.
 func alignCell(s string, width int, a align) string {
+	if width <= 0 {
+		return ""
+	}
+	// Truncate before aligning, for the same reason fit does: Width WRAPS
+	// overflow rather than clipping it, and a table cell that wrapped would
+	// break the row.
 	s = truncate(s, width, "…")
-	space := width - displayWidth(s)
-	if space <= 0 {
-		return s
-	}
-	switch a {
-	case alignRight:
-		return strings.Repeat(" ", space) + s
-	case alignCenter:
-		left := space / 2
-		return strings.Repeat(" ", left) + s + strings.Repeat(" ", space-left)
-	}
-	return s + strings.Repeat(" ", space)
+	return lipgloss.NewStyle().
+		Width(width).
+		Align(a.position()).
+		Render(s)
 }
 
 // align is how a column's values sit within their width. Alignment follows
@@ -2236,6 +2241,18 @@ const (
 	alignRight
 	alignCenter
 )
+
+// position maps the column vocabulary onto lipgloss's, so the alignment a
+// descriptor's field kind implies is expressed in the library's terms.
+func (a align) position() lipgloss.Position {
+	switch a {
+	case alignRight:
+		return lipgloss.Right
+	case alignCenter:
+		return lipgloss.Center
+	}
+	return lipgloss.Left
+}
 
 // alignFor picks the alignment for a field kind.
 func alignFor(k object.Kind) align {
@@ -2552,7 +2569,7 @@ func (m *tuiModel) bodyDetail(f frame) []string {
 	for _, s := range d.Sections {
 		out = append(out, " "+m.theme.Subtle(sanitizeLine(s.Label)))
 		for _, field := range s.Fields {
-			line := "   " + pad(sanitizeLine(field.Label), labelW) + " " +
+			line := "   " + fit(sanitizeLine(field.Label), labelW) + " " +
 				truncate(sanitizeLine(field.Value), f.innerWidth()-4-labelW-1, "…")
 			out = append(out, line)
 		}

@@ -1,6 +1,5 @@
-╱──┤ chat · t-run ├───────────────────┤ live · following ├─┐
+╭──┤ chat · t-run ────────────────────┤ live · following ──╮
 │                                                          │
-│   summarise the release notes                            │
 │                                                          │
 │ ├─ thinking ──────────────────────────────────────────── │
 │   the user wants the highlights, not every commit        │
@@ -17,4 +16,5 @@
 │                                                          │
 │ steer › █                                                │
 │                                                          │
-└──────────────────────────────────────────────────────────╱
+╰──────────────────────────────────────────────────────────╯
+ transcript t-run: object: unknown detail enter send · ctrl…

@@ -134,66 +134,64 @@ func (t theme) Confirm(s string) string   { return t.apply(t.confirm, s) }
 
 // ── panel chrome ───────────────────────────────────────────────────────
 
-// The panel vocabulary is opencode's spatial structure with augmented-ui's
-// visual language: the screen is divided into named panels that are visibly
-// delineated, and the delineation is a clipped-corner frame rather than a
-// plain rectangle.
+// The chrome is lipgloss's own: `RoundedBorder()` drawn by a `Style`, sized
+// with `Width`/`Height`, and composed with `JoinHorizontal` where a label sits
+// in the top edge. Nothing here draws a border rune by hand.
 //
-// augmented-ui's signature is a CLIPPED corner — one or more corners cut away
-// with the edge running at an angle. In terminal runes the translation is a
-// diagonal glyph against straight edges, which is what borderClipped is. The
-// heavy top edge (borderBand) is the second augmented-ui idiom: a header band
-// that reads as a labelled module rather than a box.
+// This replaced a hand-rolled clipped-corner frame (an augmented-ui pastiche)
+// so the TUI uses the library's presets and patterns rather than a private
+// vocabulary of glyphs — see the ADR 0038 amendment. The border is one line to
+// change if a different preset reads better.
 
-// borderClipped cuts the top-left and bottom-right corners, so the frame reads
-// as a notched module. Opposite-diagonal cuts are the augmented-ui signature.
-func borderClipped() lipgloss.Border {
-	return lipgloss.Border{
-		Top: "─", Bottom: "─", Left: "│", Right: "│",
-		TopLeft: "╱", TopRight: "┐", BottomLeft: "└", BottomRight: "╱",
-	}
-}
-
-// borderBand is a heavy top edge with a light body: a header band.
-func borderBand() lipgloss.Border {
-	return lipgloss.Border{
-		Top: "━", Bottom: "─", Left: "│", Right: "│",
-		TopLeft: "┏", TopRight: "┓", BottomLeft: "└", BottomRight: "┘",
-	}
-}
-
-// borderRail is opencode's rail: a single heavy vertical on the left, with a
-// notch at each end, and no other edges.
-func borderRail() lipgloss.Border {
-	return lipgloss.Border{Left: "┃", TopLeft: "╻", BottomLeft: "╹"}
-}
-
-// panelStyle is the border style panels use. It is one function so the whole
+// panelBorder is the border every panel draws. It is one function so the whole
 // app's chrome changes in one place.
+func panelBorder() lipgloss.Border { return lipgloss.RoundedBorder() }
+
+// panelStyle is the style a panel's box is drawn with. Width and Height are
+// the CONTENT box (lipgloss adds the border outside them, and padding inside),
+// so a caller passing a terminal size subtracts the border — see frame.render,
+// which is the only place that arithmetic lives.
 func (t theme) panelStyle() lipgloss.Style {
-	if !t.colored {
-		// An uncoloured theme still draws the structure — the border is
-		// layout, not decoration — but without the accent.
-		return lipgloss.NewStyle().Border(borderClipped())
+	s := lipgloss.NewStyle().Border(panelBorder())
+	if t.colored {
+		s = s.BorderForeground(t.accent)
 	}
-	return lipgloss.NewStyle().
-		Border(borderClipped()).
-		BorderForeground(t.accent)
+	return s
 }
 
-// panelTitle renders a title for a panel's top edge: a short label in the
-// accent colour, prefixed by a rule stub, so a panel announces what it holds
-// the way augmented-ui's labelled modules do.
+// border styles a run of border runes in the chrome colour, so a hand-built
+// edge (a titled top line, which lipgloss has no primitive for) matches the
+// border lipgloss draws around the rest of the panel.
+func (t theme) border(s string) string {
+	if !t.colored {
+		return s
+	}
+	return lipgloss.NewStyle().Foreground(t.accent).Render(s)
+}
+
+// panelTitle is a panel's label, styled. It is a plain string with colour, not
+// a rune-composed band: the caller lays it out with Width/Align, so the
+// placement is lipgloss's arithmetic rather than this function's.
 func (t theme) panelTitle(label string) string {
 	if label == "" {
 		return ""
 	}
-	stub := "─┤ "
-	close_ := " ├"
 	if !t.colored {
-		return stub + label + close_
+		return label
 	}
-	return t.subtle.Render(stub) + t.title.Render(label) + t.subtle.Render(close_)
+	return t.title.Render(label)
+}
+
+// panelStatus is a panel's state suffix, styled by the caller's chosen style
+// (a lifecycle colour) so a status reads the same here as in a table cell.
+func (t theme) panelStatus(s string, style func(string) string) string {
+	if s == "" {
+		return ""
+	}
+	if style == nil {
+		style = t.Subtle
+	}
+	return style(s)
 }
 
 // statusStyle picks the style for a lifecycle status. It is the ONE place the
@@ -226,35 +224,53 @@ func (t theme) Status(value, aligned string, width int, a align) string {
 	if !t.colored {
 		return aligned
 	}
-	style := t.statusStyle(value)
-	// Render only the trimmed value, then re-pad, so the escape codes never
-	// count toward the column width.
+	// Render only the trimmed value, then lay it out with lipgloss's own
+	// Align/Width/MaxWidth, so the escape codes never count toward the column
+	// width and the cell lands exactly where the grid put it.
 	trimmed := strings.TrimSpace(aligned)
-	rendered := style.Render(trimmed)
-	space := width - displayWidth(trimmed)
-	if space <= 0 {
-		return rendered
+	if width <= 0 {
+		return t.statusStyle(value).Render(trimmed)
 	}
-	switch a {
-	case alignRight:
-		return strings.Repeat(" ", space) + rendered
-	case alignCenter:
-		left := space / 2
-		return strings.Repeat(" ", left) + rendered + strings.Repeat(" ", space-left)
-	}
-	return rendered + strings.Repeat(" ", space)
+	// Truncate before aligning: Width wraps overflow, and a wrapped cell would
+	// break the row (see fit).
+	trimmed = truncate(trimmed, width, "…")
+	return t.statusStyle(value).
+		Width(width).
+		Align(a.position()).
+		Render(trimmed)
 }
 
 // ── rune-correct text helpers ───────────────────────────────────────────
 
 // displayWidth is the terminal cell width of s, in columns rather than bytes,
 // so a CJK or emoji cell is measured by what it occupies (NAVI-588's table
-// bug: byte padding shifted every column after a wide rune).
-func displayWidth(s string) int { return ansi.StringWidth(s) }
+// bug: byte padding shifted every column after a wide rune). lipgloss.Width is
+// the library's own measurement and is what every layout call uses.
+func displayWidth(s string) int { return lipgloss.Width(s) }
 
-// truncate cuts s to at most width display columns, appending tail when it
-// had to cut. It is rune- and width-aware, so it never splits a multi-byte
-// rune or a wide glyph in half, and the result is never wider than width.
+// fit lays s out to EXACTLY width display columns, truncating with an ellipsis
+// when it is too long and padding with spaces when it is short.
+//
+// It replaces fmt.Sprintf("%-*s", …), which padded by byte length and so
+// misaligned every column after a non-ASCII value (NAVI-588).
+//
+// The truncation is explicit rather than left to lipgloss's MaxWidth, because
+// Width WRAPS content that overflows it — which is right for a paragraph and
+// wrong for a line that must occupy exactly one row (a footer, a table cell, a
+// border edge). Truncating first and then padding with Width gives one row of
+// exactly width columns, which is the guarantee every caller relies on.
+func fit(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = truncate(s, width, "…")
+	return lipgloss.NewStyle().Width(width).Render(s)
+}
+
+// truncate cuts s to at most width display columns, appending tail when it had
+// to cut. lipgloss has no tail-marker truncation primitive, so this is the
+// library's own ansi.Truncate (which is what lipgloss calls internally); it is
+// rune- and width-aware and never splits a multi-byte rune or a wide glyph.
 func truncate(s string, width int, tail string) string {
 	if width <= 0 {
 		return ""
@@ -266,8 +282,10 @@ func truncate(s string, width int, tail string) string {
 }
 
 // truncateLeft cuts from the LEFT, keeping the tail, and marks the cut at the
-// front. It is the identity-column rule: a generated id's distinguishing
-// characters are at the end, so the tail is what the reader needs.
+// front. It is the identity-column rule (NAVI-600): a generated id's
+// distinguishing characters are at the end, so the tail is what the reader
+// needs. lipgloss has no left-truncate primitive, so this composes
+// ansi.TruncateLeft with the same width measurement everything else uses.
 func truncateLeft(s string, width int, marker string) string {
 	if width <= 0 {
 		return ""
@@ -280,15 +298,4 @@ func truncateLeft(s string, width int, marker string) string {
 		return truncate(s, width, "")
 	}
 	return marker + ansi.TruncateLeft(s, displayWidth(s)-(width-mw), "")
-}
-
-// pad right-pads s to exactly width display columns, truncating first when it
-// is too long. This replaces fmt.Sprintf("%-*s", …), which padded by byte
-// length and so misaligned every column after a non-ASCII value.
-func pad(s string, width int) string {
-	s = truncate(s, width, "…")
-	if w := displayWidth(s); w < width {
-		return s + strings.Repeat(" ", width-w)
-	}
-	return s
 }

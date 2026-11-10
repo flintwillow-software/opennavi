@@ -134,7 +134,10 @@ func TestGoldenHomeAtFixedSizes(t *testing.T) {
 			// Make the running thought home's tracked one, with a conversation
 			// worth pinning rather than an empty viewport.
 			m.homeID = "t-run"
-			m.loadTranscript("t-run")
+			// Seed the conversation directly rather than through
+			// loadTranscript: the fixture's surface has no transcript detail,
+			// so a load would only set an error status the golden would then
+			// pin as if it were the screen's real state.
 			m.chat.reset([]turn{
 				{role: TurnUser, text: "summarise the release notes"},
 				{role: TurnAssistant, text: "Here are the highlights:\n1. terminal sizing\n2. rune-correct columns"},
