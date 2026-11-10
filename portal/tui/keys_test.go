@@ -271,14 +271,12 @@ func TestInputOwnsKeyboardIsTheOnePredicate(t *testing.T) {
 		want    bool
 	}{
 		{"input flow", ModeInput, false, "", "", "", true},
-		// Home steers the tracked thought, so its input owns the keyboard —
-		// but only when there IS a thought to steer (the empty state draws no
-		// box, so `n` must work there).
-		{"home with a running thought", ModeHome, true, "t1", "", "running", true},
+		// Home has NO editor (it is watch-only), so nothing there ever owns the
+		// keyboard: the action letters and `n` work without blurring.
+		{"home with a running thought", ModeHome, true, "t1", "", "running", false},
 		{"home empty", ModeHome, true, "", "", "", false},
-		{"home blurred", ModeHome, false, "t1", "", "running", false},
-		{"home with a finished thought", ModeHome, true, "t1", "", "complete", false},
 		{"live with a thought", ModeLive, true, "", "t1", "", true},
+		{"live blurred", ModeLive, false, "", "t1", "", false},
 		{"live empty", ModeLive, true, "", "", "", false},
 		{"list", ModeList, true, "", "", "", false},
 		{"detail", ModeDetail, true, "", "", "", false},

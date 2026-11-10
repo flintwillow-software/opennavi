@@ -789,14 +789,20 @@ func (m *tuiModel) trackRunning(changed string) {
 	}
 	next, ok := m.firstRunning()
 	if !ok {
-		// Nothing is running. Keep a finished conversation on screen (rule 2);
-		// only fall to the empty state when the tracked thought is gone from
-		// the page, or there was never one.
-		if m.homeID != "" && m.isOnPage(m.homeID) {
+		// Nothing is running: home is done with the finished thought and falls
+		// to its empty state (the splash when nothing is queued either).
+		//
+		// The finished transcript STAYS on a thought's OWN page (ModeLive) —
+		// you opened it deliberately, and it must not vanish when it completes
+		// — but home is a screen for watching, and leaving the last finished
+		// conversation there means home never returns to its own state.
+		if m.homeID == "" {
 			return
 		}
 		m.homeID = ""
-		m.chat.reset(nil)
+		if m.mode == ModeHome {
+			m.chat.reset(nil)
+		}
 		return
 	}
 	if next == m.homeID {
@@ -1440,10 +1446,9 @@ func (m *tuiModel) inputOwnsKeyboard() bool {
 	if m.mode == ModeInput {
 		return true
 	}
-	if m.mode == ModeHome || m.mode == ModeLive {
-		// The editor is only PRESENT where there is something to steer. Home
-		// with nothing running shows no box, so nothing owns the keyboard
-		// there and `n` (and the action letters) work without blurring first.
+	if m.mode == ModeLive {
+		// The editor is present only when there is a thought open; a live mode
+		// with nothing in it draws no box, so nothing owns the keyboard.
 		return m.inputFocused && m.editorPresent()
 	}
 	return false
@@ -1464,8 +1469,6 @@ func (m *tuiModel) editorPresent() bool {
 	switch m.mode {
 	case ModeInput:
 		return true
-	case ModeHome:
-		return m.steerable(m.homeID)
 	case ModeLive:
 		return m.liveID != ""
 	}
@@ -1949,20 +1952,15 @@ func (m *tuiModel) render() string {
 	// tracking, which is the whole point of watching it) and a thought's own
 	// page. The label is the ACTION, not a prompt glyph, in the same
 	// vocabulary a turn uses.
-	if m.mode == ModeHome || m.mode == ModeLive || m.mode == ModeInput {
-		switch {
-		case m.mode == ModeInput:
+	// The editor region is on a THOUGHT'S OWN PAGE, and in the enqueue flow.
+	// Home has NO editor: it is for watching, and `enter` there opens the
+	// thought's page — the same gesture as `enter` on a queue row opening its
+	// detail. Putting a steer box on a screen you scan for state is a field
+	// competing with the one gesture the screen is for.
+	if m.mode == ModeLive || m.mode == ModeInput {
+		if m.mode == ModeInput {
 			f.inputPrompt = m.enqueueLabel()
-		case m.mode == ModeHome && m.homeID == "":
-			// Nothing running: home's empty state has no steer target, so the
-			// box would be a field with nothing to send to.
-			f.inputPrompt = ""
-		case m.mode == ModeHome && !m.steerable(m.homeID):
-			// Home is still SHOWING a finished thought (its transcript stays
-			// on screen, NAVI-587), but a finished thought cannot be steered —
-			// so the box would be a field whose only outcome is a refusal.
-			f.inputPrompt = ""
-		default:
+		} else {
 			f.inputPrompt = "steer"
 		}
 		f.inputFocused = m.inputFocused

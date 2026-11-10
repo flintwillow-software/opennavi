@@ -85,11 +85,13 @@ func TestHomeIsTheDefaultScreen(t *testing.T) {
 	if !strings.Contains(view, "task h1") {
 		t.Errorf("home does not show the thought's conversation:\n%s", view)
 	}
-	// Home STEERS the thought it is tracking: watching a running thought and
-	// talking to it are the same gesture, and `enter` opens its own page (the
-	// way `enter` on a queue row opens detail).
-	if !strings.Contains(view, "─ steer ─") {
-		t.Errorf("home has no steer box for the running thought:\n%s", view)
+	// Home has NO editor: it is for watching, and `enter` opens the thought's
+	// own page, where the steer box lives.
+	if strings.Contains(view, "─ steer ─") {
+		t.Errorf("home has a steer box; it should be watch-only:\n%s", view)
+	}
+	if !strings.Contains(view, "home · h1") {
+		t.Errorf("home does not name the thought it is watching:\n%s", view)
 	}
 }
 
@@ -253,25 +255,22 @@ func TestHomeFollowsTheRunningThought(t *testing.T) {
 		t.Errorf("home did not re-derive onto the next running thought:\n%s", m.View())
 	}
 
-	// Nothing running: the FINISHED CONVERSATION STAYS ON SCREEN. Watching a
-	// thought finish and then reading its result is the point of home; blanking
-	// the transcript at the moment it completes destroys what the reader was
-	// waiting for. The status suffix says so instead.
+	// Nothing running: home returns to its OWN state. It is a screen for
+	// watching, so leaving the last finished conversation on it means home
+	// never gets back to being home. (The thought's own page keeps its
+	// transcript — that is the other half of this rule.)
 	if err := q.Complete("second", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
-	if m.homeID != "second" {
-		t.Fatalf("home tracks %q, want second kept on screen after it completed", m.homeID)
+	if m.homeID != "" {
+		t.Fatalf("home still tracks %q after it finished", m.homeID)
 	}
-	if !strings.Contains(m.View(), "home · second") {
-		t.Errorf("home lost the finished thought's conversation:\n%s", m.View())
+	if strings.Contains(m.View(), "home · second") {
+		t.Errorf("home kept showing the finished thought:\n%s", m.View())
 	}
-	if !strings.Contains(m.View(), "complete") {
-		t.Errorf("home does not say the thought completed:\n%s", m.View())
-	}
-	if strings.Contains(m.View(), "nothing is running") {
-		t.Errorf("home blanked a finished conversation to its empty state:\n%s", m.View())
+	if !strings.Contains(m.View(), "to queue a new thought") {
+		t.Errorf("home did not return to its idle splash:\n%s", m.View())
 	}
 
 	// A new thought starts running: home advances to it.
@@ -287,10 +286,12 @@ func TestHomeFollowsTheRunningThought(t *testing.T) {
 	}
 }
 
-// TestHomeKeepsTheTranscriptWhenTheThoughtCompletes is the regression for the
-// bug found in review: the conversation was wiped the instant the tracked
-// thought finished.
-func TestHomeKeepsTheTranscriptWhenTheThoughtCompletes(t *testing.T) {
+// TestTheThoughtPageKeepsTheTranscriptWhenItCompletes is the regression for
+// the bug found in review: the conversation was wiped the instant the thought
+// finished. It is the thought's OWN page that must keep it — you opened it
+// deliberately. Home is a watching screen and returns to its own state (see
+// TestHomeReturnsToItsEmptyStateWhenTheThoughtFinishes).
+func TestTheThoughtPageKeepsTheTranscriptWhenItCompletes(t *testing.T) {
 	q := newQueue(t)
 	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
@@ -302,6 +303,8 @@ func TestHomeKeepsTheTranscriptWhenTheThoughtCompletes(t *testing.T) {
 		t.Fatal("no claim")
 	}
 	drain(m)
+	// Open the thought's OWN page: that is what must keep its transcript.
+	m.enterLive("done1")
 
 	// A streamed assistant turn lands in the conversation.
 	observe(broker, "done1", agent.AgentEvent{
@@ -322,8 +325,8 @@ func TestHomeKeepsTheTranscriptWhenTheThoughtCompletes(t *testing.T) {
 	if !strings.Contains(view, "the answer is 42") {
 		t.Errorf("the transcript was cleared when the thought completed:\n%s", view)
 	}
-	if !strings.Contains(view, "home · done1") {
-		t.Errorf("home stopped naming the thought it is showing:\n%s", view)
+	if !strings.Contains(view, "chat · done1") {
+		t.Errorf("the thought page stopped naming the thought it is showing:\n%s", view)
 	}
 }
 
@@ -756,28 +759,56 @@ func TestConversationStatusColoursFollowTheStatus(t *testing.T) {
 	}
 }
 
-// TestHomeShowsNoSteerBoxForAFinishedThought: home keeps a finished thought's
-// transcript on screen (NAVI-587), but a finished thought cannot be steered —
-// so the box must not be there. A field whose only outcome is a refusal is the
-// "advertised but does not work" defect in the other direction.
-func TestHomeShowsNoSteerBoxForAFinishedThought(t *testing.T) {
+// TestHomeHasNoSteerBoxInAnyState: home is watch-only. The steer box lives on
+// the thought's own page, reached with `enter`.
+func TestHomeHasNoSteerBoxInAnyState(t *testing.T) {
 	m, _, _ := runningModel(t)
 	resize(m, 120, 30)
-
-	// Running: the steer box is present.
+	for _, st := range []string{"running", "paused", "complete", "failed"} {
+		m.setBadge("r1", func(b *badge) { b.status = st })
+		if strings.Contains(m.View(), "─ steer ─") {
+			t.Errorf("home shows a steer box with status %q:\n%s", st, m.View())
+		}
+	}
+	// But the thought's own page has one.
+	m.enterLive("r1")
 	m.setBadge("r1", func(b *badge) { b.status = "running" })
 	if !strings.Contains(m.View(), "─ steer ─") {
-		t.Fatalf("no steer box for a running thought:\n%s", m.View())
+		t.Errorf("the thought page has no steer box:\n%s", m.View())
+	}
+}
+
+// TestHomeReturnsToItsEmptyStateWhenTheThoughtFinishes: home is for watching,
+// so when the tracked thought finishes home goes back to its own state rather
+// than leaving the finished conversation on screen. (The thought's OWN page
+// keeps its transcript — that is the other half of this rule.)
+func TestHomeReturnsToItsEmptyStateWhenTheThoughtFinishes(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+	resize(m, 120, 30)
+	if err := q.Enqueue(th("f1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+	if m.homeID != "f1" {
+		t.Fatalf("home tracks %q, want f1", m.homeID)
 	}
 
-	// Finished: the transcript stays, the box goes.
-	m.setBadge("r1", func(b *badge) { b.status = "complete" })
-	view := m.View()
-	if strings.Contains(view, "─ steer ─") {
-		t.Errorf("steer box shown for a finished thought:\n%s", view)
+	if err := q.Complete("f1", ""); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(view, "home · r1") {
-		t.Errorf("home stopped showing the finished thought:\n%s", view)
+	drain(m)
+	if m.homeID != "" {
+		t.Fatalf("home still tracks %q after it finished", m.homeID)
+	}
+	// Nothing queued either, so the splash.
+	if !strings.Contains(m.View(), "to queue a new thought") {
+		t.Errorf("home did not return to its idle splash:\n%s", m.View())
 	}
 }
 
