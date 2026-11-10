@@ -1750,66 +1750,87 @@ func (m *tuiModel) doAction(action, id string, prio int) {
 func (m *tuiModel) render() string {
 	f := newFrame(m.width, m.height, m.theme)
 
-	// The panel's top edge is labelled with where you are, the way a titled
-	// module announces its contents. It is the only place the location needs
-	// to be said: a separate header repeating the app's own name ("navi ·
-	// portal") is furniture, and it costs a body row on every screen. The
-	// chat's follow/trim state rides along in the same label rather than
-	// spending a body row of its own.
+	// The HEADER region: where you are on the left, the secondary facts on the
+	// right. The facts are the thought's lifecycle and the view's own state
+	// (following, trimmed) — the things worth a glance that are not identity.
 	f.title = m.panelLabel()
-	f.status = m.chatStatus()
-	f.statusStyle = m.conversationStatusStyle()
+	f.subtitle = m.headerSubtitle()
+	f.subtitleStyle = m.conversationStatusStyle()
+	f.hasHeader = true
 
-	// The conversation screens carry a persistent input: steering the thought
-	// you are watching is the default gesture and must cost no keystroke to
-	// reach (ADR 0038 decision 3). It is not a mode — you type here without
-	// leaving the conversation. The input is CONTEXTUAL: a steer box when a
-	// thought is running, an enqueue box when none is — so there is never a
-	// steer field with no target.
+	// The EDITOR region: present only on screens that take typing. The input
+	// is CONTEXTUAL (ADR 0038 decision 3) — a steer box when a thought is
+	// running, an enqueue box when none is — so there is never a steer field
+	// with no target.
 	if m.mode == ModeLive || m.mode == ModeHome {
-		switch {
-		case m.mode == ModeHome && m.homeID == "":
+		if m.mode == ModeHome && m.homeID == "" {
 			f.inputPrompt = m.enqueuePrompt()
-		case m.mode == ModeHome:
-			f.inputPrompt = "steer ›"
-		default:
+		} else {
 			f.inputPrompt = "steer ›"
 		}
 		if m.inputFocused {
 			f.input = m.input + m.theme.Marker("█")
 		} else {
-			// Blurred: the cursor is gone and the prompt says what the plain
-			// letters now act on, so a reader is never guessing which widget
-			// owns the keyboard.
+			// Blurred: the cursor is gone, so a reader is never guessing which
+			// widget owns the keyboard.
 			f.input = m.input
 		}
 	}
 
-	// The header line exists only to carry a warning. A healthy TUI has
-	// nothing to put here, so it gets no line at all — the frame then spends
-	// that row on content instead of on chrome that says nothing.
-	header := ""
+	// The NOTICE region: the one thing worth interrupting for is an incomplete
+	// view (a dropped stream). It gets its own line above the status bar
+	// rather than being a suffix on the title.
+	if m.lost {
+		f.notice = "stream gap — the portal dropped events (slow UI); this view may be incomplete"
+	}
+	// The diagnostic readout is a notice too: it is information about the
+	// renderer, not about the navi.
 	if m.debug {
-		header = m.theme.Subtle(f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
+		f.notice = f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height)
+		if m.lost {
+			f.notice = "stream gap · " + f.notice
+		}
+		f.noticeStyle = m.theme.Subtle
 	}
-	if gap := terminalSuffix(m); gap != "" {
-		// A dropped-event gap is the one thing worth interrupting the panel
-		// title for: the reader's view is incomplete and nothing else says so.
-		header = m.theme.Warn(strings.TrimPrefix(gap, " · "))
+
+	// The STATUS region: the transient message on the left, the generated help
+	// on the right. The running activity line rides on the left when there is
+	// one, so the thing a thought is DOING right now is visible without
+	// opening it (NAVI-335).
+	f.status = m.status
+	if m.mode == ModeList && m.active != "" {
+		f.status = m.activeID + " · " + m.active
+		if m.status != "" {
+			f.status += "   " + m.status
+		}
 	}
-	f.hasHeader = header != ""
+	f.help = m.helpText(f)
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
-		return f.render(header, []string{
-			"",
-			" " + m.theme.Warn("terminal too narrow") + " — " +
-				m.theme.Subtle("need at least "+itoa(narrowFloor)+" columns, have "+itoa(f.width)),
-		}, m.footerLine(f))
+		f.inputPrompt = ""
+		f.notice = "terminal too narrow — need at least " + itoa(narrowFloor) + " columns, have " + itoa(f.width)
+		f.noticeStyle = m.theme.Warn
+		f.hasHeader = true
+		return f.render("", []string{}, "")
 	}
 
-	body := m.bodyLines(f)
-	return f.render(header, body, m.footerLine(f))
+	return f.render("", m.bodyLines(f), "")
+}
+
+// headerSubtitle is the HEADER region's right-hand text: the secondary facts
+// about what you are looking at. On a conversation that is the thought's
+// lifecycle and the view's own state; on the queue it is the running
+// activity, which is the thing a reader glancing at the list wants to know
+// (NAVI-335).
+func (m *tuiModel) headerSubtitle() string {
+	if m.mode == ModeHome || m.mode == ModeLive {
+		return m.chatStatus()
+	}
+	if m.active != "" {
+		return m.activeID + " · " + m.active
+	}
+	return ""
 }
 
 // panelLabel is the label on the panel's top edge: the screen and the object
@@ -2044,48 +2065,27 @@ func plural(n int) string {
 	return "s"
 }
 
-// footerLine is the status plus the CONTEXT-SENSITIVE help line: the help is
-// derived from the bindings that are actually live, so a key is never
-// advertised that does not work (ADR 0038 decision 7). It is still a hand-kept
-// string per context rather than generated from a keymap table; that
-// generation is NAVI-593.
-func (m *tuiModel) footerLine(f frame) string {
-	line := " " + sanitizeLine(m.status)
-	if m.mode == ModeList && m.active != "" {
-		line = " " + m.theme.Marker("▸") + " " + sanitizeLine(m.activeID) +
-			" · " + sanitizeLine(m.active) + "   " + line
-	}
-	if f.tooNarrow() {
-		return line
-	}
-	return line + m.helpLine(f)
-}
-
-// helpLine is the footer help, GENERATED from the active bindings rather than
-// hand-kept per context (NAVI-593, ADR 0038 decision 7). It reads the same
-// keymap the dispatch does, so a key that renders here is one that works —
-// and help.Model truncates to the frame width, which the hand-written string
-// did not (it overflowed any narrow terminal).
-func (m *tuiModel) helpLine(f frame) string {
-	// The leader menu advertises its own letters, which are the focused
-	// object's DECLARED actions and so are not known to the keymap until the
-	// menu is built.
+// helpText is the STATUS region's right-hand text: the generated help for the
+// current context (NAVI-593, ADR 0038 decision 7). It reads the same keymap
+// the dispatch does, so a key that renders here is one that works.
+//
+// The menu's own letters are not in the keymap — they are the focused object's
+// DECLARED actions, unknown until the menu is built — so the menu advertises
+// itself instead.
+func (m *tuiModel) helpText(f frame) string {
 	if m.menuOpen {
-		line := " " + m.theme.Subtle("actions:")
+		line := "actions:"
 		for _, a := range m.actionMenu {
 			line += " " + m.theme.Marker(menuLetter(a.Name)) + " " + m.theme.Subtle(actionName(a))
 		}
-		return line
+		return m.theme.Subtle(line)
 	}
-	m.help.Width = maxInt(1, f.width-2)
-	line := " " + m.help.View(m.keyMapFor())
+	m.help.Width = maxInt(1, f.width/2)
+	line := m.help.View(m.keyMapFor())
 	// help truncates ITEMS but can still emit a line wider than Width (its
 	// shouldAddItem adds the item when there is no room for the ellipsis), so
-	// the final width is enforced here. The frame fits the footer again, but a
-	// help line that reports its own width honestly is what the width test
-	// asserts — and a caller that composes it with something else must not
-	// inherit an over-wide string.
-	return truncate(line, f.width, "…")
+	// the final width is enforced here.
+	return truncate(line, f.width/2, "…")
 }
 
 // actionName is a declared action's label for the menu, falling back to the
@@ -2095,13 +2095,6 @@ func actionName(a view.Action) string {
 		return a.Label
 	}
 	return a.Name
-}
-
-func terminalSuffix(m *tuiModel) string {
-	if m.lost {
-		return " · STREAM GAP"
-	}
-	return ""
 }
 
 // itoa is strconv.Itoa without the import at every call site in the

@@ -1,20 +1,20 @@
-╭──┤ Thoughts ─────────────────────────────────────────────╮
-│                                                          │
-│   Id         │ Prompt             │   Status             │
-│ ─────────────┼────────────────────┼───────────────       │
-│ ▸ t-run      │ summarise the rel… │  running             │
-│ ·············┼····················┼···············       │
-│   t-pending  │ draft the migrati… │  pending             │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-╰──────────────────────────────────────────────────────────╯
-  j/k move · enter open · n new · a attach · p/P priority … 
+ Thoughts                                                   
+                                                            
+  Id         │ Prompt             │   Status                
+─────────────┼────────────────────┼───────────────          
+▸ t-run      │ summarise the rel… │  running                
+·············┼····················┼···············          
+  t-pending  │ draft the migrati… │  pending                
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                              j/k move · enter open · n new…

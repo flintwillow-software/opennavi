@@ -1,24 +1,24 @@
-╭──┤ home · t-run ────────────────────────────────────────┤ live · following ──╮
-│                                                                              │
-│ ├─ you ───────────────────────────────────────────────────────────────────── │
-│   summarise the release notes                                                │
-│                                                                              │
-│ ├─ assistant ─────────────────────────────────────────────────────────────── │
-│   Here are the highlights:                                                   │
-│   1. terminal sizing                                                         │
-│   2. rune-correct columns                                                    │
-│                                                                              │
-│ ├─ tool ──────────────────────────────────────────────────────────────────── │
-│   ⚙ note_write · wrote summary  (enter to expand)                            │
-│                                                                              │
-│ ├─ turn_end ──────────────────────────────────────────────────────────────── │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+ home · t-run                                                  live · following 
+                                                                                
+├─ you ─────────────────────────────────────────────────────────────────────    
+  summarise the release notes                                                   
+                                                                                
+├─ assistant ───────────────────────────────────────────────────────────────    
+  Here are the highlights:                                                      
+  1. terminal sizing                                                            
+  2. rune-correct columns                                                       
+                                                                                
+├─ tool ────────────────────────────────────────────────────────────────────    
+  ⚙ note_write · wrote summary  (enter to expand)                               
+                                                                                
+├─ turn_end ────────────────────────────────────────────────────────────────    
+                                                                                
+                                                                                
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
 │ steer › █                                                                    │
 │                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-  enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow …  
+                                                                                
+                                                   enter send · ctrl+a actions …

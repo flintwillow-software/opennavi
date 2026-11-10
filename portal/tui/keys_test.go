@@ -18,7 +18,7 @@ func TestHelpIsGeneratedFromTheKeymap(t *testing.T) {
 	m, _, _ := runningModel(t)
 	resize(m, 120, 40)
 
-	line := m.helpLine(frame{width: 120, height: 40, theme: m.theme})
+	line := m.helpText(frame{width: 120, height: 40, theme: m.theme})
 	for _, want := range []string{"enter", "ctrl+a", "esc"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("conversation help missing %q:\n%s", want, line)
@@ -39,7 +39,7 @@ func TestHelpFollowsTheInputFocus(t *testing.T) {
 	f := frame{width: 120, height: 40, theme: m.theme}
 
 	m.inputFocused = true
-	focused := m.helpLine(f)
+	focused := m.helpText(f)
 	if !strings.Contains(focused, "send") {
 		t.Errorf("focused help does not mention send:\n%s", focused)
 	}
@@ -48,7 +48,7 @@ func TestHelpFollowsTheInputFocus(t *testing.T) {
 	}
 
 	m.inputFocused = false
-	blurred := m.helpLine(f)
+	blurred := m.helpText(f)
 	if !strings.Contains(blurred, "pause") {
 		t.Errorf("blurred help does not advertise pause, which works when blurred:\n%s", blurred)
 	}
@@ -64,7 +64,7 @@ func TestHelpTruncatesToTheTerminal(t *testing.T) {
 	m, _, _ := runningModel(t)
 	for _, w := range []int{60, 80, 120} {
 		f := frame{width: w, height: 24, theme: m.theme}
-		line := m.helpLine(f)
+		line := m.helpText(f)
 		if got := displayWidth(line); got > w {
 			t.Errorf("help at width %d measured %d columns: %q", w, got, line)
 		}

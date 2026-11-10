@@ -1,24 +1,24 @@
-╭──┤ chat · t-run ────────────────────────────────────────┤ live · following ──╮
-│                                                                              │
-│ ├─ you ───────────────────────────────────────────────────────────────────── │
-│   summarise the release notes                                                │
-│                                                                              │
-│ ├─ thinking ──────────────────────────────────────────────────────────────── │
-│   the user wants the highlights, not every commit                            │
-│                                                                              │
-│ ├─ assistant ─────────────────────────────────────────────────────────────── │
-│   Here are the highlights:                                                   │
-│   1. terminal sizing                                                         │
-│   2. rune-correct columns                                                    │
-│                                                                              │
-│ ├─ tool ──────────────────────────────────────────────────────────────────── │
-│   ⚙ note_write · wrote summary  (enter to expand)                            │
-│                                                                              │
-│ ├─ turn_end ──────────────────────────────────────────────────────────────── │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+ chat · t-run                                                  live · following 
+                                                                                
+  summarise the release notes                                                   
+                                                                                
+├─ thinking ────────────────────────────────────────────────────────────────    
+  the user wants the highlights, not every commit                               
+                                                                                
+├─ assistant ───────────────────────────────────────────────────────────────    
+  Here are the highlights:                                                      
+  1. terminal sizing                                                            
+  2. rune-correct columns                                                       
+                                                                                
+├─ tool ────────────────────────────────────────────────────────────────────    
+  ⚙ note_write · wrote summary  (enter to expand)                               
+                                                                                
+├─ turn_end ────────────────────────────────────────────────────────────────    
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
 │ steer › █                                                                    │
 │                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- transcript t-run: object: unknown detail enter send · ctrl+a actions · esc cle…
+                                                                                
+ transcript t-run: object: unknown detail          enter send · ctrl+a actions …

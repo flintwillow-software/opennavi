@@ -416,3 +416,48 @@ reader who asked for help wants to know what they can do where they were.
 backspace handling rather than `bubbles/textarea`. That is a behaviour change
 (it brings its own key handling and can be multi-line, which changes the
 frame's input-row accounting) and is tracked separately.
+
+## Amendment — the screen is regions, not one panel
+
+**Recorded on implementation (NAVI-603).** Decision 6 describes the form
+factors and the frame; the implementation put *everything* inside one bordered
+panel — the conversation, the input, and the status line, with the help
+underneath it. That shape cannot express a home screen with a header and a
+sidebar, and it is why home did not read as a screen you are *in*.
+
+The frame now composes **regions**, in the shape crush uses
+(`charmbracelet/crush`, `internal/ui/model/ui.go` `generateLayout`/`uiLayout`):
+
+```
+header        what you are looking at, plus the secondary facts
+-----------------------------------------------
+main          the variable region: conversation, table, status
+-----------------------------------------------
+editor        its own bordered region, only on screens that take typing
+-----------------------------------------------
+status        the transient message and the generated help
+```
+
+Three consequences worth recording:
+
+- **The editor is a region, not a row of the content.** It has its own border
+  and its own focus, and it does not scroll away with the conversation — which
+  is what makes it read as a place to type rather than as a line in the
+  transcript.
+- **The header is a region, not a label on a border.** The screen's identity is
+  on the left and the secondary facts (a thought's lifecycle, the view's
+  scroll state, the running activity) on the right. Decision 6's form factors
+  and the 60-column floor are unchanged; what changed is that the header is now
+  somewhere to put things.
+- **`render` and `regionRows` compute the layout once.** The row arithmetic had
+  drifted between the two — the status bar floated above the bottom or was
+  clipped off it — so the heights are derived in one place and the gutters are
+  emitted where they are counted. The exact-size contract (exactly `height`
+  lines of exactly `width` columns) is unchanged and is the check on all of it.
+
+**Not yet done, and why this is an amendment rather than the whole story:**
+the home sidebar (NAVI-601) and the queue and status pages (NAVI-592,
+NAVI-598) are built on these regions in follow-up work. Decision 4's answer to
+open question 4 — **tabs, not a sidebar** — is not changed here; the sidebar
+decision 4 rejected was a *persistent navigation* sidebar, and NAVI-601 adds a
+*content* pane on home only.

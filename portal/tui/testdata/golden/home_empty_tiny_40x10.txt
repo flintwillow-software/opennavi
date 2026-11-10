@@ -1,10 +1,10 @@
-╭──┤ home · nothing running ───────────…
-│                                      │
-│                                      │
-│  terminal too narrow — need at leas… │
-│                                      │
-│                                      │
-│ new › █                              │
-│                                      │
-╰──────────────────────────────────────╯
+ home · nothing running            idle 
                                         
+                                        
+                                        
+                                        
+                                        
+                                        
+ terminal too narrow — need at least 60…
+                                        
+                            enter send …
