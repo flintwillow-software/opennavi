@@ -827,13 +827,12 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 	}
 	drain(m)
 
-	// The full program with buffered input/output. `tab` blurs home's steer
-	// input (a printable `q` is text while it is focused, NAVI-587), then `q`
-	// quits — exactly the gesture a reader makes. `tab` rather than `esc`
-	// because the input reader parses a bare `\x1bq` as alt+q, not two keys.
+	// The full program with buffered input/output. Home arrives BLURRED, so a
+	// bare `q` quits — exactly the gesture a reader makes. (Focused, `q` would
+	// be text, which is why home does not arrive focused.)
 	var buf bytes.Buffer
 	var in bytes.Buffer
-	in.Write([]byte("\tq"))
+	in.Write([]byte("q"))
 	ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Second)
 	defer cancel()
 	p := tea.NewProgram(m, tea.WithInput(&in), tea.WithOutput(&buf), tea.WithContext(ctx))

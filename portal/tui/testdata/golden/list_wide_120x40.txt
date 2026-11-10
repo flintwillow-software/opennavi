@@ -4,9 +4,9 @@
                                                                                                                         
   Id         │ Prompt                                     │   Status   │   Priority │ Updated at                        
 ─────────────┼────────────────────────────────────────────┼────────────┼────────────┼───────────────────────────────    
-▸ t-run      │ summarise the release notes                │  running   │          2 │ 2026-11-1…     «⚙ note_write      
+▸ t-pending  │ draft the migration guide                  │  pending   │          4 │ 2026-11-1…                        
 ·············┼············································┼············┼············┼·······························    
-  t-pending  │ draft the migration guide                  │  pending   │          4 │ 2026-11-1…                        
+  t-run      │ summarise the release notes                │  running   │          2 │ 2026-11-1…     «⚙ note_write      
                                                                                                                         
                                                                                                                         
                                                                                                                         

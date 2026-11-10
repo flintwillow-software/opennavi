@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -412,8 +413,12 @@ func TestActionsWorkFromHome(t *testing.T) {
 		t.Fatalf("precondition: home should track act, got %q in %q", m.homeID, m.mode)
 	}
 
-	// While the input is focused a plain letter is TEXT, never an action — the
-	// mistake in the other direction.
+	// Home arrives BLURRED, so the action letters act immediately. Focus the
+	// input first to check the other half of the rule.
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.inputFocused {
+		t.Fatal("tab did not focus the input")
+	}
 	keyRunes(t, m, "s")
 	if m.input != "s" {
 		t.Fatalf("`s` was not typed into the focused input: %q", m.input)
@@ -459,9 +464,9 @@ func TestActionsWorkFromHome(t *testing.T) {
 // typing again, so the input is not a mode you must explicitly re-enter.
 func TestTypingReturnsFocusToTheInput(t *testing.T) {
 	m, _, _ := runningModel(t)
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// Home arrives blurred (see gotoPage), so typing is what re-focuses it.
 	if m.inputFocused {
-		t.Fatal("esc did not blur")
+		t.Fatal("precondition: home should arrive blurred")
 	}
 	keyRunes(t, m, "hi")
 	if !m.inputFocused {
@@ -546,10 +551,8 @@ func TestActionMenuIsDescriptorDrivenAndHonest(t *testing.T) {
 func TestActionOnAThoughtWithNoApplicableActionSaysSo(t *testing.T) {
 	m, _, _ := runningModel(t)
 	m.setBadge("r1", func(b *badge) { b.status = "complete" })
-	// The input is empty, so one esc blurs it.
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.inputFocused {
-		t.Fatal("precondition: input should be blurred")
+		t.Fatal("precondition: home should arrive blurred")
 	}
 	keyRunes(t, m, "s")
 	if !strings.Contains(m.status, "does not apply") {
@@ -826,5 +829,43 @@ func TestHomeDistinguishesWaitingFromIdle(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "to queue a new thought") {
 		t.Errorf("home did not return to the splash:\n%s", m.View())
+	}
+}
+
+// TestQueueOrderIsLifecycleThenPriority: the queue reads as a queue. Running
+// first, then what is waiting by priority (lower number is more urgent), then
+// paused, then finished — so a completed thought never sits between two live
+// ones, and the reader can see what is happening without scanning every row.
+func TestQueueOrderIsLifecycleThenPriority(t *testing.T) {
+	mk := func(id, status string, prio int, age time.Duration) (object.Object, string) {
+		o := object.Object{Type: "thought", ID: id, Fields: map[string]any{
+			"id": id, "status": status, "priority": prio,
+			"created_at": time.Now().UTC().Add(-age),
+		}}
+		return o, status
+	}
+	objs := []object.Object{}
+	status := map[string]string{}
+	add := func(o object.Object, s string) { objs = append(objs, o); status[o.ID] = s }
+
+	// Deliberately shuffled, with a completed thought in the middle.
+	add(mk("done-old", "complete", 1, 9*time.Hour))
+	add(mk("pend-p4", "pending", 4, 1*time.Hour))
+	add(mk("run-p4", "running", 4, 5*time.Hour))
+	add(mk("pend-p1", "pending", 1, 2*time.Hour))
+	add(mk("paused-p2", "paused", 2, 3*time.Hour))
+	add(mk("done-new", "complete", 0, 1*time.Minute))
+
+	sortQueueRows(objs, func(id string) string { return status[id] })
+
+	var got []string
+	for _, o := range objs {
+		got = append(got, o.ID)
+	}
+	// Finished work is newest-first: "what just happened" is what a completed
+	// list answers, and priority is spent by then.
+	want := []string{"run-p4", "pend-p1", "pend-p4", "paused-p2", "done-new", "done-old"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("queue order:\n got %v\nwant %v", got, want)
 	}
 }

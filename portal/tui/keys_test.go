@@ -17,16 +17,39 @@ import (
 func TestHelpIsGeneratedFromTheKeymap(t *testing.T) {
 	m, _, _ := runningModel(t)
 	resize(m, 120, 40)
+	// Home arrives blurred, so the action letters are live and advertised.
+	if m.inputFocused {
+		t.Fatal("precondition: home should arrive blurred")
+	}
 
-	line := m.helpText(frame{width: 120, height: 40, theme: m.theme})
-	for _, want := range []string{"enter", "ctrl+a", "esc"} {
+	// Blurred, the help advertises the ACTION letters — the keys that work
+	// here. The frame is wide so the help is not truncated; the truncation
+	// behaviour itself is covered by TestHelpTruncatesToTheTerminal.
+	wide := frame{width: 400, height: 40, theme: m.theme}
+	line := m.helpText(wide)
+	for _, want := range []string{"pause", "resume", "ctrl+a"} {
 		if !strings.Contains(line, want) {
-			t.Errorf("conversation help missing %q:\n%s", want, line)
+			t.Errorf("blurred conversation help missing %q:\n%s", want, line)
 		}
 	}
 	// And it is the SHORT help, not the full one.
 	if strings.Contains(line, "quit") {
 		t.Errorf("the footer rendered the full help:\n%s", line)
+	}
+
+	// Focused, it advertises what the input does instead.
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.inputFocused {
+		t.Fatal("tab did not focus the input")
+	}
+	focused := m.helpText(wide)
+	for _, want := range []string{"send", "clear/blur"} {
+		if !strings.Contains(focused, want) {
+			t.Errorf("focused conversation help missing %q:\n%s", want, focused)
+		}
+	}
+	if strings.Contains(focused, "pause") {
+		t.Errorf("focused help advertises pause, which cannot fire while typing:\n%s", focused)
 	}
 }
 

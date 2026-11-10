@@ -4,8 +4,8 @@
                                                                                                                         
                                                                              queue · 2                                  
  idle                                                                        ───────────────────────────────────────    
-                                                                              summarise the release notes   complete    
- no thought is running and nothing is queued.                                 draft the migration guide     complete    
+                                                                              draft the migration guide     complete    
+ no thought is running and nothing is queued.                                 summarise the release notes   complete    
                                                                                                                         
  press n to queue a new thought                                                                                         
                                                                                                                         

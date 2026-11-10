@@ -4,9 +4,9 @@
                                                             
   Id         │ Prompt             │   Status                
 ─────────────┼────────────────────┼───────────────          
-▸ t-run      │ summarise the rel… │  running                
+▸ t-pending  │ draft the migrati… │  pending                
 ·············┼····················┼···············          
-  t-pending  │ draft the migrati… │  pending                
+  t-run      │ summarise the rel… │  running                
                                                             
                                                             
                                                             

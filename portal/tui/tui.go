@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -421,9 +422,11 @@ func NewModel(tr Transport) *tuiModel {
 		theme:       newTheme(),
 		keys:        defaultKeyMap(),
 		help:        newHelp(),
-		// The input is focused on arrival: steering the running thought is the
-		// default gesture (ADR 0038 decision 3).
-		inputFocused: true,
+		// Home arrives UNFOCUSED: it is for watching the running thought, and
+		// `enter` opens its page. Steering takes an explicit step (type, or
+		// `tab`), so the default gesture is the one a reader expects. See
+		// gotoPage.
+		inputFocused: false,
 		// A model built before the first tea.WindowSizeMsg (a unit test, or
 		// the instant before Bubble Tea delivers the real size) renders at a
 		// standard terminal rather than at 0×0. The real size arrives as a
@@ -502,6 +505,12 @@ func (m *tuiModel) refreshList() {
 		m.status = "list " + t.Name + ": " + err.Error()
 		return
 	}
+	// The queue is ordered for READING, not as the surface happened to page
+	// it: work that is still live first (running, then waiting by priority),
+	// finished work last. A list where a completed thought sits between two
+	// running ones makes the queue look unordered, and the reader has to scan
+	// every row to find what is actually happening.
+	sortQueueRows(objs, m.statusOf)
 	m.list = view.ListOf(t, objs, next)
 	m.items = make(map[string]object.Object, len(objs))
 	for _, o := range objs {
@@ -514,6 +523,65 @@ func (m *tuiModel) refreshList() {
 		m.sel = 0
 	}
 	m.refreshBlocked()
+}
+
+// queueRank orders a thought's lifecycle for display: lower sorts first. It is
+// the DISPLAY order, not a scheduling rule — the scheduler has its own
+// (ADR 0035), and conflating them would make the list lie about what runs next.
+//
+//	running   what is happening now
+//	pending   what is about to happen
+//	paused    work that was interrupted and can resume
+//	terminal  finished: complete, failed, cancelled
+func queueRank(status string) int {
+	switch status {
+	case "running":
+		return 0
+	case "pending":
+		return 1
+	case "paused":
+		return 2
+	}
+	return 3
+}
+
+// sortQueueRows orders a page for display: lifecycle rank, then priority
+// (lower is more urgent), then arrival time — the same (priority, created_at)
+// tie-break ADR 0035 decision 4 states, applied within each rank. The sort is
+// stable, so two thoughts that tie on all three keep the surface's order.
+func sortQueueRows(objs []object.Object, statusOf func(string) string) {
+	const terminalRank = 3
+	sort.SliceStable(objs, func(i, j int) bool {
+		ri, rj := queueRank(statusOf(objs[i].ID)), queueRank(statusOf(objs[j].ID))
+		if ri != rj {
+			return ri < rj
+		}
+		// Finished work reads NEWEST FIRST: "what just happened" is the
+		// question a completed list answers, and priority is spent by then.
+		// Live work reads by urgency, then arrival.
+		if ri == terminalRank {
+			return createdAt(objs[i]).After(createdAt(objs[j]))
+		}
+		pi, pj := intField(objs[i].Fields["priority"]), intField(objs[j].Fields["priority"])
+		if pi != pj {
+			return pi < pj
+		}
+		return createdAt(objs[i]).Before(createdAt(objs[j]))
+	})
+}
+
+// createdAt reads a thought's arrival time, zero when absent (so an object
+// with no timestamp sorts first within its rank rather than being dropped).
+func createdAt(o object.Object) time.Time {
+	switch v := o.Fields["created_at"].(type) {
+	case time.Time:
+		return v
+	case string:
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // Init seeds the first screen from the surface. The feed is driven by the
@@ -1430,7 +1498,12 @@ func (m *tuiModel) gotoPage(p Page) {
 	m.menuOpen = false
 	m.actionMenu = nil
 	m.helpOpen = false
-	m.inputFocused = true
+	// Home arrives UNFOCUSED. Home is for watching the running thought, and
+	// `enter` there opens its own page — the same gesture as `enter` on a queue
+	// row. A focused box would steal `enter` for sending, so steering takes an
+	// explicit step (type, or `tab`), and the reader's default gesture is the
+	// one they expect. A thought's OWN page arrives focused: having opened it,
+	// steering is what you came to do.
 	switch p {
 	case PageQueue:
 		m.mode = ModeList
@@ -1440,6 +1513,7 @@ func (m *tuiModel) gotoPage(p Page) {
 		m.inputFocused = false
 	default:
 		m.mode = ModeHome
+		m.inputFocused = false
 		// Re-derive the tracked thought: the queue may have moved while we were
 		// elsewhere.
 		m.trackRunning("")

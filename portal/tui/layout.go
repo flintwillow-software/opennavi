@@ -411,8 +411,12 @@ func (f frame) editorRegion(rows int) []string {
 	if bodyRows < 1 {
 		bodyRows = 1
 	}
+	// The editor is ALWAYS a box, even with nothing typed: an empty input is
+	// still a place to type, and box()'s "no body renders as a band" rule is
+	// for a turn that carries only a name. Rendering the editor through that
+	// rule left its top edge behind as a bare `├─ steer ───`.
 	body := make([]string, 0, bodyRows)
-	if f.input != "" || f.inputFocused {
+	if f.input != "" {
 		body = append(body, f.input)
 	}
 	for len(body) < bodyRows {
@@ -421,7 +425,7 @@ func (f frame) editorRegion(rows int) []string {
 	if len(body) > bodyRows {
 		body = body[:bodyRows]
 	}
-	return box(f.inputPrompt, f.theme.Marker, f.theme.border, body, f.width)
+	return box(f.inputPrompt, f.theme.Marker, f.theme.border, body, f.width, boxAlways)
 }
 
 // statusRegion is the status bar: the transient message on the left and the
@@ -467,8 +471,19 @@ func (f frame) statusRegion() string {
 // labelStyle styles the label; borderStyle styles the frame runes. Either may
 // be nil. body lines are fitted to the box's inner width, so a long line is
 // clipped rather than wrapping the box open (Style.Width wraps; see fit).
+// boxOpt tunes box's behaviour. It is variadic rather than a second function
+// because the two forms share every line but one.
+type boxOpt int
+
+const (
+	// boxAlways forces the framed form even with no body. The editor uses it:
+	// an empty input is still a place to type, whereas an empty TURN is a label.
+	boxAlways boxOpt = iota
+)
+
 func box(label string, labelStyle func(string) string, borderStyle func(string) string,
-	body []string, width int) []string {
+	body []string, width int, opts ...boxOpt) []string {
+	forceBox := len(opts) > 0 && opts[0] == boxAlways
 
 	if width < 4 {
 		// Too narrow for a box: fall back to the plain content so a tiny
@@ -491,7 +506,7 @@ func box(label string, labelStyle func(string) string, borderStyle func(string) 
 	// marker carries no content, so drawing it a top edge, nothing, and a
 	// bottom edge spends two rows saying what one says. The band is the same
 	// vocabulary — a labelled rule — so the two forms read as one family.
-	if len(body) == 0 || allBlank(body) {
+	if !forceBox && (len(body) == 0 || allBlank(body)) {
 		return []string{band(label, labelStyle, borderStyle, width)}
 	}
 

@@ -1,6 +1,6 @@
  1 home · 2 queue · 3 status                                                                                            
                                                                                                                         
- chat · t-run                                                                                          live · following 
+ chat · t-pending                                                                                    queued · following 
                                                                                                                         
 ╭─ you ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮    
 │ summarise the release notes                                                                                      │    

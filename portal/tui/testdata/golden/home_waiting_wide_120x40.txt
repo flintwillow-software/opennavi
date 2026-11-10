@@ -4,8 +4,8 @@
                                                                                                                         
                                                                              queue · 2                                  
  waiting for work to start                                                   ───────────────────────────────────────    
-                                                                              summarise the release notes   complete    
- a thought is queued and will start shortly                                   draft the migration guide      pending    
+                                                                              draft the migration guide      pending    
+ a thought is queued and will start shortly                                   summarise the release notes   complete    
                                                                                                                         
                                                                                                                         
                                                                                                                         
