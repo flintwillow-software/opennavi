@@ -322,6 +322,11 @@ type tuiModel struct {
 	height int
 	// theme is the single source of colour and text style (theme.go).
 	theme theme
+	// debug shows the diagnostic chrome (form factor, terminal size) in the
+	// header. Off by default: it is information about the renderer, not about
+	// the navi, so it belongs behind a toggle rather than in every screen's
+	// chrome.
+	debug bool
 }
 
 // NewModel builds the model over a transport.
@@ -372,6 +377,17 @@ func (m *tuiModel) loadTypes() {
 	if len(types) > 0 {
 		m.types = types
 		m.typesErr = nil
+		// Start on a type that can be listed. The first registered type is
+		// not necessarily one — a navi may register a collection type
+		// (a thought's transcript entries) before the type it belongs to.
+		if !listable(m.types[m.typeIdx]) {
+			for i := range m.types {
+				if listable(m.types[i]) {
+					m.typeIdx = i
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -393,6 +409,12 @@ func (m *tuiModel) refreshList() {
 	}
 	objs, next, err := m.objects.List(t.Name, object.Query{Limit: listPage})
 	if err != nil {
+		// A failed read clears the page. Keeping the previous type's rows on
+		// screen under the new type's title is the worst of both: the reader
+		// sees data that does not belong to what the panel says it is.
+		m.list = view.List{}
+		m.items = make(map[string]object.Object)
+		m.sel = 0
 		m.status = "list " + t.Name + ": " + err.Error()
 		return
 	}
@@ -887,15 +909,18 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.open(id)
 		}
 	case "t":
-		if m.mode == ModeList && len(m.types) > 1 {
-			m.typeIdx = (m.typeIdx + 1) % len(m.types)
-			m.sel = 0
-			m.detail = nil
-			m.refreshList()
-			if t, ok := m.currentType(); ok {
-				m.status = "type: " + t.Name
+		if m.mode == ModeList {
+			if next, ok := m.nextListableType(); ok {
+				m.typeIdx = next
+				m.sel = 0
+				m.detail = nil
+				m.refreshList()
+				m.status = "type: " + m.typeLabel(m.typeIdx)
 			}
 		}
+	case "D":
+		// Toggle the diagnostic header (form factor, terminal size).
+		m.debug = !m.debug
 	case "n":
 		if m.mode == ModeList {
 			m.enqueue = true
@@ -1107,19 +1132,17 @@ func (m *tuiModel) doAction(action, id string, prio int) {
 func (m *tuiModel) render() string {
 	f := newFrame(m.width, m.height, m.theme)
 
-	title := "thought queue"
-	if t, ok := m.currentType(); ok && t.Label != "" {
-		title = t.Label
-	}
 	// The panel's top edge is labelled with where you are, the way a titled
 	// module announces its contents.
-	f.title = m.panelLabel(title)
-	// The panel's top edge already names the screen, so the header line is
-	// free to carry the things the title cannot: the navi, the form factor,
-	// and any stream-gap warning. Repeating the type name here would be the
-	// panel saying the same thing twice.
-	header := m.theme.Subtle("navi") + m.theme.Subtle(" · "+f.form().String()+" "+itoa(f.width)+"×"+itoa(f.height)) +
-		m.theme.Subtle(" · portal"+terminalSuffix(m))
+	f.title = m.panelLabel()
+	// The header carries only what the panel title cannot: the navi's name and
+	// any stream-gap warning. The form factor and the terminal dimensions are
+	// diagnostic, not product — they belong behind a debug toggle, not in the
+	// chrome of every screen.
+	header := m.theme.Subtle("navi") + m.theme.Subtle(" · portal"+terminalSuffix(m))
+	if m.debug {
+		header += m.theme.Subtle(" · " + f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
+	}
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
@@ -1136,7 +1159,7 @@ func (m *tuiModel) render() string {
 
 // panelLabel is the label on the panel's top edge: the screen and the object
 // it is showing, so the frame says where you are without a separate header.
-func (m *tuiModel) panelLabel(title string) string {
+func (m *tuiModel) panelLabel() string {
 	switch m.mode {
 	case ModeLive:
 		return "chat · " + m.liveID
@@ -1148,7 +1171,54 @@ func (m *tuiModel) panelLabel(title string) string {
 	case ModeInput:
 		return "input"
 	}
-	return title
+	return m.typeLabel(m.typeIdx)
+}
+
+// typeLabel is a type's name for a LIST context. The descriptor's own Label
+// is singular — it names one object in a detail view ("Thought") — while a
+// list view carries its own plural label ("Thoughts"). Using the singular for
+// a list reads wrong ("the Thought list" for six thoughts), so the list
+// view's label wins where the descriptor declares one.
+func (m *tuiModel) typeLabel(idx int) string {
+	if idx < 0 || idx >= len(m.types) {
+		return "objects"
+	}
+	t := m.types[idx]
+	if v, ok := view.Hint(t, object.ViewList); ok && v.Label != "" {
+		return v.Label
+	}
+	if t.Label != "" {
+		return t.Label
+	}
+	return t.Name
+}
+
+// nextListableType is the next type in declaration order that can be listed
+// on its own, wrapping around. It returns false when there is no other one,
+// so the switcher does not cycle onto a type it cannot render.
+func (m *tuiModel) nextListableType() (int, bool) {
+	n := len(m.types)
+	if n == 0 {
+		return 0, false
+	}
+	for step := 1; step <= n; step++ {
+		i := (m.typeIdx + step) % n
+		if listable(m.types[i]) {
+			return i, i != m.typeIdx
+		}
+	}
+	return m.typeIdx, false
+}
+
+// listable reports whether a type is meant to be listed on its own. A type
+// with no list view is reached through another type's detail collection — the
+// `entry` type is a thought's transcript, and its provider refuses a bare
+// List — so the type switcher must not offer it. Cycling to it rendered the
+// previous type's rows under the new type's title, because the failed List
+// left the model's stale page in place.
+func listable(t object.Type) bool {
+	v, ok := view.Hint(t, object.ViewList)
+	return ok && len(v.Columns) > 0
 }
 
 // bodyLines dispatches to the current screen and returns its body rows.
@@ -1195,31 +1265,12 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // columns, decorating each row with the live overlay (status, a derived
 // blocked flag, a checkpoint marker, a running preview).
 func (m *tuiModel) bodyList(f frame) []string {
-	t, ok := m.currentType()
-	if !ok {
+	if _, ok := m.currentType(); !ok {
 		return []string{" " + m.theme.Subtle("(waiting for the navi's object types…)")}
 	}
 	var out []string
-	if len(m.types) > 1 {
-		line := " type: "
-		for i, ty := range m.types {
-			if i > 0 {
-				line += " · "
-			}
-			label := ty.Label
-			if label == "" {
-				label = ty.Name
-			}
-			if i == m.typeIdx {
-				line += m.theme.Selected("[" + sanitizeLine(label) + "]")
-			} else {
-				line += sanitizeLine(label)
-			}
-		}
-		out = append(out, line)
-	}
 	if len(m.list.Rows) == 0 {
-		return append(out, " "+m.theme.Subtle("("+sanitizeLine(t.Name)+" empty)"))
+		return append(out, " "+m.theme.Subtle("(no "+strings.ToLower(m.typeLabel(m.typeIdx))+" yet)"))
 	}
 
 	// The rows are a grid: a marker gutter, the declared columns separated by

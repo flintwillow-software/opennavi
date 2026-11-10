@@ -1,5 +1,5 @@
 ╱─┤ chat · t-run ├─────────────────────────────────────────────────────────────┐
-│ navi · standard 80×24 · portal                                               │
+│ navi · portal                                                                │
 │ chat · t-run · live (esc returns) · following                                │
 │ ▸ summarise the release notes                                                │
 │                                                                              │

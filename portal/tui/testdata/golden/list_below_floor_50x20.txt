@@ -1,5 +1,5 @@
-╱─┤ Thought ├────────────────────────────────────┐
-│ navi · narrow 50×20 · portal                   │
+╱─┤ Thoughts ├───────────────────────────────────┐
+│ navi · portal                                  │
 │                                                │
 │  terminal too narrow — need at least 60 column…│
 │                                                │
