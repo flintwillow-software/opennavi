@@ -222,7 +222,13 @@ func (t theme) statusStyle(status string) lipgloss.Style {
 // text's width or position.
 func (t theme) Status(value, aligned string, width int, a align) string {
 	if !t.colored {
-		return aligned
+		// The cell must occupy the same columns with colour off as with it on,
+		// so the uncoloured path lays it out too — it only skips the colour.
+		// Returning the value unpadded made the two renders differ in width.
+		if width <= 0 {
+			return aligned
+		}
+		return alignCell(aligned, width, a)
 	}
 	// Render only the trimmed value, then lay it out with lipgloss's own
 	// Align/Width/MaxWidth, so the escape codes never count toward the column
