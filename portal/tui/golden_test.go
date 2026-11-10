@@ -107,14 +107,80 @@ func checkGolden(t *testing.T, name, got string) {
 	}
 }
 
-// TestGoldenRendersAtFixedSizes pins the whole frame at each form factor. It
-// is the seam every later rendering change is reviewed against.
+// TestGoldenRendersAtFixedSizes pins the whole frame at each form factor for
+// every screen, so a change to one screen shows up as a diff against its own
+// golden rather than against a screen it shares a size with. It is the seam
+// every later rendering change is reviewed against.
 func TestGoldenRendersAtFixedSizes(t *testing.T) {
 	for _, size := range fixedSizes {
 		t.Run(size.name, func(t *testing.T) {
+			// The list is no longer the default screen (home is, ADR 0038
+			// decision 3), so it is reached explicitly.
 			m := newGoldenModel(t)
 			resize(m, size.w, size.h)
+			showList(m)
 			checkGolden(t, "list_"+size.name, m.View())
+		})
+	}
+}
+
+// TestGoldenHomeAtFixedSizes pins the HOME screen: the default screen, the
+// running thought as a conversation, and the persistent steer input. It is the
+// screen NAVI-587 adds, so it gets its own golden at every form factor.
+func TestGoldenHomeAtFixedSizes(t *testing.T) {
+	for _, size := range fixedSizes {
+		t.Run(size.name, func(t *testing.T) {
+			m := newGoldenModel(t)
+			// Make the running thought home's tracked one, with a conversation
+			// worth pinning rather than an empty viewport.
+			m.homeID = "t-run"
+			m.loadTranscript("t-run")
+			m.chat.reset([]turn{
+				{role: TurnUser, text: "summarise the release notes"},
+				{role: TurnAssistant, text: "Here are the highlights:\n1. terminal sizing\n2. rune-correct columns"},
+				{role: TurnTool, tool: "note_write", toolIn: `{"title":"summary"}`, toolOut: "wrote summary", collapsed: true},
+				{role: TurnSystem, text: "turn_end"},
+			})
+			resize(m, size.w, size.h)
+			checkGolden(t, "home_"+size.name, m.View())
+		})
+	}
+}
+
+// TestGoldenHomeEmptyAtFixedSizes pins home's EMPTY state: nothing running, so
+// the input is contextual and becomes an enqueue box (ADR 0038 decision 3 —
+// "the screen is never a dead end").
+func TestGoldenHomeEmptyAtFixedSizes(t *testing.T) {
+	for _, size := range fixedSizes {
+		t.Run(size.name, func(t *testing.T) {
+			m := newGoldenModel(t)
+			// Nothing running: clear the overlay that marks t-run running.
+			m.setBadge("t-run", func(b *badge) { b.status = string(thought.ThoughtComplete) })
+			m.trackRunning("")
+			if m.homeID != "" {
+				t.Fatalf("precondition: nothing should be running, tracked %q", m.homeID)
+			}
+			resize(m, size.w, size.h)
+			checkGolden(t, "home_empty_"+size.name, m.View())
+		})
+	}
+}
+
+// TestGoldenActionMenuAtFixedSizes pins the leader menu (`ctrl+a`): the
+// focused object's declared actions, which is how an action is reached while
+// the steer input owns the keyboard (NAVI-587's keymap resolution).
+func TestGoldenActionMenuAtFixedSizes(t *testing.T) {
+	for _, size := range fixedSizes {
+		t.Run(size.name, func(t *testing.T) {
+			m := newGoldenModel(t)
+			m.homeID = "t-run"
+			m.loadTranscript("t-run")
+			resize(m, size.w, size.h)
+			m.openActionMenu()
+			if !m.menuOpen {
+				t.Fatal("action menu did not open for the running thought")
+			}
+			checkGolden(t, "menu_"+size.name, m.View())
 		})
 	}
 }
@@ -129,6 +195,7 @@ func TestGoldenLiveChatAtFixedSizes(t *testing.T) {
 		t.Run(size.name, func(t *testing.T) {
 			m := newGoldenModel(t)
 			resize(m, size.w, size.h)
+			showList(m)
 			m.sel = 0
 			_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			if m.mode != ModeLive {

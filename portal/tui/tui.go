@@ -217,6 +217,10 @@ func notifyChan(feed portal.Subscription) <-chan struct{} {
 type ModeKind string
 
 const (
+	// ModeHome is the default screen (ADR 0038 decision 3): the running
+	// thought as a conversation, with a persistent steer input focused on
+	// arrival — or, when nothing is running, an empty state that enqueues.
+	ModeHome   ModeKind = "home"
 	ModeList   ModeKind = "list"
 	ModeDetail ModeKind = "detail"
 	ModeLive   ModeKind = "live"
@@ -286,6 +290,26 @@ type tuiModel struct {
 	sel    int
 	mode   ModeKind
 	liveID string
+	// homeID is the thought the HOME screen tracks: the running thought, or
+	// the one the reader picked from the running-thoughts overview. It is the
+	// focused object on home, and it follows the queue (see trackRunning).
+	// It is deliberately separate from liveID: live is a pushed screen you
+	// leave, home is where you land.
+	homeID string
+	// inputFocused is whether the persistent steer/enqueue input owns the
+	// keyboard. It is true on arrival (steering is the default gesture, ADR
+	// 0038 decision 3) and `esc` on an empty buffer blurs it, so the plain
+	// action letters can act on the focused object without leaving the screen.
+	// This is a focus state WITHIN a screen, not a screen mode: the defect the
+	// revamp removes is actions gated on `m.mode`, not on which widget is
+	// focused.
+	inputFocused bool
+	// actionMenu is the leader (`ctrl+a`) menu: the focused object's declared
+	// actions, so an action is reachable even while the input owns the
+	// keyboard. Empty when the menu is closed.
+	actionMenu []view.Action
+	// menuOpen is true while the action menu is showing.
+	menuOpen bool
 	// chat is the shared conversation component (NAVI-589, ADR 0038
 	// decision 5): home's running thought and a thought opened from the queue
 	// render through this one implementation, which owns the turns, the
@@ -338,8 +362,11 @@ func NewModel(tr Transport) *tuiModel {
 		items:       make(map[string]object.Object),
 		badges:      make(map[string]badge),
 		transcripts: make(map[string][]turn),
-		mode:        ModeList,
+		mode:        ModeHome,
 		theme:       newTheme(),
+		// The input is focused on arrival: steering the running thought is the
+		// default gesture (ADR 0038 decision 3).
+		inputFocused: true,
 		// A model built before the first tea.WindowSizeMsg (a unit test, or
 		// the instant before Bubble Tea delivers the real size) renders at a
 		// standard terminal rather than at 0×0. The real size arrives as a
@@ -438,6 +465,10 @@ func (m *tuiModel) refreshList() {
 func (m *tuiModel) Init() tea.Cmd {
 	m.loadTypes()
 	m.refreshList()
+	// Seed home from the surface: a thought already running when the TUI
+	// opens is what home shows, so the screen is correct on the first frame
+	// rather than only after the next lifecycle event.
+	m.trackRunning("")
 	return nil
 }
 
@@ -577,11 +608,124 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 	// A dependency's completion releases its dependents: recompute the
 	// derived blocked state from the objects the page carries.
 	m.refreshBlocked()
+	// Home follows the running thought as the queue changes (ADR 0038
+	// decision 3): when the tracked thought finishes, the next one takes its
+	// place. This runs on every lifecycle event because the pane re-derives on
+	// lifecycle rather than at start-up.
+	m.trackRunning(ev.ThoughtID)
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
-	if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Kind != "enqueued" {
-		m.addTurn(turn{role: TurnSystem, text: displayStatus(ev.Kind)})
+	if ev.Kind != "enqueued" {
+		if m.mode == ModeLive && ev.ThoughtID == m.liveID {
+			m.addTurn(turn{role: TurnSystem, text: displayStatus(ev.Kind)})
+		} else if m.mode == ModeHome && ev.ThoughtID == m.homeID {
+			m.addTurn(turn{role: TurnSystem, text: displayStatus(ev.Kind)})
+		}
 	}
+}
+
+// trackRunning keeps home pointed at the thought worth watching. It is called
+// on every lifecycle event, so the tracked thought follows the queue rather
+// than being chosen once at start-up — which is what makes home correct in any
+// session (`MaxConcurrent` defaults to 2, so "one running" is not a start-up
+// property).
+//
+// The rule has three parts, and the middle one matters as much as the others:
+//
+//  1. A thought that is still on the board (pending, running, or paused) stays
+//     tracked. Pausing the thought you are watching must NOT make it vanish
+//     from under you — you paused it in order to resume it, and home is where
+//     you do that.
+//  2. When the tracked thought reaches a terminal state (complete/failed/
+//     cancelled), the next running one takes its place — but if none is
+//     running, THE FINISHED CONVERSATION STAYS ON SCREEN. Watching a thought
+//     finish and then reading its result is the whole point of home; blanking
+//     the transcript at the moment it completes destroys the thing the reader
+//     was waiting for. The status suffix says `complete`, and the empty state
+//     is reached by starting something new (or by the thought leaving the
+//     page).
+//  3. Home only falls to its empty state when there is nothing left to show:
+//     no running thought, and the tracked one has left the page entirely.
+//
+// The reader's INPUT BUFFER IS NEVER DISCARDED here — the buffer is their text,
+// and dropping it because the queue advanced is the same class of defect as a
+// key that does nothing. It re-targets on send instead, and the panel title
+// names the current target so the re-target is visible.
+func (m *tuiModel) trackRunning(changed string) {
+	// A lifecycle change to some OTHER thought cannot move the tracked one
+	// unless that thought is now running (it may become the next target) —
+	// otherwise there is nothing to re-derive.
+	if changed != "" && changed != m.homeID && m.statusOf(changed) != "running" {
+		return
+	}
+	// Still on the board (pending/running/paused): stay on it.
+	if m.homeID != "" && m.isOnBoard(m.homeID) {
+		return
+	}
+	next, ok := m.firstRunning()
+	if !ok {
+		// Nothing is running. Keep a finished conversation on screen (rule 2);
+		// only fall to the empty state when the tracked thought is gone from
+		// the page, or there was never one.
+		if m.homeID != "" && m.isOnPage(m.homeID) {
+			return
+		}
+		m.homeID = ""
+		m.chat.reset(nil)
+		return
+	}
+	if next == m.homeID {
+		return
+	}
+	m.homeID = next
+	m.loadTranscript(next)
+}
+
+// isOnBoard reports whether a thought is still somewhere home should stay
+// pointed: not terminal, and not unknown. A thought that has left the page
+// entirely is treated as gone.
+func (m *tuiModel) isOnBoard(id string) bool {
+	if id == "" {
+		return false
+	}
+	if !m.isOnPage(id) {
+		return false
+	}
+	switch m.statusOf(id) {
+	case "complete", "failed", "cancelled":
+		return false
+	}
+	return true
+}
+
+// isOnPage reports whether a thought is one the page carries, regardless of
+// status. It is the difference between "finished" and "gone": a completed
+// thought is still readable, and home keeps showing it until the page no longer
+// has it (or a new thought starts running).
+func (m *tuiModel) isOnPage(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, known := m.items[id]; known {
+		return true
+	}
+	// The transcript cache outlives the page entry: a thought that scrolled
+	// off the page can still be read from what the stream accumulated.
+	_, cached := m.transcripts[id]
+	return cached
+}
+
+// firstRunning returns the id of a running thought, in page order. It reads
+// the live overlay first (the stream's own view of status) and falls back to
+// the declared field, so it works before the overlay has any entry for a
+// thought.
+func (m *tuiModel) firstRunning() (string, bool) {
+	for _, row := range m.list.Rows {
+		if m.statusOf(row.ID) == "running" {
+			return row.ID, true
+		}
+	}
+	return "", false
 }
 
 // displayStatus maps queue event kinds onto friendly thought statuses
@@ -611,7 +755,8 @@ func (m *tuiModel) ackEvent(ev portal.Event) {
 		// window, at the point they were injected (NAVI-330):
 		// context-append and resume-with-message land a user turn; a
 		// rejected delivery stays a status/rejection line.
-		if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Delivery != "" {
+		if ev.Delivery != "" && ((m.mode == ModeLive && ev.ThoughtID == m.liveID) ||
+			(m.mode == ModeHome && ev.ThoughtID == m.homeID)) {
 			m.addTurn(turn{role: TurnUser, text: "(steered — " + ev.Delivery + ")"})
 		}
 		if ev.Delivery == "" {
@@ -629,9 +774,9 @@ func (m *tuiModel) agentEvent(ev portal.Event) {
 	// the live one, so opening a completed thought's live view shows its
 	// response (in-session; durable restore is NAVI-353).
 	m.chatAgentEvent(ev)
-	// Home view (NAVI-335): consume agent events for RUNNING thoughts —
+	// List view (NAVI-335): consume agent events for RUNNING thoughts —
 	// latest tool call or delta snippet on the row, plus the status
-	// activity line.
+	// activity line. Home's conversation is already fed by chatAgentEvent.
 	if m.mode == ModeList {
 		m.homeAgentEvent(ev)
 	}
@@ -685,7 +830,10 @@ func (m *tuiModel) chatAgentEvent(ev portal.Event) {
 		add(turn{role: TurnSystem, text: ev.Kind})
 	}
 	m.transcripts[ev.ThoughtID] = tr
-	if m.liveID == ev.ThoughtID {
+	// The shared chat renders whichever thought is on screen: the open one in
+	// live, the tracked one on home (ADR 0038 decision 5, one renderer).
+	if (m.mode == ModeLive && m.liveID == ev.ThoughtID) ||
+		(m.mode == ModeHome && m.homeID == ev.ThoughtID) {
 		m.chat.reset(tr)
 	}
 }
@@ -755,9 +903,21 @@ func sanitizeLine(s string) string {
 // thought opened after the fact shows its full conversation and the in-process
 // and remote paths render the same thing (ADR 0017). Live events accumulate on
 // top of the seed.
+//
+// It is the pushed detail screen; HOME is the default screen that tracks the
+// running thought instead (see trackRunning).
 func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
+	m.inputFocused = true
+	m.loadTranscript(thoughtID)
+}
+
+// loadTranscript loads a thought's conversation into the shared chat
+// component, using the accumulated stream when there is one and the persisted
+// transcript otherwise. It is the one place a conversation is attached to the
+// chat, so home and live cannot drift.
+func (m *tuiModel) loadTranscript(thoughtID string) {
 	if tr := m.transcripts[thoughtID]; len(tr) > 0 {
 		// The accumulated stream may have started mid-run: the prompt opens
 		// the conversation when nothing else does.
@@ -881,57 +1041,39 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		return false
 	}
 
-	// The chat has first refusal on its own scroll/fold keys while the
-	// conversation is open, so the same key does not mean two things
-	// depending on which screen happens to be showing (ADR 0038 decision 7:
-	// actions bind to the focused object, not to a mode). Quit and back stay
-	// the model's, so a reader can always leave.
-	// The chat screen owns its own input: printable runes are text to steer
-	// with, and the scroll keys are the ones that can never be text. This is
-	// what makes the input persistent rather than a mode you enter and leave
-	// (ADR 0038 decision 3) — you type into the conversation you are reading.
-	if m.mode == ModeLive {
-		switch k.String() {
-		case "q", "ctrl+c":
-			return true // quit still wins
-		case "esc", "escape":
-			// Clear a non-empty buffer first; a second esc leaves the chat.
-			if m.input != "" {
-				m.input = ""
-				return false
-			}
-			m.mode = ModeList
-			m.detail = nil
-			return false
-		case "enter":
-			// Enter sends. A newline needs a modifier, which is what a
-			// one-line steer field implies; a textarea would invert this.
-			m.sendSteer()
-			return false
-		case "backspace":
-			if r := []rune(m.input); len(r) > 0 {
-				m.input = string(r[:len(r)-1])
-			}
-			return false
-		case "ctrl+f", "ctrl+b", "ctrl+g", "ctrl+e", "ctrl+o",
-			"up", "down", "pgup", "pgdown", "home", "end":
-			m.chat.update(k)
-			return false
-		case "ctrl+u":
-			m.input = ""
-			return false
-		}
-		if len(k.Runes) > 0 {
-			m.input += string(k.Runes)
-			return false
-		}
+	// The action menu (leader `ctrl+a`) is open: a letter picks one of the
+	// focused object's DECLARED actions. It owns the keyboard while open, so
+	// the same letter cannot both pick from the menu and type into the input.
+	if m.menuOpen {
+		return m.menuKey(k)
+	}
+
+	// The leader opens the menu for the focused object. `ctrl+a` is not a
+	// printable rune, so it is reachable even while the input owns the
+	// keyboard — that is what makes an action possible without leaving the
+	// steer field. It is checked before the input so it always wins.
+	if k.String() == "ctrl+a" {
+		m.openActionMenu()
+		return false
+	}
+
+	// The conversation screens (home, live) carry a persistent input. While it
+	// has focus every printable rune is text: a reader steering a thought
+	// writes prose, and swallowing `s` to pause would make the input unusable —
+	// the same defect as an advertised key that does nothing, in the other
+	// direction. Actions are reached with the leader above, or by blurring the
+	// input with `esc` (below) and using the plain letters.
+	if m.mode == ModeHome || m.mode == ModeLive {
+		return m.conversationKey(k)
 	}
 
 	switch k.String() {
 	case "q", "ctrl+c":
 		return true
+	case "1":
+		m.goHome()
 	case "esc", "escape", "l":
-		if m.mode == ModeLive || m.mode == ModeDetail {
+		if m.mode == ModeDetail {
 			m.mode = ModeList
 			m.detail = nil
 		}
@@ -944,8 +1086,10 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.sel++
 		}
 	case "enter":
-		if id, ok := m.selected(); ok {
-			m.open(id)
+		if m.mode == ModeList {
+			if id, ok := m.focused(); ok {
+				m.open(id)
+			}
 		}
 	case "t":
 		if m.mode == ModeList {
@@ -976,50 +1120,378 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.input = ""
 			m.mode = ModeInput
 		}
-	case "p":
-		if id, ok := m.selected(); ok {
-			m.doAction("bump", id, maxPriority(intField(m.items[id].Fields["priority"])-1))
-		}
-	case "P":
-		if id, ok := m.selected(); ok {
-			m.doAction("bump", id, minPriority(intField(m.items[id].Fields["priority"])+1))
-		}
-	case "s":
-		if id, ok := m.selected(); ok {
-			m.doAction("pause", id, 0)
-		}
-	case "r":
-		if id, ok := m.selected(); ok {
-			m.doAction("resume", id, 0)
-		}
-	case "c":
-		if id, ok := m.selected(); ok {
-			m.doAction("cancel", id, 0)
-		}
-	case "R":
-		if id, ok := m.selected(); ok {
-			m.doAction("retry", id, 0)
-		}
+	default:
+		// The action letters are bound to the FOCUSED OBJECT in every mode,
+		// not to list mode (ADR 0038 decision 7).
+		return m.actionKey(k)
 	}
 	return false
 }
 
-// sendSteer routes the chat's input buffer to the open thought through the
-// one write path (object.Surface.Act, ADR 0019 decision 7) — the same call the
-// list's attach flow uses, so there is no second way to reach the queue.
-func (m *tuiModel) sendSteer() {
-	msg := strings.TrimSpace(m.input)
-	if msg == "" || m.liveID == "" {
+// isActionLetter reports whether a key is one of the plain action bindings.
+// It is what lets a blurred conversation distinguish "pause this thought"
+// (`s`) from "start writing a word containing s" — the action letters are
+// reserved while blurred, and any other rune resumes typing.
+func isActionLetter(k tea.KeyMsg) bool {
+	switch k.String() {
+	case "s", "r", "c", "R", "p", "P":
+		return true
+	}
+	return false
+}
+
+// actionKey dispatches the plain action letters on the focused object. It is
+// the shared tail of the keymap: the same letters mean the same thing on the
+// queue, in detail, and on a conversation whose input is blurred.
+func (m *tuiModel) actionKey(k tea.KeyMsg) bool {
+	switch k.String() {
+	case "p", "P":
+		id, ok := m.focused()
+		if !ok {
+			return false
+		}
+		prio := intField(m.items[id].Fields["priority"])
+		if k.String() == "p" {
+			prio = maxPriority(prio - 1)
+		} else {
+			prio = minPriority(prio + 1)
+		}
+		m.doAction("bump", id, prio)
+	case "s":
+		m.actOnFocused("pause")
+	case "r":
+		m.actOnFocused("resume")
+	case "c":
+		m.actOnFocused("cancel")
+	case "R":
+		m.actOnFocused("retry")
+	}
+	return false
+}
+
+// actOnFocused dispatches a zero-argument declared action on the focused
+// object, or says why it did not. The status line carries the reason — an
+// inert key with no explanation is the defect this replaces, and the check
+// mirrors the menu's guard so the two agree about what applies.
+func (m *tuiModel) actOnFocused(action string) {
+	id, ok := m.focused()
+	if !ok {
+		m.status = "nothing focused for " + action
 		return
 	}
-	if err := m.act(m.liveID, "steer", map[string]any{"message": msg}); err != nil {
+	if !actionApplies(action, m.statusOf(id)) {
+		m.status = action + " does not apply to " + id + " (" + m.statusOf(id) + ")"
+		return
+	}
+	m.doAction(action, id, 0)
+}
+
+// conversationKey handles a key on a screen with the persistent input (home,
+// live). The input has focus by default; `esc` on an empty buffer blurs it, so
+// the plain action letters become reachable without leaving the screen.
+func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
+	// Quit and the leader always win, focused or not.
+	if k.String() == "q" && !m.inputFocused {
+		return true
+	}
+	if k.String() == "ctrl+c" {
+		return true
+	}
+	// `tab` toggles focus explicitly, for a reader who does not want to clear
+	// or leave anything.
+	if k.String() == "tab" {
+		m.inputFocused = !m.inputFocused
+		return false
+	}
+	// `1` is the tab bar's home key (ADR 0038 decision 4). It is not a
+	// printable rune, so it works with the input focused, and it is a no-op on
+	// home itself.
+	if k.String() == "1" {
+		m.goHome()
+		return false
+	}
+
+	if !m.inputFocused {
+		// Blurred: the scroll/fold keys stay the chat's, the ACTION LETTERS act
+		// on the focused object, and any other printable rune re-focuses the
+		// input and starts typing — so typing is never a mode you must
+		// re-enter. The action letters are checked BEFORE the generic rune
+		// case; otherwise every letter would re-focus and type, and the action
+		// keys would be unreachable on the very screen this issue is about.
+		if chatHandles(k) {
+			m.chat.update(k)
+			return false
+		}
+		switch k.String() {
+		case "esc", "escape":
+			m.leaveConversation()
+			return false
+		case "enter":
+			m.inputFocused = true
+			return false
+		case "up", "down", "left", "right":
+			m.chat.update(k)
+			return false
+		}
+		if isActionLetter(k) {
+			return m.actionKey(k)
+		}
+		if len(k.Runes) > 0 {
+			m.inputFocused = true
+			m.input += string(k.Runes)
+			return false
+		}
+		return false
+	}
+
+	// Focused: printable runes are text, and only the keys that can never be
+	// text act.
+	switch k.String() {
+	case "esc", "escape":
+		// Clear a non-empty buffer first; on an empty buffer `esc` BLURS the
+		// input (staying on the screen) rather than leaving, so the action
+		// letters are one key away. A second `esc` leaves the conversation.
+		if m.input != "" {
+			m.input = ""
+			return false
+		}
+		m.inputFocused = false
+		return false
+	case "enter":
+		// Enter submits: steering on a running thought, enqueuing on home's
+		// empty state. A newline needs a modifier, which is what a one-line
+		// field implies.
+		m.submitConversation()
+		return false
+	case "backspace":
+		if r := []rune(m.input); len(r) > 0 {
+			m.input = string(r[:len(r)-1])
+		}
+		return false
+	case "ctrl+u":
+		m.input = ""
+		return false
+	}
+	if chatHandles(k) {
+		m.chat.update(k)
+		return false
+	}
+	if len(k.Runes) > 0 {
+		m.input += string(k.Runes)
+		return false
+	}
+	return false
+}
+
+// leaveConversation returns from a conversation screen to the queue list,
+// which is the navigable index.
+func (m *tuiModel) leaveConversation() {
+	m.mode = ModeList
+	m.detail = nil
+	m.inputFocused = true
+}
+
+// goHome returns to the home screen. Home is the default screen (ADR 0038
+// decision 3) and must be reachable from wherever you are, or the default is
+// a place you can only visit once. The tab bar of decision 4 is not built yet
+// (NAVI-593), so this is the binding until it is; `1` is the tab bar's own
+// home key, so it survives that change.
+func (m *tuiModel) goHome() {
+	m.mode = ModeHome
+	m.detail = nil
+	m.menuOpen = false
+	m.actionMenu = nil
+	m.inputFocused = true
+	// Re-derive the tracked thought: the queue may have moved while the list
+	// was open.
+	m.trackRunning("")
+}
+
+// submitConversation handles enter on a conversation screen. The input is
+// CONTEXTUAL (ADR 0038 decision 3): a steer box when a thought is running, an
+// enqueue box when none is — so there is never a steer field with no target.
+func (m *tuiModel) submitConversation() {
+	if m.homeID != "" || m.mode == ModeLive {
+		m.sendSteer()
+		return
+	}
+	// Nothing running: home's empty state enqueues inline, reusing the staged
+	// prompt -> priority -> defer flow rather than a second input path.
+	m.enqueueStep()
+}
+
+// openActionMenu builds the leader menu from the FOCUSED object's declared
+// actions. It is descriptor-driven, so it needs no per-type binding and a new
+// object type gets the menu for free (ADR 0038 decisions 2 and 7).
+func (m *tuiModel) openActionMenu() {
+	id, ok := m.focused()
+	if !ok {
+		m.status = "nothing focused"
+		return
+	}
+	t, ok := m.currentType()
+	if !ok {
+		return
+	}
+	actions := m.actionsFor(t, id)
+	if len(actions) == 0 {
+		m.status = "no actions for " + id
+		return
+	}
+	m.actionMenu = actions
+	m.menuOpen = true
+	m.status = "actions for " + id
+}
+
+// menuKey handles a key while the action menu is open: a letter dispatches the
+// matching declared action, esc closes.
+func (m *tuiModel) menuKey(k tea.KeyMsg) bool {
+	if k.String() == "ctrl+c" {
+		return true
+	}
+	if k.String() == "esc" || k.String() == "escape" {
+		m.menuOpen = false
+		m.actionMenu = nil
+		m.status = ""
+		return false
+	}
+	if len(k.Runes) == 1 {
+		letter := string(k.Runes)
+		id, ok := m.focused()
+		if !ok {
+			m.menuOpen = false
+			m.actionMenu = nil
+			return false
+		}
+		for _, a := range m.actionMenu {
+			if menuLetter(a.Name) == letter {
+				m.menuOpen = false
+				m.actionMenu = nil
+				m.dispatchDeclared(id, a)
+				return false
+			}
+		}
+		m.status = "no action on " + letter
+		return false
+	}
+	return false
+}
+
+// actionsFor resolves the actions a type grants for one object: the
+// descriptor's declared actions, minus the ones whose guard the object fails
+// (a completed thought has nothing to pause) and minus the ones that already
+// have a dedicated input. The filter is what keeps the menu honest — a menu
+// entry that cannot work, or whose advertised key is taken by another entry,
+// is the same defect as an advertised key that does nothing.
+func (m *tuiModel) actionsFor(t object.Type, id string) []view.Action {
+	out := make([]view.Action, 0, len(t.Actions))
+	seen := make(map[string]bool, len(t.Actions))
+	for _, a := range t.Actions {
+		// `steer` is deliberately absent: the persistent input IS its UI, and
+		// its natural letter collides with `s` pause.
+		if a.Name == "steer" {
+			continue
+		}
+		if !actionApplies(a.Name, m.statusOf(id)) {
+			continue
+		}
+		letter := menuLetter(a.Name)
+		if letter == "" || seen[letter] {
+			continue // no key left for it: an unreachable entry is a lie
+		}
+		seen[letter] = true
+		out = append(out, view.Action{Name: a.Name, Label: a.Label, Confirm: a.Confirm, Args: a.Args})
+	}
+	return out
+}
+
+// actionApplies reports whether an action is meaningful for a status. It is a
+// display-side guard only: the surface still validates every call, so this
+// cannot grant an action, only hide one that would be rejected. It mirrors the
+// queue's own rules — in particular `cancel` does NOT apply to a running
+// thought (the queue refuses it: "pause it before cancelling"), so offering it
+// there would advertise a key whose only outcome is an error.
+func actionApplies(action, status string) bool {
+	switch action {
+	case "pause":
+		return status == "running"
+	case "resume":
+		return status == "paused"
+	case "cancel":
+		return status == "pending" || status == "paused"
+	case "retry":
+		return status == "failed"
+	case "steer":
+		return status == "running"
+	}
+	return true
+}
+
+// dispatchDeclared runs a declared action from the menu, supplying the args
+// the descriptor carries for it (the bump priority is special-cased because
+// the argument is a delta the descriptor cannot express).
+func (m *tuiModel) dispatchDeclared(id string, a view.Action) {
+	switch a.Name {
+	case "bump":
+		m.doAction("bump", id, maxPriority(intField(m.items[id].Fields["priority"])-1))
+	default:
+		m.doAction(a.Name, id, 0)
+	}
+}
+
+// menuLetter is the key that picks a declared action from the leader menu. It
+// matches the plain binding where one exists, so the leader is a way to reach
+// the SAME keys rather than a second vocabulary to learn: pause/s, resume/r,
+// cancel/c, retry/R (case preserved so `R` retry does not collide with `r`
+// resume), bump/p. An unknown action falls back to its first letter, and a
+// caller drops any entry whose letter is already taken rather than
+// advertising a key that cannot fire.
+func menuLetter(name string) string {
+	switch name {
+	case "pause":
+		return "s"
+	case "resume":
+		return "r"
+	case "cancel":
+		return "c"
+	case "retry":
+		return "R"
+	case "bump":
+		return "p"
+	}
+	if name == "" {
+		return ""
+	}
+	return strings.ToLower(name[:1])
+}
+
+// sendSteer routes the input buffer to the FOCUSED thought through the one
+// write path (object.Surface.Act, ADR 0019 decision 7) — the same call the
+// list's attach flow uses, so there is no second way to reach the queue. On
+// home the target is the tracked thought; in live it is the open one. They are
+// the same thought whenever home opened it, and re-targeting on send is what
+// keeps a buffer written against one thought from silently steering another
+// (see trackRunning).
+func (m *tuiModel) sendSteer() {
+	msg := strings.TrimSpace(m.input)
+	if msg == "" {
+		return
+	}
+	target := m.liveID
+	if m.mode == ModeHome {
+		target = m.homeID
+	}
+	if target == "" {
+		return
+	}
+	if err := m.act(target, "steer", map[string]any{"message": msg}); err != nil {
 		m.status = "steer failed: " + err.Error()
 		return
 	}
 	// The buffer clears on send, not on the ack: the ack arrives on the stream
 	// and lands as a turn, and holding the text until then would let a slow
 	// round trip block the next message.
-	m.status = "steered " + m.liveID
+	m.status = "steered " + target
 	m.input = ""
 }
 
@@ -1069,22 +1541,44 @@ func parseMinutes(s string) int {
 // enqueueStep walks the new-thought input stages (prompt -> priority
 // -> defer minutes) and enqueues through the transport; the enqueued
 // event comes back on the stream and lands the row in the queue view.
+//
+// It is shared by the list's staged `n` flow and home's INLINE empty state
+// (ADR 0038 decision 3: "an input box to enqueue"), so there is one enqueue
+// path rather than two. It returns to the screen it started on: from home it
+// stays on home, where the stream then delivers the new thought and the screen
+// becomes the steer page.
 func (m *tuiModel) enqueueStep() {
+	fromHome := m.mode == ModeHome
+	finish := func() {
+		m.enqueue = false
+		m.stage = 0
+		m.input = ""
+		if fromHome {
+			m.mode = ModeHome
+			m.inputFocused = true
+			return
+		}
+		m.mode = ModeList
+	}
 	switch m.stage {
 	case 0:
 		m.enqPrompt = m.input
 		m.input = ""
 		if strings.TrimSpace(m.enqPrompt) == "" {
 			m.status = "enqueue cancelled: prompt is required"
-			m.mode = ModeList
-			m.enqueue = false
+			finish()
 			return
 		}
 		m.stage = 1
+		// Stay in the input, focused, so the next field is typed straight
+		// away: the staged flow is one continuous gesture, not three visits to
+		// a mode.
+		m.inputFocused = true
 	case 1:
 		m.enqPrio = parsePrio(m.input)
 		m.input = ""
 		m.stage = 2
+		m.inputFocused = true
 	case 2:
 		m.enqMin = parseMinutes(m.input)
 		var notBefore time.Time
@@ -1100,9 +1594,7 @@ func (m *tuiModel) enqueueStep() {
 			}
 			m.status = fmt.Sprintf("enqueued at p%d%s", m.enqPrio, deferNote)
 		}
-		m.mode = ModeList
-		m.enqueue = false
-		m.input = ""
+		finish()
 	}
 }
 func minPriority(p int) int {
@@ -1112,9 +1604,48 @@ func minPriority(p int) int {
 	return p
 }
 
-// selected returns the highlighted object's id in list mode.
-func (m *tuiModel) selected() (string, bool) {
-	if m.mode != ModeList || m.sel < 0 || m.sel >= len(m.list.Rows) {
+// focused returns the id of the object the actions act on — the FOCUSED
+// OBJECT, not "the selected row in list mode" (ADR 0038 decision 7). This is
+// the fix for the defect the revamp started from: `selected()` returned false
+// outside list mode, so every action key was inert on the chat screen where a
+// reader most wants to pause or cancel the thought they are watching.
+//
+// The focused object is, per screen:
+//
+//	list    — the highlighted row
+//	home    — the tracked thought (the running one, or the picked overview row)
+//	live    — the open thought (the conversation you are reading)
+//	detail  — the open object
+//	input   — the object the staged flow attaches to, if any
+//
+// It is a pure read: the dispatch path (m.act) is unchanged and remains the
+// one write path (ADR 0019 decision 7).
+func (m *tuiModel) focused() (string, bool) {
+	switch m.mode {
+	case ModeHome:
+		if m.homeID != "" {
+			return m.homeID, true
+		}
+		// Nothing running: home's empty state enqueues rather than acting, so
+		// there is no focused object. A stale selection must not leak through.
+		return "", false
+	case ModeLive:
+		if m.liveID != "" {
+			return m.liveID, true
+		}
+		return "", false
+	case ModeDetail:
+		if m.detail != nil && m.detail.Object.ID != "" {
+			return m.detail.Object.ID, true
+		}
+		return "", false
+	case ModeInput:
+		if m.inputID != "" {
+			return m.inputID, true
+		}
+		return "", false
+	}
+	if m.sel < 0 || m.sel >= len(m.list.Rows) {
 		return "", false
 	}
 	return m.list.Rows[m.sel].ID, true
@@ -1198,14 +1729,31 @@ func (m *tuiModel) render() string {
 	// spending a body row of its own.
 	f.title = m.panelLabel()
 	f.status = m.chatStatus()
+	f.statusStyle = m.conversationStatusStyle()
 
-	// The chat screen carries a persistent steer input: steering the thought
+	// The conversation screens carry a persistent input: steering the thought
 	// you are watching is the default gesture and must cost no keystroke to
 	// reach (ADR 0038 decision 3). It is not a mode — you type here without
-	// leaving the conversation.
-	if m.mode == ModeLive {
-		f.inputPrompt = "steer ›"
-		f.input = m.input + m.theme.Marker("█")
+	// leaving the conversation. The input is CONTEXTUAL: a steer box when a
+	// thought is running, an enqueue box when none is — so there is never a
+	// steer field with no target.
+	if m.mode == ModeLive || m.mode == ModeHome {
+		switch {
+		case m.mode == ModeHome && m.homeID == "":
+			f.inputPrompt = m.enqueuePrompt()
+		case m.mode == ModeHome:
+			f.inputPrompt = "steer ›"
+		default:
+			f.inputPrompt = "steer ›"
+		}
+		if m.inputFocused {
+			f.input = m.input + m.theme.Marker("█")
+		} else {
+			// Blurred: the cursor is gone and the prompt says what the plain
+			// letters now act on, so a reader is never guessing which widget
+			// owns the keyboard.
+			f.input = m.input
+		}
 	}
 
 	// The header line exists only to carry a warning. A healthy TUI has
@@ -1239,6 +1787,11 @@ func (m *tuiModel) render() string {
 // it is showing, so the frame says where you are without a separate header.
 func (m *tuiModel) panelLabel() string {
 	switch m.mode {
+	case ModeHome:
+		if m.homeID == "" {
+			return "home · nothing running"
+		}
+		return "home · " + m.homeID
 	case ModeLive:
 		return "chat · " + m.liveID
 	case ModeDetail:
@@ -1299,11 +1852,19 @@ func listable(t object.Type) bool {
 	return ok && len(v.Columns) > 0
 }
 
-// bodyLines dispatches to the current screen and returns its body rows.
+// bodyLines dispatches to the current screen and returns its body rows. The
+// action menu, when open, is drawn OVER the screen's body: it is a transient
+// overlay, not a screen, so it costs no mode and the reader keeps their
+// context behind it.
 func (m *tuiModel) bodyLines(f frame) []string {
+	if m.menuOpen {
+		return m.bodyActionMenu(f)
+	}
 	switch m.mode {
 	case ModeDetail:
 		return m.bodyDetail(f)
+	case ModeHome:
+		return m.bodyHome(f)
 	case ModeLive:
 		return m.bodyLive(f)
 	case ModeInput:
@@ -1312,9 +1873,116 @@ func (m *tuiModel) bodyLines(f frame) []string {
 	return m.bodyList(f)
 }
 
-// footerLine is the status plus the (currently fixed) help line. The help
-// becomes generated from the keymap in a later slice (NAVI-593); it is one
-// place now so that change is local.
+// bodyActionMenu draws the leader menu: the focused object and the actions its
+// descriptor declares for it, each with the key that picks it. It is drawn
+// from the descriptor rather than a per-type table, so a new object type gets
+// a correct menu with no new binding (ADR 0038 decisions 2 and 7).
+func (m *tuiModel) bodyActionMenu(f frame) []string {
+	id, _ := m.focused()
+	out := []string{
+		"",
+		" " + m.theme.Title("actions") + m.theme.Subtle(" · "+sanitizeLine(id)),
+		"",
+	}
+	for _, a := range m.actionMenu {
+		line := "   " + m.theme.Marker(menuLetter(a.Name)) + "  " + sanitizeLine(actionName(a))
+		if a.Confirm {
+			// `Confirm` is declared but unenforced today; the marker says so
+			// rather than implying a guard that does not exist (NAVI-591
+			// enforces it).
+			line += m.theme.Confirm("  !")
+		}
+		out = append(out, line)
+	}
+	out = append(out, "", " "+m.theme.Subtle("esc to close"))
+	return out
+}
+
+// bodyHome draws the home screen (ADR 0038 decision 3): the running thought
+// as a conversation, or an empty state that enqueues when nothing is running.
+// The chat viewport and the turn renderer are the SAME component the pushed
+// detail screen uses (decision 5) — home is a context, not a second
+// implementation.
+func (m *tuiModel) bodyHome(f frame) []string {
+	if m.homeID == "" {
+		return m.bodyHomeEmpty(f)
+	}
+	// The viewport gets the whole body, exactly as in live: the panel's top
+	// edge already names the thought (`home · <id>`).
+	m.chat.setSize(f.innerWidth(), f.bodyHeight())
+	out := make([]string, 0, f.bodyHeight())
+	for _, l := range m.chat.view(m.theme) {
+		out = append(out, truncate(l, f.innerWidth(), "…"))
+	}
+	return out
+}
+
+// bodyHomeEmpty is home with nothing running: the state the ADR calls the
+// "new-thought page", in the shape of an editor's landing state. It offers
+// enqueue inline rather than dead-ending, and it names the queue as the way to
+// reach what has already run.
+func (m *tuiModel) bodyHomeEmpty(f frame) []string {
+	out := []string{
+		"",
+		" " + m.theme.Title("nothing is running"),
+		"",
+		" " + m.theme.Subtle("type a prompt below and press enter to enqueue a thought"),
+	}
+	if m.stage > 0 {
+		// Mid-staging: say which field the input is asking for, so the
+		// multi-step flow is legible rather than a sequence of bare prompts.
+		out = append(out, "", " "+m.theme.Subtle(m.stageHint()))
+	}
+	// A short recap of the queue, so the empty state is informative rather
+	// than blank: what ran, and how much of it there is. It is deliberately
+	// not a table — the queue is its own page (NAVI-592) and home must not
+	// grow a second, worse one.
+	if n := len(m.list.Rows); n > 0 {
+		// The hint names the real gesture: `esc` blurs the input (the reader is
+		// typing here), and a second `esc` leaves for the queue. Saying "esc for
+		// the queue" would advertise a key that does something else first.
+		out = append(out, "",
+			" "+m.theme.Subtle(itoa(n)+" thought"+plural(n)+" in the queue")+
+				m.theme.Subtle(" — esc twice for the queue"))
+	}
+	return out
+}
+
+// enqueuePrompt labels the contextual input line for home's empty state, per
+// stage, so the persistent field says what submitting will do.
+func (m *tuiModel) enqueuePrompt() string {
+	switch m.stage {
+	case 1:
+		return "priority ›"
+	case 2:
+		return "defer ›"
+	}
+	return "new ›"
+}
+
+// stageHint describes the current enqueue stage for the empty state.
+func (m *tuiModel) stageHint() string {
+	switch m.stage {
+	case 1:
+		return "priority 1-10 (enter for the default 4)"
+	case 2:
+		return "defer minutes (enter for now)"
+	}
+	return "prompt"
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// footerLine is the status plus the CONTEXT-SENSITIVE help line: the help is
+// derived from the bindings that are actually live, so a key is never
+// advertised that does not work (ADR 0038 decision 7). It is still a hand-kept
+// string per context rather than generated from a keymap table; that
+// generation is NAVI-593.
 func (m *tuiModel) footerLine(f frame) string {
 	line := " " + sanitizeLine(m.status)
 	if m.mode == ModeList && m.active != "" {
@@ -1324,8 +1992,42 @@ func (m *tuiModel) footerLine(f frame) string {
 	if f.tooNarrow() {
 		return line
 	}
-	help := " q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry · esc back"
-	return line + m.theme.Subtle(help)
+	return line + m.theme.Subtle(m.helpLine())
+}
+
+// helpLine names the bindings that are live in the current context. The
+// conversation screens advertise the leader and the blur, because that is how
+// an action is reached while the input owns the keyboard; the list advertises
+// the plain letters, because there they fire directly.
+func (m *tuiModel) helpLine() string {
+	if m.menuOpen {
+		help := " actions:"
+		for _, a := range m.actionMenu {
+			help += " " + menuLetter(a.Name) + " " + actionName(a)
+		}
+		return help + " · esc close"
+	}
+	switch m.mode {
+	case ModeHome, ModeLive:
+		if m.inputFocused {
+			return " enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow · tab blur"
+		}
+		return " s pause · r resume · c cancel · R retry · p/P priority · ctrl+a actions · esc back · type to write"
+	case ModeDetail:
+		return " s pause · r resume · c cancel · R retry · p/P priority · ctrl+a actions · esc back"
+	case ModeInput:
+		return " enter next · esc cancel"
+	}
+	return " 1 home · q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry"
+}
+
+// actionName is a declared action's label for the menu, falling back to the
+// verb so an unlabelled action is still named.
+func actionName(a view.Action) string {
+	if a.Label != "" {
+		return a.Label
+	}
+	return a.Name
 }
 
 func terminalSuffix(m *tuiModel) string {
@@ -1918,27 +2620,89 @@ func (m *tuiModel) bodyLive(f frame) []string {
 }
 
 // chatStatus is the state suffix the panel title shows while a conversation is
-// open: whether the view follows the tail, and whether the scrollback window
-// has dropped turns. It is the chat's replacement for the header line it used
-// to spend a body row on.
+// open. It leads with the THOUGHT'S LIFECYCLE STATUS — running, paused,
+// complete, failed — because that is the thing the reader is watching and the
+// screen otherwise never says it: the title names the thought and the
+// conversation shows its content, but nothing said whether it was still
+// working. The colour follows the same mapping a table cell uses
+// (theme.statusStyle), so a status means one thing across the TUI.
+//
+// After the status comes the view's own state: whether the viewport follows the
+// tail, and whether the scrollback window has dropped turns.
 func (m *tuiModel) chatStatus() string {
-	if m.mode != ModeLive {
+	if m.mode != ModeLive && m.mode != ModeHome {
 		return ""
 	}
-	// "live" is load-bearing: a running thought's conversation is being
-	// appended to, while an opened completed one is a transcript read. The
-	// reader needs to know which they are looking at.
-	status := "live · following"
+	id := m.conversationID()
+	if id == "" {
+		return "idle"
+	}
+	status := m.conversationStatus(id)
 	if m.chat.followSuspended() {
 		// The indicator is the promise that the view will not yank the reader
 		// to the bottom while they are reading history — and that it will
 		// resume once they return.
-		status = "live · paused (f to follow)"
+		status += " · following paused (ctrl+f)"
+	} else {
+		status += " · following"
 	}
 	if n := m.chat.trimNotice(); n != "" {
 		status += " " + n
 	}
 	return status
+}
+
+// conversationID is the thought the open conversation is showing: the tracked
+// one on home, the opened one in live. Empty when neither.
+func (m *tuiModel) conversationID() string {
+	if m.mode == ModeLive {
+		return m.liveID
+	}
+	if m.mode == ModeHome {
+		return m.homeID
+	}
+	return ""
+}
+
+// conversationStatus names the lifecycle state of the thought a conversation
+// is showing. It reads the live overlay first and the declared field second
+// (statusOf), so it is correct for a running thought the stream is updating and
+// for a transcript read after the fact.
+func (m *tuiModel) conversationStatus(id string) string {
+	switch m.statusOf(id) {
+	case "running":
+		// "live" is load-bearing: a running thought's conversation is being
+		// appended to, while an opened completed one is a transcript read.
+		return "live"
+	case "pending":
+		return "queued"
+	case "paused":
+		return "paused"
+	case "complete":
+		return "complete"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	case "":
+		return "unknown"
+	}
+	return m.statusOf(id)
+}
+
+// conversationStatusStyle is the style the panel title's status suffix is drawn
+// in, chosen from the thought's lifecycle so the state is legible at a glance.
+// Nil on a screen with no conversation, which renders the suffix plain.
+func (m *tuiModel) conversationStatusStyle() func(string) string {
+	if m.mode != ModeLive && m.mode != ModeHome {
+		return nil
+	}
+	id := m.conversationID()
+	if id == "" {
+		return m.theme.Subtle
+	}
+	st := m.theme.statusStyle(m.statusOf(id))
+	return func(s string) string { return m.theme.apply(st, s) }
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

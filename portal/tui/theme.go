@@ -196,6 +196,27 @@ func (t theme) panelTitle(label string) string {
 	return t.subtle.Render(stub) + t.title.Render(label) + t.subtle.Render(close_)
 }
 
+// statusStyle picks the style for a lifecycle status. It is the ONE place the
+// status-to-colour mapping lives, so a status means the same colour in a table
+// cell, in the panel title, and anywhere else it is shown — two mappings would
+// drift and the same state would read as two different things.
+//
+// The vocabulary covers both the queue's event kinds and the thought statuses
+// they map to (see displayStatus), so a caller can pass either.
+func (t theme) statusStyle(status string) lipgloss.Style {
+	switch status {
+	case "running", "started", "active", "live":
+		return t.good
+	case "failed", "error", "cancelled":
+		return t.bad
+	case "paused", "preempted", "blocked":
+		return t.warn
+	}
+	// complete/completed/done and anything unknown: quiet. A finished thought
+	// is not an alarm, and an unrecognised status should not shout.
+	return t.subtle
+}
+
 // Status colours an enum cell (a thought's state, a memory scope) so the eye
 // finds a row's state without reading every word. It takes the already-aligned
 // cell and the raw value, so the colour is chosen from the value while the
@@ -205,19 +226,7 @@ func (t theme) Status(value, aligned string, width int, a align) string {
 	if !t.colored {
 		return aligned
 	}
-	var style lipgloss.Style
-	switch value {
-	case "running", "started", "active":
-		style = t.good
-	case "failed", "error", "cancelled":
-		style = t.bad
-	case "paused", "preempted", "blocked":
-		style = t.warn
-	case "complete", "completed", "done":
-		style = t.subtle
-	default:
-		style = t.subtle
-	}
+	style := t.statusStyle(value)
 	// Render only the trimmed value, then re-pad, so the escape codes never
 	// count toward the column width.
 	trimmed := strings.TrimSpace(aligned)

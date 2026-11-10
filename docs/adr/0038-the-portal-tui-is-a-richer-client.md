@@ -264,3 +264,70 @@ them:
 Decision 2 was verified directly, because it is the claim the whole revamp's
 safety rests on: the ADR 0017 object surface, the ADR 0019 stream, and the
 `portal/view` toolkit are untouched by anything this work requires. It holds.
+
+## Amendment — the keymap binding on a screen with a persistent input
+
+**Recorded on implementation (NAVI-587).** Decision 7 binds actions to the
+focused object rather than to a mode. On home and on a conversation that
+screen also carries a **persistent text input focused on arrival** (decision
+3), and a terminal cannot tell "pause this thought" (`s`) from "type the
+letter s" without being told. Decision 7 did not settle that collision; this
+amendment does.
+
+The binding is **an explicit input-focus state plus a leader key**, and the
+reason for two mechanisms is that each covers the other's gap:
+
+- **Plain action letters** (`s`/`r`/`c`/`R`/`p`/`P`) bind to the focused
+  object **in every mode**, and are the fast path. They fire wherever a text
+  input does **not** have focus: the queue, the detail view, and home while
+  the steer input is **blurred**. While the input is **focused**, a printable
+  rune is text and never an action — the mistake in the other direction.
+- **`esc` on an empty buffer blurs the input** rather than leaving the screen
+  (on a non-empty buffer it still clears it, unchanged). `tab` toggles focus,
+  and any printable rune typed while blurred re-focuses the input and inserts,
+  so typing is never a mode that must be re-entered. Plain action letters are
+  therefore one key away on home.
+- **`ctrl+a` is the leader.** It opens a small menu of the focused object's
+  **declared** actions, and a letter dispatches one. It is not a printable
+  rune, so it works with the input focused — the escape hatch for acting
+  without leaving the steer field. Because the menu is built from the
+  descriptor, a new object type gets a correct menu with no new binding
+  (decision 2), and the menu **omits** an action that does not apply to the
+  object's status rather than advertising a key whose only outcome is an
+  error (decision 7). `steer` is deliberately absent from the menu: the
+  persistent input *is* its UI.
+
+Rejected: plain letters acting while the input is focused (it would make `s`
+untypeable); a modifier per action (`ctrl+r`/`ctrl+c`/`ctrl+s`/`ctrl+p` are
+terminal- and readline-significant, and the chat already owns the ctrl
+combinations it needs for scrolling and folding).
+
+Two consequences of decision 3 that this amendment fixes as well:
+
+- **Home must be reachable from everywhere.** A default screen you can only
+  visit once is not a default. Until the tab bar of decision 4 exists
+  (NAVI-593), `1` returns home — the tab bar's own home key, so the binding
+  survives that change.
+- **A thought that is still on the board stays tracked.** Pausing the thought
+  home is showing must not make it vanish: you paused it in order to resume
+  it, and home is where you do that. Home advances to the next running thought
+  when the tracked one reaches a terminal state (complete/failed/cancelled) —
+  but when **nothing** is running, **the finished conversation stays on
+  screen**. Watching a thought finish and then reading its result is the whole
+  point of home; blanking the transcript the instant it completes destroys the
+  thing the reader was waiting for. The empty state is reached by starting
+  something new, or by the thought leaving the page. A buffered steer is
+  **kept** across a tracked-thought change and re-targets on send, with the
+  panel title naming the current target so the re-target is visible.
+- **The panel title's status suffix names the thought's lifecycle.** It leads
+  with `live` / `queued` / `paused` / `complete` / `failed` / `cancelled` and
+  carries the view's own state (`· following`, `· following paused (ctrl+f)`)
+  after it. The colour comes from the same status-to-colour mapping a table
+  cell uses, so a state means one colour everywhere in the TUI; a screen that
+  named the thought and showed its content but never said whether it was still
+  working was missing the one fact the reader came for.
+
+Decision 3's **two-pane 66/33 split** is not delivered by this amendment or by
+NAVI-587. The single-pane home is; the split is tracked separately (NAVI-601),
+because it is a layout over the queue page (NAVI-592) and is the **wide-only**
+form factor of decision 6.

@@ -97,6 +97,11 @@ type frame struct {
 	// so transient state (a paused scrollback, a trimmed window) does not cost
 	// a body row the way a header line would.
 	status string
+	// statusStyle colours the status suffix. It is chosen by the screen (a
+	// conversation colours it by the thought's lifecycle), so the panel can
+	// show at a glance whether what you are reading is running, paused, or
+	// finished without spending a body row on it. Zero value renders plain.
+	statusStyle func(string) string
 	// input is the persistent input line drawn below the panel, with the
 	// cursor at the end. Empty means no input row, which is the case on
 	// screens that take no typing.
@@ -204,7 +209,13 @@ func (f frame) render(header string, body []string, footer string) string {
 	title := f.theme.panelTitle(f.title)
 	status := ""
 	if f.status != "" {
-		status = f.theme.Subtle("┤ " + f.status + " ├")
+		// The suffix's colour is the screen's choice (see statusStyle), so a
+		// lifecycle state reads the same here as it does in a table cell.
+		st := f.statusStyle
+		if st == nil {
+			st = f.theme.Subtle
+		}
+		status = st("┤ " + f.status + " ├")
 	}
 	fill := f.width - 2 - 2*panelPad - displayWidth(title) - displayWidth(status)
 	if fill < 0 {
