@@ -762,7 +762,13 @@ func (m *tuiModel) seedTurns(thoughtID string) []turn {
 			if v, ok := view.Hint(t, object.ViewChat); ok && v.Detail != "" {
 				detail = v.Detail
 			}
-			if chat, err := view.ReadChat(m.objects, t.Name, thoughtID, detail, object.Query{Limit: listPage}); err == nil {
+			chat, err := view.ReadChat(m.objects, t.Name, thoughtID, detail, object.Query{Limit: listPage})
+			if err != nil {
+				// A failed transcript read is not silent: a completed thought
+				// whose conversation will not load is a defect the reader should
+				// see rather than a blank panel they must interpret.
+				m.status = "transcript " + thoughtID + ": " + err.Error()
+			} else {
 				out = turnsOf(chat)
 			}
 		}
@@ -1105,9 +1111,15 @@ func (m *tuiModel) render() string {
 	if t, ok := m.currentType(); ok && t.Label != "" {
 		title = t.Label
 	}
-	header := " " + m.theme.Title("navi") + " · " + sanitizeLine(title) +
-		m.theme.Subtle(" (portal"+terminalSuffix(m)+")") +
-		m.theme.Subtle("  "+f.form().String()+" "+itoa(f.width)+"×"+itoa(f.height))
+	// The panel's top edge is labelled with where you are, the way a titled
+	// module announces its contents.
+	f.title = m.panelLabel(title)
+	// The panel's top edge already names the screen, so the header line is
+	// free to carry the things the title cannot: the navi, the form factor,
+	// and any stream-gap warning. Repeating the type name here would be the
+	// panel saying the same thing twice.
+	header := m.theme.Subtle("navi") + m.theme.Subtle(" · "+f.form().String()+" "+itoa(f.width)+"×"+itoa(f.height)) +
+		m.theme.Subtle(" · portal"+terminalSuffix(m))
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
@@ -1120,6 +1132,23 @@ func (m *tuiModel) render() string {
 
 	body := m.bodyLines(f)
 	return f.render(header, body, m.footerLine(f))
+}
+
+// panelLabel is the label on the panel's top edge: the screen and the object
+// it is showing, so the frame says where you are without a separate header.
+func (m *tuiModel) panelLabel(title string) string {
+	switch m.mode {
+	case ModeLive:
+		return "chat · " + m.liveID
+	case ModeDetail:
+		if m.detail != nil {
+			return "detail · " + m.detail.Title
+		}
+		return "detail"
+	case ModeInput:
+		return "input"
+	}
+	return title
 }
 
 // bodyLines dispatches to the current screen and returns its body rows.
@@ -1193,48 +1222,171 @@ func (m *tuiModel) bodyList(f frame) []string {
 		return append(out, " "+m.theme.Subtle("("+sanitizeLine(t.Name)+" empty)"))
 	}
 
-	// Columns are laid out from the descriptor's declared columns, sized by
-	// display width, and fitted to the frame so a wide value cannot push the
-	// rest off the screen (NAVI-588).
-	cols := m.columnLayout(f.width)
-	out = append(out, "    "+m.renderColumnHeader(cols))
+	// The rows are a grid: a marker gutter, the declared columns separated by
+	// a rule, and a trailing flags/activity gutter. The grid draws the
+	// header, the rule beneath it, and the rows from ONE column model, so the
+	// header and the body cannot drift apart.
+	g := m.buildGrid(f)
+	out = append(out, g.header(m.theme)...)
+	out = append(out, g.rule(m.theme))
 	for i, row := range m.list.Rows {
-		b := m.badges[row.ID]
-		flags := "  "
-		if b.checkpoint {
-			flags = " C "
-		}
-		if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
-			flags += "V"
-		}
-		mark := " "
-		if i == m.sel {
-			mark = m.theme.Marker(">")
-		}
-		line := " " + mark + " "
-		for _, c := range cols {
-			value := cellValue(row, c.column.Field)
-			if c.column.Field == "status" {
-				value = m.statusOf(row.ID)
-				if b.blocked {
-					value = "blocked"
-				}
-			}
-			line += pad(sanitizeLine(value), c.width) + " "
-		}
-		line += flags + " "
-		if b.activity != "" && f.width >= activityMinFrame {
-			line += " «" + truncate(sanitizeLine(b.activity), activityReserve-2, "…")
-		}
-		out = append(out, line)
+		out = append(out, g.row(m.theme, m, i, row)...)
 	}
 	return out
+}
+
+// grid is the resolved column model for the list: the columns, their widths,
+// and their alignment. It is built once per frame and used for the header,
+// the rule, and every row, so all three agree by construction.
+type grid struct {
+	cols    []laidOutColumn
+	widths  []int
+	markW   int
+	gutterW int
+}
+
+// buildGrid resolves the descriptor's columns against the frame.
+func (m *tuiModel) buildGrid(f frame) grid {
+	g := grid{markW: 3}
+	g.cols = m.columnLayout(f.innerWidth())
+	for _, c := range g.cols {
+		g.widths = append(g.widths, c.width)
+	}
+	// The trailing gutter holds the flags and, where there is room, the
+	// running activity preview.
+	g.gutterW = flagsReserve
+	if f.innerWidth() >= activityMinFrame {
+		g.gutterW += activityReserve
+	}
+	return g
+}
+
+// colSep is the column separator. A single rule character with a space each
+// side reads as a table without stealing much width.
+const colSep = "│"
+
+// header renders the column labels, aligned to match their column's kind and
+// separated by the same rule as the rows.
+func (g grid) header(th theme) []string {
+	line := strings.Repeat(" ", g.markW)
+	for i, c := range g.cols {
+		if i > 0 {
+			line += th.Subtle(" " + colSep + " ")
+		}
+		line += th.Subtle(alignCell(sanitizeLine(c.column.Label), c.width, c.align))
+	}
+	return []string{line}
+}
+
+// rule is the line under the header: a rule character spanning each column,
+// joined at the column separators. It is what makes the rows read as a grid
+// rather than as floating text.
+func (g grid) rule(th theme) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat("─", g.markW))
+	for i, w := range g.widths {
+		if i > 0 {
+			b.WriteString("─┼─")
+		}
+		b.WriteString(strings.Repeat("─", w))
+	}
+	b.WriteString(strings.Repeat("─", g.gutterW+1))
+	return th.Subtle(b.String())
+}
+
+// row renders one data row: the marker gutter, each cell aligned by its
+// column's kind, the flags, and the activity preview.
+func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
+	b := m.badges[row.ID]
+
+	mark := " "
+	if i == m.sel {
+		mark = th.Marker("▸")
+	}
+	line := " " + mark + " "
+	for ci, c := range g.cols {
+		if ci > 0 {
+			line += th.Subtle(" " + colSep + " ")
+		}
+		value := cellValue(row, c.column.Field)
+		if c.column.Field == "status" {
+			value = m.statusOf(row.ID)
+			if b.blocked {
+				value = "blocked"
+			}
+		}
+		cell := alignCell(sanitizeLine(value), c.width, c.align)
+		// Status is an enum: colour it so the eye finds a row's state without
+		// reading every word. The text is identical either way.
+		if c.column.Kind == object.KindEnum {
+			cell = th.Status(sanitizeLine(value), cell, c.width, c.align)
+		}
+		line += cell
+	}
+
+	// The flags gutter: a checkpoint marker and a verification flag, always
+	// reserved so a flag can never be squeezed off the edge.
+	flags := "  "
+	if b.checkpoint {
+		flags = " C"
+	}
+	if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
+		flags += "V"
+	} else {
+		flags += " "
+	}
+	line += " " + th.Subtle(flags)
+
+	if b.activity != "" && g.gutterW > flagsReserve {
+		line += " " + th.Subtle("«"+truncate(sanitizeLine(b.activity), activityReserve-2, "…"))
+	}
+	return []string{line}
+}
+
+// alignCell pads a value to the column width according to its alignment.
+func alignCell(s string, width int, a align) string {
+	s = truncate(s, width, "…")
+	space := width - displayWidth(s)
+	if space <= 0 {
+		return s
+	}
+	switch a {
+	case alignRight:
+		return strings.Repeat(" ", space) + s
+	case alignCenter:
+		left := space / 2
+		return strings.Repeat(" ", left) + s + strings.Repeat(" ", space-left)
+	}
+	return s + strings.Repeat(" ", space)
+}
+
+// align is how a column's values sit within their width. Alignment follows
+// the value's kind, because that is what makes a table scannable: numbers and
+// dates line up on the right, short enums sit centred, text reads left.
+type align int
+
+const (
+	alignLeft align = iota
+	alignRight
+	alignCenter
+)
+
+// alignFor picks the alignment for a field kind.
+func alignFor(k object.Kind) align {
+	switch k {
+	case object.KindInt, object.KindFloat, object.KindTime:
+		return alignRight
+	case object.KindEnum, object.KindBool:
+		return alignCenter
+	}
+	return alignLeft
 }
 
 // laidOutColumn is a declared column paired with the width it was given.
 type laidOutColumn struct {
 	column view.Column
 	width  int
+	align  align
 }
 
 // columnLayout sizes the descriptor's columns to the frame. It reserves room
@@ -1247,6 +1399,17 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 		gap     = 1
 	)
 	cols := m.list.Columns
+	if len(cols) == 0 {
+		return nil
+	}
+
+	// A column every row leaves empty is dropped before any sizing. Reserving
+	// width for a column that renders nothing steals it from the columns that
+	// do have something to say — the fixture's empty `model` was pushing the
+	// `updated` date off the edge at 80 columns, and shrinking to `…` at 60.
+	// A column that is empty for THIS page is not shown; the descriptor still
+	// declares it, so a page that fills it shows it.
+	cols = m.dropEmptyColumns(cols)
 	if len(cols) == 0 {
 		return nil
 	}
@@ -1267,7 +1430,13 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 		activity = activityReserve
 	}
 
-	avail := frameWidth - leading - flags - activity - gap // trailing space after the last column
+	// Each column after the first costs a separator: " " + rule + " ".
+	seps := 0
+	if len(cols) > 1 {
+		seps = (len(cols) - 1) * 3
+	}
+
+	avail := frameWidth - leading - flags - activity - gap - seps
 	if avail < 1 {
 		avail = 1
 	}
@@ -1292,7 +1461,7 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	textIdx := -1
 	for i, c := range cols {
 		w := naturalColumnWidth(c)
-		out[i] = laidOutColumn{column: c, width: w}
+		out[i] = laidOutColumn{column: c, width: w, align: alignFor(c.Kind)}
 		total += w + gap
 		if c.Kind == object.KindText {
 			textIdx = i
@@ -1384,18 +1553,55 @@ func columnsMinTotal(cols []view.Column, gap int) int {
 	return total
 }
 
-// columnFloor is the narrowest a column may be rendered. The identity column
-// gets a wider floor than the rest, because a row whose id is unreadable is
-// not a row a reader can act on.
+// columnFloor is the narrowest a column may be rendered. The floor is the
+// column's own label width where that is wider than the generic minimum,
+// because a header truncated to `Priori…` tells the reader less than no column
+// at all — a table whose headings are cut in half is worse than one with fewer
+// headings. The identity column gets a wider floor still, since a row whose id
+// is unreadable is not a row a reader can act on.
 func columnFloor(c view.Column) int {
+	floor := minColumn
+	if w := displayWidth(c.Label); w > floor {
+		floor = w
+	}
 	switch {
 	case c.Kind == object.KindText:
-		return minTextColumn
+		if minTextColumn > floor {
+			floor = minTextColumn
+		}
 	case c.Kind == object.KindRef || c.Field == "id":
-		// An identity column: readable ids, not `t-pen…`.
-		return idColumnFloor
+		if idColumnFloor > floor {
+			floor = idColumnFloor
+		}
 	}
-	return minColumn
+	return floor
+}
+
+// dropEmptyColumns removes columns whose value is empty in every row of the
+// current page. The header label is not a reason to keep a column: a column
+// whose every cell is blank is furniture.
+func (m *tuiModel) dropEmptyColumns(cols []view.Column) []view.Column {
+	if len(m.list.Rows) == 0 {
+		return cols
+	}
+	out := make([]view.Column, 0, len(cols))
+	for _, c := range cols {
+		empty := true
+		for _, row := range m.list.Rows {
+			if strings.TrimSpace(cellValue(row, c.Field)) != "" {
+				empty = false
+				break
+			}
+		}
+		// The identity column is never dropped, and neither is a column the
+		// live overlay fills (status), because their emptiness here is an
+		// artefact of what the page carried rather than of the type.
+		if empty && c.Field != "id" && c.Field != "status" && c.Kind != object.KindText {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // naturalColumnWidth is a column's preferred width: a text column wants
@@ -1412,16 +1618,6 @@ func naturalColumnWidth(c view.Column) int {
 		w = maxColumn
 	}
 	return w
-}
-
-// renderColumnHeader lays out the column labels at the same widths as the
-// rows, so the header and the body cannot drift.
-func (m *tuiModel) renderColumnHeader(cols []laidOutColumn) string {
-	line := ""
-	for _, c := range cols {
-		line += pad(m.theme.Subtle(sanitizeLine(c.column.Label)), c.width) + " "
-	}
-	return line
 }
 
 // cellValue reads one resolved cell from a toolkit row.
@@ -1449,17 +1645,17 @@ func (m *tuiModel) bodyDetail(f frame) []string {
 	// The field-label column is sized to the frame so a long label cannot
 	// push the value off the edge.
 	labelW := 18
-	if f.width < 60 {
+	if f.innerWidth() < 60 {
 		labelW = 12
 	}
-	if labelW > f.width/2 {
+	if labelW > f.innerWidth()/2 {
 		labelW = f.width / 2
 	}
 	for _, s := range d.Sections {
 		out = append(out, " "+m.theme.Subtle(sanitizeLine(s.Label)))
 		for _, field := range s.Fields {
 			line := "   " + pad(sanitizeLine(field.Label), labelW) + " " +
-				truncate(sanitizeLine(field.Value), f.width-4-labelW-1, "…")
+				truncate(sanitizeLine(field.Value), f.innerWidth()-4-labelW-1, "…")
 			out = append(out, line)
 		}
 	}
@@ -1494,7 +1690,7 @@ func (m *tuiModel) bodyInput(f frame) []string {
 	// The cursor sits after the text; the line is truncated so a long input
 	// does not overflow the frame.
 	text := sanitizeLine(m.input)
-	room := f.width - displayWidth(prompt) - 1
+	room := f.innerWidth() - displayWidth(prompt) - 1
 	if room < 0 {
 		room = 0
 	}
@@ -1505,7 +1701,7 @@ func (m *tuiModel) bodyInput(f frame) []string {
 // component renders the turn blocks and owns the scroll position, and this
 // only supplies the header and the viewport size.
 func (m *tuiModel) bodyLive(f frame) []string {
-	head := " " + m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
+	head := m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
 		m.theme.Subtle(" · live (esc returns)")
 	if m.chat.followSuspended() {
 		// The indicator is the promise that the view will not yank the reader
@@ -1527,11 +1723,14 @@ func (m *tuiModel) bodyLive(f frame) []string {
 	if rows < 1 {
 		rows = 1
 	}
-	m.chat.setSize(f.width-1, rows)
+	m.chat.setSize(f.innerWidth(), rows)
 
+	// The frame supplies the rail and the leading space, so the chat's lines
+	// are laid out to the full inner width without adding a margin of their
+	// own — an extra column here pushed the right rail off the edge.
 	out := []string{head}
 	for _, l := range m.chat.view(m.theme) {
-		out = append(out, " "+truncate(l, f.width-1, "…"))
+		out = append(out, truncate(l, f.innerWidth(), "…"))
 	}
 	return out
 }

@@ -811,15 +811,16 @@ func TestModelShowsModelColumn(t *testing.T) {
 	}
 	drain(m)
 	view := m.View()
-	// The model shows abbreviated (clipped at 10 chars).
-	if !strings.Contains(view, "very-long") {
-		t.Errorf("model column missing:\n%s", view)
+	// The model column is present and abbreviated. The exact width it clips at
+	// depends on the frame's chrome (the panel rails take two columns), so the
+	// assertion is on the intent — a recognisable prefix, not the whole value —
+	// rather than on a fixed character count.
+	if !strings.Contains(view, "Model") || !strings.Contains(view, "very-lon") {
+		t.Errorf("model column missing or unreadable:\n%s", view)
 	}
-	abbrev := "very-long-"
 	if strings.Contains(view, "very-long-model-name") {
 		t.Error("model not abbreviated in the row")
 	}
-	_ = abbrev
 }
 
 func TestSanitizeRowNewlines(t *testing.T) {
@@ -1001,14 +1002,16 @@ func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
 	m := NewModel(tport)
 	_ = m.Init()
 
-	if strings.Contains(m.View(), "from-remote") {
+	if strings.Contains(m.View(), "fromremote") {
 		t.Fatal("precondition: the thought must not exist yet")
 	}
 
 	// A thought arrives from another process (the remote client's enqueue).
 	// The portal's pump wakes on the mailbox push and hands the batch to the
 	// model, which applies it and re-reads the page — no timer involved.
-	if err := q.Enqueue(th("from-remote", 4)); err != nil {
+	// The id is kept short enough to survive the identity column's floor;
+	// a truncated id is NAVI-600's concern, not this test's.
+	if err := q.Enqueue(th("fromremote", 4)); err != nil {
 		t.Fatal(err)
 	}
 	evs, next, lost := m.feed.ReadAfter(m.cursor)
@@ -1016,7 +1019,7 @@ func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
 		t.Fatal("the external enqueue never reached the feed")
 	}
 	_, _ = m.Update(feedMsg{evs: evs, next: next, lost: lost})
-	if !strings.Contains(m.View(), "from-remote") {
+	if !strings.Contains(m.View(), "fromremote") {
 		t.Fatalf("the externally queued thought never appeared:\n%s", m.View())
 	}
 }

@@ -14,11 +14,13 @@ import "strings"
 
 // chrome is the number of rows the frame spends on non-body content: the
 // header, the footer, and the two separator rules between them.
+// The panel chrome: a top border with the title, a header line inside it, a
+// bottom border, and the status/help footer beneath the panel.
 const (
-	frameHeaderRows = 1
-	frameRuleRows   = 2
-	frameFooterRows = 1
-	frameChromeRows = frameHeaderRows + frameRuleRows + frameFooterRows
+	frameHeaderRows = 1 // the header line inside the panel
+	frameBorderRows = 2 // the top and bottom panel edges
+	frameFooterRows = 1 // the status/help line below the panel
+	frameChromeRows = frameHeaderRows + frameBorderRows + frameFooterRows
 )
 
 // minBodyRows is the floor the body is given even on a terminal too short to
@@ -79,6 +81,18 @@ type frame struct {
 	width  int
 	height int
 	theme  theme
+	// title labels the panel's top edge (the augmented-ui "labelled module"
+	// idiom). Empty draws a plain edge.
+	title string
+}
+
+// maxInt is a local helper: the standard library's max is generic in newer
+// Go, but this keeps the layout readable at the call sites.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // newFrame builds a frame for a terminal size, clamping to sane minimums so a
@@ -92,6 +106,18 @@ func newFrame(width, height int, t theme) frame {
 		height = 1
 	}
 	return frame{width: width, height: height, theme: t}
+}
+
+// innerWidth is the columns available to a screen's content: the frame width
+// less the two side rails and the space after the left one. Screens lay out
+// against this rather than the raw frame width, so the right rail is never
+// pushed off the edge by content sized to the full width.
+func (f frame) innerWidth() int {
+	w := f.width - 3
+	if w < 1 {
+		w = 1
+	}
+	return w
 }
 
 // bodyHeight is the rows left for the body once the chrome is subtracted.
@@ -120,22 +146,41 @@ func (f frame) tooShort() bool { return f.height < frameChromeRows+minBodyRows }
 // clipped to bodyHeight rows and every one of its lines is truncated to the
 // width, so a screen cannot overflow the frame even if it tries.
 func (f frame) render(header string, body []string, footer string) string {
-	rule := f.theme.Subtle(strings.Repeat("─", f.width))
+	// The screen is ONE panel with a clipped-corner frame: a titled top edge,
+	// side rails, and a bottom edge. This is the augmented-ui treatment — a
+	// notched module rather than a plain box — applied to opencode's
+	// structure, where the chrome exists to divide the view rather than to
+	// decorate it.
+	b := borderClipped()
+	rail := f.theme.Subtle
+
+	top := f.theme.panelTitle(f.title) + strings.Repeat(b.Top, maxInt(0, f.width-2-displayWidth(f.theme.panelTitle(f.title))))
+	top = b.TopLeft + top + b.TopRight
+
+	// Every interior line is railed on BOTH sides and padded to the width, so
+	// the panel closes as a frame rather than hanging off a left rail. The
+	// content between the rails is width-2, which is why the rail helper
+	// truncates the body to that.
+	inner := maxInt(1, f.width-2)
+	line := func(content string) string {
+		return pad(rail(b.Left)+" "+pad(content, inner-1)+rail(b.Right), f.width)
+	}
 
 	lines := make([]string, 0, f.height)
-	lines = append(lines, pad(header, f.width))
-	lines = append(lines, rule)
+	lines = append(lines, pad(top, f.width))
+	lines = append(lines, line(header))
 
 	bh := f.bodyHeight()
 	for i := 0; i < bh; i++ {
+		var content string
 		if i < len(body) {
-			lines = append(lines, pad(body[i], f.width))
-		} else {
-			lines = append(lines, strings.Repeat(" ", f.width))
+			content = body[i]
 		}
+		lines = append(lines, line(content))
 	}
 
-	lines = append(lines, rule)
+	bottom := b.BottomLeft + strings.Repeat(b.Bottom, maxInt(0, f.width-2)) + b.BottomRight
+	lines = append(lines, pad(bottom, f.width))
 	lines = append(lines, pad(footer, f.width))
 
 	// The frame promises exactly `height` lines; clip if a caller's chrome

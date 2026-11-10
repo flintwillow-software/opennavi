@@ -1,20 +1,20 @@
- navi · Thought (portal)  standard 60×20                    
-────────────────────────────────────────────────────────────
-    Id         Prompt       Status   Priority Model         
- > t-run      summarise t… running  2                       
-   t-pending  draft the m… pending  4                       
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-────────────────────────────────────────────────────────────
+╱─┤ Thought ├──────────────────────────────────────────────┐
+│ navi · standard 60×20 · portal                           │
+│    Id         │ Prompt         │   Status                │
+│ ──────────────┼────────────────┼────────────────         │
+│  ▸ t-run      │ summarise the… │  running                │
+│    t-pending  │ draft the mig… │  pending                │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────╱
   q quit · j/k move · enter open · t type · n new · a attac…

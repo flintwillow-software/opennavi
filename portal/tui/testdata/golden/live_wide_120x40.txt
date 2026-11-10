@@ -1,40 +1,40 @@
- navi · Thought (portal)  wide 120×40                                                                                   
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- chat · t-run · live (esc returns) · following                                                                          
- ▸ summarise the release notes                                                                                          
-                                                                                                                        
-   ~ thinking                                                                                                           
-     the user wants the highlights, not every commit                                                                    
-                                                                                                                        
- ◂ Here are the highlights:                                                                                             
-   1. terminal sizing                                                                                                   
-   2. rune-correct columns                                                                                              
-                                                                                                                        
-   ⚙ note_write · wrote summary  (enter to expand)                                                                      
-                                                                                                                        
-   · turn_end                                                                                                           
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry ·…
+╱─┤ chat · t-run ├─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ navi · wide 120×40 · portal                                                                                          │
+│ chat · t-run · live (esc returns) · following                                                                        │
+│ ▸ summarise the release notes                                                                                        │
+│                                                                                                                      │
+│   ~ thinking                                                                                                         │
+│     the user wants the highlights, not every commit                                                                  │
+│                                                                                                                      │
+│ ◂ Here are the highlights:                                                                                           │
+│   1. terminal sizing                                                                                                 │
+│   2. rune-correct columns                                                                                            │
+│                                                                                                                      │
+│   ⚙ note_write · wrote summary  (enter to expand)                                                                    │
+│                                                                                                                      │
+│   · turn_end                                                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╱
+ transcript t-run: object: unknown detail q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s…

@@ -1,24 +1,24 @@
- navi · Thought (portal)  standard 80×24                                        
-────────────────────────────────────────────────────────────────────────────────
-    Id         Prompt           Status     Priority   Model      Updated at     
- > t-run      summarise the r… running    2                     2026-11-0…      
-   t-pending  draft the migra… pending    4                     2026-11-0…      
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-────────────────────────────────────────────────────────────────────────────────
+╱─┤ Thought ├──────────────────────────────────────────────────────────────────┐
+│ navi · standard 80×24 · portal                                               │
+│    Id         │ Prompt       │   Status   │   Priority │ Updated at          │
+│ ──────────────┼──────────────┼────────────┼────────────┼────────────────     │
+│  ▸ t-run      │ summarise t… │  running   │          2 │ 2026-11-1…          │
+│    t-pending  │ draft the m… │  pending   │          4 │ 2026-11-1…          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────╱
   q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s…
