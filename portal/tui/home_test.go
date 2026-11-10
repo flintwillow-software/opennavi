@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/flintwillow-software/opennavi/internal/agent"
 	"github.com/flintwillow-software/opennavi/object"
@@ -236,16 +237,77 @@ func TestHomeFollowsTheRunningThought(t *testing.T) {
 		t.Errorf("home did not re-derive onto the next running thought:\n%s", m.View())
 	}
 
-	// Nothing running: home falls to its empty state.
+	// Nothing running: the FINISHED CONVERSATION STAYS ON SCREEN. Watching a
+	// thought finish and then reading its result is the point of home; blanking
+	// the transcript at the moment it completes destroys what the reader was
+	// waiting for. The status suffix says so instead.
 	if err := q.Complete("second", ""); err != nil {
 		t.Fatal(err)
 	}
 	drain(m)
-	if m.homeID != "" {
-		t.Fatalf("home still tracks %q with nothing running", m.homeID)
+	if m.homeID != "second" {
+		t.Fatalf("home tracks %q, want second kept on screen after it completed", m.homeID)
 	}
-	if !strings.Contains(m.View(), "nothing is running") {
-		t.Errorf("home did not fall to its empty state:\n%s", m.View())
+	if !strings.Contains(m.View(), "home · second") {
+		t.Errorf("home lost the finished thought's conversation:\n%s", m.View())
+	}
+	if !strings.Contains(m.View(), "complete") {
+		t.Errorf("home does not say the thought completed:\n%s", m.View())
+	}
+	if strings.Contains(m.View(), "nothing is running") {
+		t.Errorf("home blanked a finished conversation to its empty state:\n%s", m.View())
+	}
+
+	// A new thought starts running: home advances to it.
+	if err := q.Enqueue(th("third", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim for third")
+	}
+	drain(m)
+	if m.homeID != "third" {
+		t.Fatalf("home tracks %q, want third after a new thought started", m.homeID)
+	}
+}
+
+// TestHomeKeepsTheTranscriptWhenTheThoughtCompletes is the regression for the
+// bug found in review: the conversation was wiped the instant the tracked
+// thought finished.
+func TestHomeKeepsTheTranscriptWhenTheThoughtCompletes(t *testing.T) {
+	q := newQueue(t)
+	tport, broker := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+	if err := q.Enqueue(th("done1", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
+	drain(m)
+
+	// A streamed assistant turn lands in the conversation.
+	observe(broker, "done1", agent.AgentEvent{
+		Type:    agent.AgentEventContentDelta,
+		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "the answer is 42"},
+	})
+	drain(m)
+	if !strings.Contains(m.View(), "the answer is 42") {
+		t.Fatalf("precondition: the turn should be on screen\n%s", m.View())
+	}
+
+	if err := q.Complete("done1", ""); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+
+	view := m.View()
+	if !strings.Contains(view, "the answer is 42") {
+		t.Errorf("the transcript was cleared when the thought completed:\n%s", view)
+	}
+	if !strings.Contains(view, "home · done1") {
+		t.Errorf("home stopped naming the thought it is showing:\n%s", view)
 	}
 }
 
@@ -593,5 +655,73 @@ func TestHomeKeyWorksWhileTyping(t *testing.T) {
 	keyRunes(t, m, "1")
 	if m.mode != ModeHome {
 		t.Fatalf("mode = %q, want home", m.mode)
+	}
+}
+
+// TestConversationStatusNamesTheLifecycle: the panel title's status suffix
+// names the THOUGHT's state, not just the view's scroll behaviour — the screen
+// otherwise never says whether the thought you are watching is still working.
+func TestConversationStatusNamesTheLifecycle(t *testing.T) {
+	m, _, _ := runningModel(t)
+	cases := []struct {
+		status string
+		want   string
+	}{
+		{"running", "live"},
+		{"pending", "queued"},
+		{"paused", "paused"},
+		{"complete", "complete"},
+		{"failed", "failed"},
+		{"cancelled", "cancelled"},
+	}
+	for _, c := range cases {
+		m.setBadge("r1", func(b *badge) { b.status = c.status })
+		if got := m.chatStatus(); !strings.HasPrefix(got, c.want) {
+			t.Errorf("status %q rendered as %q, want a prefix of %q", c.status, got, c.want)
+		}
+	}
+}
+
+// TestConversationStatusColoursFollowTheStatus: the suffix is coloured from the
+// same mapping a table cell uses, so a state means one colour across the TUI.
+// Asserted on the style's own foreground rather than a rendered escape, because
+// a test process has no TTY and lipgloss would correctly choose Ascii (no
+// colour) for it — the mapping is what is under test, not the terminal.
+func TestConversationStatusColoursFollowTheStatus(t *testing.T) {
+	m, _, _ := runningModel(t)
+	th := newThemeFor(true)
+
+	fg := func(status string) string {
+		m.setBadge("r1", func(b *badge) { b.status = status })
+		// The style the panel suffix is drawn in, read from the same function
+		// the render path uses. AdaptiveColor resolves against the profile, so
+		// take its light variant as the stable identity.
+		switch c := th.statusStyle(m.statusOf("r1")).GetForeground().(type) {
+		case lipgloss.Color:
+			return string(c)
+		case lipgloss.AdaptiveColor:
+			return c.Light
+		}
+		return ""
+	}
+	running, failed, paused, complete := fg("running"), fg("failed"), fg("paused"), fg("complete")
+	if running == failed || running == paused {
+		t.Errorf("distinct statuses share a colour: running=%s failed=%s paused=%s",
+			running, failed, paused)
+	}
+	if complete == running || complete == failed || complete == paused {
+		t.Errorf("a finished thought is coloured like an active one: %s", complete)
+	}
+	// One mapping: a table cell and the panel suffix agree.
+	cellStyle := th.statusStyle("running").GetForeground()
+	var cell string
+	switch c := cellStyle.(type) {
+	case lipgloss.Color:
+		cell = string(c)
+	case lipgloss.AdaptiveColor:
+		cell = c.Light
+	}
+	if cell != running {
+		t.Errorf("table cell and panel suffix disagree: cell=%q panel=%q", cell, running)
 	}
 }

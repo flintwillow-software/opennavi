@@ -624,9 +624,9 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 	}
 }
 
-// trackRunning keeps home pointed at the running thought. It is called on
-// every lifecycle event, so the tracked thought follows the queue rather than
-// being chosen once at start-up — which is what makes home correct in any
+// trackRunning keeps home pointed at the thought worth watching. It is called
+// on every lifecycle event, so the tracked thought follows the queue rather
+// than being chosen once at start-up — which is what makes home correct in any
 // session (`MaxConcurrent` defaults to 2, so "one running" is not a start-up
 // property).
 //
@@ -637,28 +637,39 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 //     from under you — you paused it in order to resume it, and home is where
 //     you do that.
 //  2. When the tracked thought reaches a terminal state (complete/failed/
-//     cancelled), the next running one takes its place.
-//  3. When nothing is left, home falls to its empty state.
+//     cancelled), the next running one takes its place — but if none is
+//     running, THE FINISHED CONVERSATION STAYS ON SCREEN. Watching a thought
+//     finish and then reading its result is the whole point of home; blanking
+//     the transcript at the moment it completes destroys the thing the reader
+//     was waiting for. The status suffix says `complete`, and the empty state
+//     is reached by starting something new (or by the thought leaving the
+//     page).
+//  3. Home only falls to its empty state when there is nothing left to show:
+//     no running thought, and the tracked one has left the page entirely.
 //
 // The reader's INPUT BUFFER IS NEVER DISCARDED here — the buffer is their text,
 // and dropping it because the queue advanced is the same class of defect as a
 // key that does nothing. It re-targets on send instead, and the panel title
 // names the current target so the re-target is visible.
 func (m *tuiModel) trackRunning(changed string) {
-	// Agent events (content deltas) arrive constantly and must not re-derive
-	// home on every one; only a lifecycle change can move the tracked thought.
-	if changed != "" && changed != m.homeID && !m.isOnBoard(changed) {
+	// A lifecycle change to some OTHER thought cannot move the tracked one
+	// unless that thought is now running (it may become the next target) —
+	// otherwise there is nothing to re-derive.
+	if changed != "" && changed != m.homeID && m.statusOf(changed) != "running" {
 		return
 	}
+	// Still on the board (pending/running/paused): stay on it.
 	if m.homeID != "" && m.isOnBoard(m.homeID) {
-		return // still on the board: stay on it
+		return
 	}
 	next, ok := m.firstRunning()
 	if !ok {
-		if m.homeID == "" {
+		// Nothing is running. Keep a finished conversation on screen (rule 2);
+		// only fall to the empty state when the tracked thought is gone from
+		// the page, or there was never one.
+		if m.homeID != "" && m.isOnPage(m.homeID) {
 			return
 		}
-		// Nothing running and nothing pending: home is done with this thought.
 		m.homeID = ""
 		m.chat.reset(nil)
 		return
@@ -677,7 +688,7 @@ func (m *tuiModel) isOnBoard(id string) bool {
 	if id == "" {
 		return false
 	}
-	if _, known := m.items[id]; !known {
+	if !m.isOnPage(id) {
 		return false
 	}
 	switch m.statusOf(id) {
@@ -685,6 +696,23 @@ func (m *tuiModel) isOnBoard(id string) bool {
 		return false
 	}
 	return true
+}
+
+// isOnPage reports whether a thought is one the page carries, regardless of
+// status. It is the difference between "finished" and "gone": a completed
+// thought is still readable, and home keeps showing it until the page no longer
+// has it (or a new thought starts running).
+func (m *tuiModel) isOnPage(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, known := m.items[id]; known {
+		return true
+	}
+	// The transcript cache outlives the page entry: a thought that scrolled
+	// off the page can still be read from what the stream accumulated.
+	_, cached := m.transcripts[id]
+	return cached
 }
 
 // firstRunning returns the id of a running thought, in page order. It reads
@@ -1701,6 +1729,7 @@ func (m *tuiModel) render() string {
 	// spending a body row of its own.
 	f.title = m.panelLabel()
 	f.status = m.chatStatus()
+	f.statusStyle = m.conversationStatusStyle()
 
 	// The conversation screens carry a persistent input: steering the thought
 	// you are watching is the default gesture and must cost no keystroke to
@@ -2591,30 +2620,89 @@ func (m *tuiModel) bodyLive(f frame) []string {
 }
 
 // chatStatus is the state suffix the panel title shows while a conversation is
-// open: whether the view follows the tail, and whether the scrollback window
-// has dropped turns. It is the chat's replacement for the header line it used
-// to spend a body row on.
+// open. It leads with the THOUGHT'S LIFECYCLE STATUS — running, paused,
+// complete, failed — because that is the thing the reader is watching and the
+// screen otherwise never says it: the title names the thought and the
+// conversation shows its content, but nothing said whether it was still
+// working. The colour follows the same mapping a table cell uses
+// (theme.statusStyle), so a status means one thing across the TUI.
+//
+// After the status comes the view's own state: whether the viewport follows the
+// tail, and whether the scrollback window has dropped turns.
 func (m *tuiModel) chatStatus() string {
 	if m.mode != ModeLive && m.mode != ModeHome {
 		return ""
 	}
-	if m.mode == ModeHome && m.homeID == "" {
+	id := m.conversationID()
+	if id == "" {
 		return "idle"
 	}
-	// "live" is load-bearing: a running thought's conversation is being
-	// appended to, while an opened completed one is a transcript read. The
-	// reader needs to know which they are looking at.
-	status := "live · following"
+	status := m.conversationStatus(id)
 	if m.chat.followSuspended() {
 		// The indicator is the promise that the view will not yank the reader
 		// to the bottom while they are reading history — and that it will
 		// resume once they return.
-		status = "live · paused (ctrl+f to follow)"
+		status += " · following paused (ctrl+f)"
+	} else {
+		status += " · following"
 	}
 	if n := m.chat.trimNotice(); n != "" {
 		status += " " + n
 	}
 	return status
+}
+
+// conversationID is the thought the open conversation is showing: the tracked
+// one on home, the opened one in live. Empty when neither.
+func (m *tuiModel) conversationID() string {
+	if m.mode == ModeLive {
+		return m.liveID
+	}
+	if m.mode == ModeHome {
+		return m.homeID
+	}
+	return ""
+}
+
+// conversationStatus names the lifecycle state of the thought a conversation
+// is showing. It reads the live overlay first and the declared field second
+// (statusOf), so it is correct for a running thought the stream is updating and
+// for a transcript read after the fact.
+func (m *tuiModel) conversationStatus(id string) string {
+	switch m.statusOf(id) {
+	case "running":
+		// "live" is load-bearing: a running thought's conversation is being
+		// appended to, while an opened completed one is a transcript read.
+		return "live"
+	case "pending":
+		return "queued"
+	case "paused":
+		return "paused"
+	case "complete":
+		return "complete"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	case "":
+		return "unknown"
+	}
+	return m.statusOf(id)
+}
+
+// conversationStatusStyle is the style the panel title's status suffix is drawn
+// in, chosen from the thought's lifecycle so the state is legible at a glance.
+// Nil on a screen with no conversation, which renders the suffix plain.
+func (m *tuiModel) conversationStatusStyle() func(string) string {
+	if m.mode != ModeLive && m.mode != ModeHome {
+		return nil
+	}
+	id := m.conversationID()
+	if id == "" {
+		return m.theme.Subtle
+	}
+	st := m.theme.statusStyle(m.statusOf(id))
+	return func(s string) string { return m.theme.apply(st, s) }
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

@@ -310,10 +310,22 @@ Two consequences of decision 3 that this amendment fixes as well:
   survives that change.
 - **A thought that is still on the board stays tracked.** Pausing the thought
   home is showing must not make it vanish: you paused it in order to resume
-  it, and home is where you do that. Home moves on only when the tracked
-  thought reaches a terminal state (complete/failed/cancelled). A buffered
-  steer is **kept** across that move and re-targets on send, with the panel
-  title naming the current target so the re-target is visible.
+  it, and home is where you do that. Home advances to the next running thought
+  when the tracked one reaches a terminal state (complete/failed/cancelled) —
+  but when **nothing** is running, **the finished conversation stays on
+  screen**. Watching a thought finish and then reading its result is the whole
+  point of home; blanking the transcript the instant it completes destroys the
+  thing the reader was waiting for. The empty state is reached by starting
+  something new, or by the thought leaving the page. A buffered steer is
+  **kept** across a tracked-thought change and re-targets on send, with the
+  panel title naming the current target so the re-target is visible.
+- **The panel title's status suffix names the thought's lifecycle.** It leads
+  with `live` / `queued` / `paused` / `complete` / `failed` / `cancelled` and
+  carries the view's own state (`· following`, `· following paused (ctrl+f)`)
+  after it. The colour comes from the same status-to-colour mapping a table
+  cell uses, so a state means one colour everywhere in the TUI; a screen that
+  named the thought and showed its content but never said whether it was still
+  working was missing the one fact the reader came for.
 
 Decision 3's **two-pane 66/33 split** is not delivered by this amendment or by
 NAVI-587. The single-pane home is; the split is tracked separately (NAVI-601),

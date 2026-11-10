@@ -933,6 +933,12 @@ func TestLiveViewHeaderMarksLive(t *testing.T) {
 	if err := q.Enqueue(th("run1", 4)); err != nil {
 		t.Fatal(err)
 	}
+	// The thought must be RUNNING for the header to say `live` (NAVI-587): the
+	// status suffix now names the thought's lifecycle, and a pending thought
+	// reads `queued`.
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
 	drain(m)
 	m.sel = 0
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
