@@ -378,3 +378,86 @@ decision 2, that a new object type needs no new screen.
 **Follow-up:** the keymap and the persistent input are still hand-rolled
 (`chatKeys`, `helpLine`, `menuLetter`, and a `string` with manual backspace).
 Moving them to `bubbles/key` + `bubbles/help` + `bubbles/textarea` is NAVI-593.
+
+## Amendment — the keymap is declared, and the help is generated from it
+
+**Recorded on implementation (NAVI-593).** Decision 7 says actions are bound to
+the focused object and that "the footer help is derived from the active
+bindings, so a key is never advertised that does not work". The first half was
+delivered by NAVI-587; the second half is this amendment.
+
+Before it, the help was a hand-kept string per context (`helpLine`) and the
+dispatch was a `switch k.String()` — two lists that had to be kept in agreement
+by hand, and did not always agree (the whole revamp started from a help line
+advertising keys that were inert). Now every key is a `key.Binding` declared
+once in `keys.go`, and **both** the dispatch and the footer read the same
+declarations. Each context supplies a small `help.KeyMap` over the bindings
+that are live in it, so a context cannot advertise a key it does not handle.
+
+Two consequences worth recording:
+
+- **The help truncates rather than overflows.** `bubbles/help` renders from the
+  bindings and clips to the terminal width; the hand-kept string overflowed any
+  narrow terminal. (`help` clips *items* and can still emit a line wider than
+  its `Width`, so the footer enforces the final width — that is a property of
+  the library, not of the binding.)
+- **`?` opens a full-screen help overlay, and is typable while a text input has
+  focus.** The rule "a printable rune is text while a text input owns the
+  keyboard" now lives in one predicate (`inputOwnsKeyboard`) that the help key,
+  the action letters, and the leader all consult. `?` is a character people
+  write ("does this work?"), so claiming it while typing would make the steer
+  input unable to express a question — the same defect as an advertised key
+  that does nothing, in the other direction. Blurred, `?` opens help.
+
+The overlay reports the keys of the screen **underneath** it, not its own: a
+reader who asked for help wants to know what they can do where they were.
+
+**Not in this amendment:** the persistent input is still a `string` with manual
+backspace handling rather than `bubbles/textarea`. That is a behaviour change
+(it brings its own key handling and can be multi-line, which changes the
+frame's input-row accounting) and is tracked separately.
+
+## Amendment — the screen is regions, not one panel
+
+**Recorded on implementation (NAVI-603).** Decision 6 describes the form
+factors and the frame; the implementation put *everything* inside one bordered
+panel — the conversation, the input, and the status line, with the help
+underneath it. That shape cannot express a home screen with a header and a
+sidebar, and it is why home did not read as a screen you are *in*.
+
+The frame now composes **regions**, in the shape crush uses
+(`charmbracelet/crush`, `internal/ui/model/ui.go` `generateLayout`/`uiLayout`):
+
+```
+header        what you are looking at, plus the secondary facts
+-----------------------------------------------
+main          the variable region: conversation, table, status
+-----------------------------------------------
+editor        its own bordered region, only on screens that take typing
+-----------------------------------------------
+status        the transient message and the generated help
+```
+
+Three consequences worth recording:
+
+- **The editor is a region, not a row of the content.** It has its own border
+  and its own focus, and it does not scroll away with the conversation — which
+  is what makes it read as a place to type rather than as a line in the
+  transcript.
+- **The header is a region, not a label on a border.** The screen's identity is
+  on the left and the secondary facts (a thought's lifecycle, the view's
+  scroll state, the running activity) on the right. Decision 6's form factors
+  and the 60-column floor are unchanged; what changed is that the header is now
+  somewhere to put things.
+- **`render` and `regionRows` compute the layout once.** The row arithmetic had
+  drifted between the two — the status bar floated above the bottom or was
+  clipped off it — so the heights are derived in one place and the gutters are
+  emitted where they are counted. The exact-size contract (exactly `height`
+  lines of exactly `width` columns) is unchanged and is the check on all of it.
+
+**Not yet done, and why this is an amendment rather than the whole story:**
+the home sidebar (NAVI-601) and the queue and status pages (NAVI-592,
+NAVI-598) are built on these regions in follow-up work. Decision 4's answer to
+open question 4 — **tabs, not a sidebar** — is not changed here; the sidebar
+decision 4 rejected was a *persistent navigation* sidebar, and NAVI-601 adds a
+*content* pane on home only.

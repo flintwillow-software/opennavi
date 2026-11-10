@@ -1,0 +1,20 @@
+ home · nothing running                                idle 
+                                                            
+                                                            
+ keys · conversation                                        
+                                                            
+ enter  send      s   pause      ↑/↓       scroll     …     
+ ctrl+a actions   r   resume     pgup/pgdn page             
+ ctrl+o fold      c   cancel     home/end  jump             
+ ctrl+f follow    R   retry      esc       clear/blur       
+                  p/P priority   tab       blur             
+                  P   priority                              
+                                                            
+                                                            
+╭──────────────────────────────────────────────────────────╮
+│ new ›                                                    │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+                                                            
+                              s pause · r resume · c cancel…

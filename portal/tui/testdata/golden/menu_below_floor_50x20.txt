@@ -1,20 +1,20 @@
-╭──┤ home · t-run ──────────┤ live · following ──╮
-│                                                │
-│                                                │
-│  terminal too narrow — need at least 60 colum… │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│ steer › █                                      │
-│                                                │
-╰────────────────────────────────────────────────╯
- actions for t-run                                
+ home · t-run                    live · following 
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+ terminal too narrow — need at least 60 columns, …
+                                                  
+ actions for t-run         actions: s pause p bump

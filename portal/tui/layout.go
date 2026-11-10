@@ -2,34 +2,46 @@ package tui
 
 import "strings"
 
-// The frame is the layout primitive every screen renders into (NAVI-588): a
-// header line, a body of a computed height, and a footer. Screens stop
-// guessing their own height and stop emitting a fixed 60-column rule; the
-// frame knows the terminal size and hands the body exactly the rows it has.
+// The frame composes a screen from REGIONS rather than drawing one panel
+// (NAVI-603). The shape is crush's (charmbracelet/crush
+// internal/ui/model/ui.go, generateLayout/uiLayout):
 //
-// The frame's contract is that its output is exactly `height` lines, each
-// exactly `width` display columns — no more, no less. That is what makes the
-// TUI fill the terminal rather than leaving it half-drawn, and it is what a
-// golden render can assert at a fixed size.
+//	header        what you are looking at, plus the secondary facts
+//	-----------------------------------------------
+//	main          the variable region: a conversation, a table, a status page
+//	-----------------------------------------------
+//	editor        its own region, only on screens that take typing
+//	-----------------------------------------------
+//	status        the generated help plus the transient status line
+//
+// Regions are lipgloss styles composed with JoinVertical (the NAVI-602
+// pattern), not hand-drawn runes, and the editor is a REGION rather than a row
+// inside the content — which is what lets a screen put a real input box at the
+// bottom without it scrolling away with the content.
+//
+// The frame's contract is unchanged and is what every golden asserts: the
+// output is exactly `height` lines, each exactly `width` display columns.
+// Regions are sized from one place (regionRows) so the sum cannot drift.
 
-// chrome is the number of rows the frame spends on non-body content: the
-// header, the footer, and the two separator rules between them.
-// The panel chrome: a top border with the title, an optional header line
-// inside it, a bottom border, and the status/help footer beneath the panel.
-// The header row is optional because it only ever carries a warning; a
-// healthy TUI spends that row on content.
+// The chrome the frame spends on non-main regions. `main` is whatever is left,
+// which is why it is the one region with no constant.
 const (
-	frameHeaderRows = 1 // the optional header line inside the panel
-	frameBorderRows = 2 // the top and bottom panel edges
-	frameFooterRows = 1 // the status/help line below the panel
-	frameInputRows  = 1 // the optional input line inside the panel
-	// frameInputSpacerRows is the blank row between the body and the input, so
-	// the composer is not pressed against the conversation it belongs to.
-	frameInputSpacerRows = 1
-	// frameBaseChrome includes the vertical padding rows, which are part of
-	// the panel's chrome rather than its content.
-	frameBaseChrome = frameBorderRows + frameFooterRows + 2*panelPadY
-	frameChromeRows = frameBaseChrome + frameHeaderRows
+	// frameHeaderRows is the header region: one row on a roomy terminal, and
+	// it is dropped entirely on a short one (see headerRows).
+	frameHeaderRows = 1
+	// frameStatusRows is the status/help bar. It is always present: a screen
+	// with no help and no status still gets a blank bar, so the layout does
+	// not jump by a row as messages come and go.
+	frameStatusRows = 1
+	// frameEditorMinRows is the smallest a usable input box can be: a border
+	// top, one content row, a border bottom.
+	frameEditorMinRows = 3
+	// frameEditorRows is the editor's preferred height. It is a box with
+	// padding, not a one-line field, so it needs a few rows to read as one.
+	frameEditorRows = 5
+	// frameGutter is the blank row between regions, so a border does not sit
+	// flush against the region above it.
+	frameGutter = 1
 )
 
 // minBodyRows is the floor the body is given even on a terminal too short to
@@ -90,28 +102,41 @@ type frame struct {
 	width  int
 	height int
 	theme  theme
-	// title labels the panel's top edge (the augmented-ui "labelled module"
-	// idiom). Empty draws a plain edge.
+
+	// title is the HEADER region's left label: what this screen is showing
+	// (`home · <id>`, `queue`, `status`). It is a real region now, not a label
+	// on a border.
 	title string
-	// hasHeader says whether the optional header row inside the panel is
-	// drawn. It carries only a warning, so it is usually absent.
+	// subtitle is the header's secondary text, right-aligned: the facts that
+	// are worth a glance but are not the identity (`live · following`, a
+	// count, a model). Coloured by subtitleStyle.
+	subtitle string
+	// subtitleStyle colours the subtitle. A conversation colours it by the
+	// thought's lifecycle, so the state is legible at a glance.
+	subtitleStyle func(string) string
+	// hasHeader says whether the header region is drawn. It is present on
+	// every screen that has something to say; the notice path drops it.
 	hasHeader bool
-	// status is a short state suffix shown at the right of the title's rule,
-	// so transient state (a paused scrollback, a trimmed window) does not cost
-	// a body row the way a header line would.
-	status string
-	// statusStyle colours the status suffix. It is chosen by the screen (a
-	// conversation colours it by the thought's lifecycle), so the panel can
-	// show at a glance whether what you are reading is running, paused, or
-	// finished without spending a body row on it. Zero value renders plain.
-	statusStyle func(string) string
-	// input is the persistent input line drawn below the panel, with the
-	// cursor at the end. Empty means no input row, which is the case on
-	// screens that take no typing.
+
+	// input is the EDITOR region's content (the steer/enqueue text). Empty
+	// with inputPrompt empty means the screen takes no typing and the editor
+	// region is absent entirely.
 	input string
-	// inputPrompt labels the input line (`steer ›`), so the reader knows what
-	// submitting will do.
+	// inputPrompt labels the editor region (`steer ›`, `new ›`), so the
+	// reader knows what submitting will do.
 	inputPrompt string
+
+	// notice is a full-width attention line drawn above the status bar (a
+	// dropped stream, an unreachable portal). It is a region of its own so a
+	// warning is not buried in the help text.
+	notice string
+	// noticeStyle colours the notice.
+	noticeStyle func(string) string
+
+	// status is the STATUS region's left text: the transient message line.
+	status string
+	// help is the STATUS region's right text: the generated help (NAVI-593).
+	help string
 }
 
 // panelPad is the gutter between the panel's rail and its content. One column
@@ -158,25 +183,15 @@ func (f frame) innerWidth() int {
 	return w
 }
 
-// chromeRows is the chrome this frame actually spends: the borders and footer
-// always, the header row only when there is something to say in it, and the
-// input block (a blank spacer plus the input line) only when the frame takes
-// typing. It is the ONE place the chrome is counted, so render's own layout
-// cannot drift from what bodyHeight hands a screen.
-func (f frame) chromeRows() int {
-	n := frameBaseChrome
-	if f.hasHeader {
-		n += frameHeaderRows
-	}
-	if f.inputPrompt != "" {
-		n += frameInputRows + frameInputSpacerRows
-	}
-	return n
-}
+// chromeRows is the non-main rows this frame spends. It reads regionRows, so
+// the height a screen is handed and the height render produces are the same
+// number by construction rather than by two matching sums.
+func (f frame) chromeRows() int { return f.height - f.regionRows().main }
 
-// bodyHeight is the rows left for the body once the chrome is subtracted.
+// bodyHeight is the rows the MAIN region gets: everything the chrome does not
+// take, floored so a screen always has something to draw into.
 func (f frame) bodyHeight() int {
-	h := f.height - f.chromeRows()
+	h := f.regionRows().main
 	if h < minBodyRows {
 		return minBodyRows
 	}
@@ -195,114 +210,65 @@ func (f frame) tooNarrow() bool { return f.width < narrowFloor }
 // body.
 func (f frame) tooShort() bool { return f.height < f.chromeRows()+minBodyRows }
 
-// render assembles the panel: a lipgloss-drawn rounded border with the title
-// and status set into its top edge, the body inside, and the footer beneath.
+// render composes the screen from its regions, top to bottom:
 //
-// The panel box is lipgloss's (Style.Border/Width/Height/Padding), not hand-
-// drawn runes. Width and Height are the CONTENT box — lipgloss draws the
-// border outside them and padding inside — so the style is given the terminal
-// size less the border, which is the one piece of arithmetic this function
-// owns. The frame's contract is unchanged and is what the goldens assert: the
-// output is EXACTLY height lines of EXACTLY width display columns.
+//	header | main | (editor) | (notice) | status
+//
+// The regions are sized by regionRows and joined with JoinVertical, so the
+// total is exactly the frame height by construction rather than by two
+// arithmetic paths agreeing. Every line is fitted to the frame width, so a
+// screen cannot overflow however long its content is.
 func (f frame) render(header string, body []string, footer string) string {
-	// The panel's inner box: everything but the footer, which sits outside the
-	// border. lipgloss's Width/Height exclude the border (2 cells) and include
-	// padding, so the border is what gets subtracted here.
-	panelH := f.height - frameFooterRows
-	contentW := f.width - 2 // left and right border
-	contentH := panelH - 2  // top and bottom border
-	if contentW < 1 {
-		contentW = 1
-	}
-	if contentH < 1 {
-		contentH = 1
-	}
+	r := f.regionRows()
+	blank := strings.Repeat(" ", f.width)
 
-	// The panel's content: vertical padding rows top and bottom, the optional
-	// header row, then the body clipped to what is left, then the input line.
-	// Every line is laid out to the content width by lipgloss, so a screen
-	// cannot overflow the frame even if it tries.
-	inner := make([]string, 0, contentH)
-	for i := 0; i < panelPadY; i++ {
-		inner = append(inner, "")
+	// Regions are assembled in order with a gutter between each pair, and the
+	// gutter is emitted HERE rather than counted separately — the two used to
+	// be computed in different places and drifted, which left the status bar
+	// floating above the bottom or clipped off it.
+	var regions [][]string
+	if r.header > 0 {
+		regions = append(regions, []string{f.headerRegion()})
 	}
-	if f.hasHeader {
-		inner = append(inner, fit(header, contentW-2*panelPad))
-	}
-	// The body takes exactly the rows bodyHeight() promises a screen, so the
-	// layout a screen sized itself against and the layout render produces are
-	// the same number by construction rather than by two matching sums.
-	bodyRows := f.bodyHeight()
-	// The content box is contentH rows and already holds the padding, header,
-	// and input block; the body gets what is left of it.
-	if room := contentH - len(inner) - panelPadY - inputBlockRows(f); room < bodyRows {
-		bodyRows = room
-	}
-	if bodyRows < 0 {
-		bodyRows = 0
-	}
-	// Body lines are fitted to the content width BEFORE the panel style sees
-	// them. lipgloss's Width WRAPS overflow rather than clipping it, so an
-	// over-long line would consume extra rows and push the bottom border and
-	// footer out of the frame — which is exactly what a narrow terminal does
-	// to the too-narrow notice. Fitting first keeps one row per line.
-	for i := 0; i < bodyRows; i++ {
+	main := make([]string, 0, r.main)
+	for i := 0; i < r.main; i++ {
 		var content string
 		if i < len(body) {
 			content = body[i]
 		}
-		inner = append(inner, fit(content, contentW-2*panelPad))
+		main = append(main, fit(content, f.width))
 	}
-	if f.inputPrompt != "" {
-		inner = append(inner, "")
-		inner = append(inner, fit(f.inputPrompt+" "+f.input, contentW-2*panelPad))
+	regions = append(regions, main)
+	if r.editor > 0 {
+		regions = append(regions, f.editorRegion(r.editor))
 	}
-	for i := 0; i < panelPadY; i++ {
-		inner = append(inner, "")
+	if r.notice > 0 {
+		st := f.noticeStyle
+		if st == nil {
+			st = f.theme.Warn
+		}
+		regions = append(regions, []string{fit(" "+st(f.notice), f.width)})
 	}
-	// The content box is exactly contentH rows; pad or clip to it so the
-	// border always closes on the row the frame promised.
-	for len(inner) < contentH {
-		inner = append(inner, "")
-	}
-	if len(inner) > contentH {
-		inner = inner[:contentH]
+	if r.status > 0 {
+		regions = append(regions, []string{fit(f.statusRegion(), f.width)})
 	}
 
-	panel := f.theme.panelStyle().
-		Padding(0, panelPad).
-		Width(contentW).
-		Height(contentH).
-		Render(strings.Join(inner, "\n"))
-
-	lines := strings.Split(panel, "\n")
-	// Replace lipgloss's plain top edge with a titled one. lipgloss has no
-	// titled-border primitive, so the label is composited onto the edge with
-	// JoinHorizontal over width-fitted blocks — the library's own composition
-	// rather than character arithmetic.
-	if len(lines) > 0 {
-		lines[0] = f.titledEdge()
+	lines := make([]string, 0, f.height)
+	for i, reg := range regions {
+		if i > 0 {
+			for g := 0; g < frameGutter; g++ {
+				lines = append(lines, blank)
+			}
+		}
+		lines = append(lines, reg...)
 	}
-	// And the bottom edge keeps lipgloss's runes; only the top carries a label.
-	for len(lines) < panelH {
-		lines = append(lines, "")
-	}
-	if len(lines) > panelH {
-		lines = lines[:panelH]
-	}
-	// The footer is fitted, NOT sanitized: its dynamic parts are sanitized at
-	// their source (footerLine), and running sanitizeLine over the composed
-	// line would rewrite the ESC byte of its own styling into a literal `[` —
-	// sanitizeLine neutralizes control characters, and an escape sequence is
-	// one.
-	lines = append(lines, fit(footer, f.width))
 
 	// The contract: exactly height lines of exactly width columns.
 	if len(lines) > f.height {
 		lines = lines[:f.height]
 	}
 	for len(lines) < f.height {
-		lines = append(lines, strings.Repeat(" ", f.width))
+		lines = append(lines, blank)
 	}
 	for i, l := range lines {
 		lines[i] = fit(l, f.width)
@@ -310,70 +276,157 @@ func (f frame) render(header string, body []string, footer string) string {
 	return strings.Join(lines, "\n")
 }
 
-// inputBlockRows is the rows the input block spends inside the panel: a blank
-// spacer and the input line itself. Zero when the frame takes no typing.
-func inputBlockRows(f frame) int {
-	if f.inputPrompt == "" {
-		return 0
-	}
-	return frameInputRows + frameInputSpacerRows
+// regionRows is the height of each region for this frame. It is the ONE place
+// the regions are sized, so render's output cannot drift from what bodyHeight
+// promises a screen: bodyHeight returns regionRows().main.
+type regionHeights struct {
+	header int
+	main   int
+	editor int
+	notice int
+	status int
 }
 
-// titledEdge draws the panel's top edge with the title and status set into it:
-// `╭─┤ title ├────┤ status ├─╮`. The label and the status are fitted blocks
-// joined with the border's own rule runes, so the edge is exactly the frame
-// width whatever the label's length.
-//
-// lipgloss has no titled-border primitive, so this composites one — but from
-// styled blocks and the border's own runes, with the widths measured by
-// lipgloss.Width, rather than from character arithmetic on a private
-// vocabulary of glyphs. When there is no status the status segment is absent
-// entirely, not an empty `┤ ├` pair.
-func (f frame) titledEdge() string {
-	b := panelBorder()
-	rule := f.theme.border // the border's own runes, in the chrome colour
-
-	const pad = panelPad
-	left := rule(b.TopLeft + strings.Repeat(b.Top, pad))
-	right := rule(strings.Repeat(b.Top, pad) + b.TopRight)
-
-	title := f.theme.panelTitle(f.title)
-	status := f.theme.panelStatus(f.status, f.statusStyle)
-
-	// Each labelled block is `┤ <label> ├`, with the runes styled as border and
-	// the label in its own style. An absent label contributes no block at all,
-	// so an untitled panel is a plain edge rather than a dangling `┤ ├`.
-	block := func(label string) string {
-		if label == "" {
-			return ""
+func (f frame) regionRows() regionHeights {
+	var h regionHeights
+	h.status = frameStatusRows
+	if f.notice != "" {
+		h.notice = 1
+	}
+	// The editor is present only when the screen takes typing, and it is a
+	// bordered box, so it needs the minimum to render as one. On a short
+	// terminal the editor gives way before main does — you can read a
+	// conversation you cannot type into, but not the reverse.
+	if f.inputPrompt != "" {
+		h.editor = frameEditorRows
+	}
+	if f.hasHeader {
+		h.header = frameHeaderRows
+	}
+	// A gutter sits between every pair of ADJACENT present regions, which is
+	// what render emits. Counting them any other way leaves the frame short
+	// (the status bar floats above the bottom) or long (it is clipped off).
+	// main is always present, so it contributes a gutter after itself for each
+	// region below it.
+	// main is always present, so the region count is one more than the number
+	// of optional regions that are present, and there is one gutter between
+	// every adjacent pair.
+	optional := 0
+	for _, n := range []int{h.header, h.editor, h.notice, h.status} {
+		if n > 0 {
+			optional++
 		}
-		return rule(b.Top+"┤ ") + label + rule(" "+b.Top)
 	}
-	titleBlock := block(title)
-	statusBlock := block(status)
-
-	// The status is dropped before the title is, because the title says where
-	// you are and the status only says how the view is behaving.
-	compose := func(t, s string) string {
-		return left + t + rule(b.Top) + s + right
+	regions := optional + 1 // + main
+	gaps := 0
+	if regions > 1 {
+		gaps = (regions - 1) * frameGutter
 	}
-	edge := compose(titleBlock, statusBlock)
-	if displayWidth(edge) > f.width && statusBlock != "" {
-		edge = compose(titleBlock, "")
-	}
-	// Pad the run between the blocks so the edge reaches the frame width.
-	if gap := f.width - displayWidth(edge); gap > 0 {
-		// Rebuild with the filler inserted before the status (or before the
-		// right corner when there is none), so the status stays flush right.
-		tail := statusBlock + right
-		head := left + titleBlock
-		if statusBlock == "" {
-			head = left + titleBlock
+	used := h.header + h.editor + h.notice + h.status + gaps
+	h.main = f.height - used
+	// Too short: shed chrome in the order that loses the least. The editor is
+	// reduced to its minimum box, then dropped; the header is dropped; the
+	// notice is dropped last because it is the only thing that may be telling
+	// the reader their view is incomplete.
+	for h.main < minBodyRows && h.editor > 0 {
+		drop := h.editor - frameEditorMinRows
+		if drop <= 0 {
+			drop = h.editor
+			h.editor = 0
+		} else {
+			h.editor = frameEditorMinRows
 		}
-		head += rule(b.Top)
-		edge = head + rule(strings.Repeat(b.Top, gap)) + tail
+		h.main += drop
 	}
-	return fit(edge, f.width)
+	if h.main < minBodyRows && h.header > 0 {
+		h.main += h.header + frameGutter
+		h.header = 0
+	}
+	if h.main < minBodyRows && h.notice > 0 {
+		h.main += h.notice + frameGutter
+		h.notice = 0
+	}
+	if h.main < 0 {
+		h.main = 0
+	}
+	return h
+}
+
+// headerRegion is the header: the screen's identity on the left and its
+// secondary facts on the right, on one row, separated by the full width.
+func (f frame) headerRegion() string {
+	left := f.theme.panelTitle(f.title)
+	right := ""
+	if f.subtitle != "" {
+		st := f.subtitleStyle
+		if st == nil {
+			st = f.theme.Subtle
+		}
+		right = st(f.subtitle)
+	}
+	gap := f.width - displayWidth(left) - displayWidth(right) - 2
+	if gap < 1 {
+		// No room for both: drop the subtitle before the title, because the
+		// title says where you are.
+		right = ""
+		gap = f.width - displayWidth(left) - 2
+	}
+	if gap < 0 {
+		gap = 0
+	}
+	return fit(" "+left+strings.Repeat(" ", gap)+right, f.width)
+}
+
+// editorRegion draws the input box: its own bordered region at the bottom of
+// the screen, with the prompt on the first content row and the cursor after
+// the text. It is a region rather than a row of the content, so it does not
+// scroll away with the conversation and it reads as a place to type.
+func (f frame) editorRegion(rows int) []string {
+	if rows < frameEditorMinRows {
+		rows = frameEditorMinRows
+	}
+	inner := rows - 2 // the box's own top and bottom edges
+	content := f.inputPrompt + " " + f.input
+	// The content is fitted to the box's inner width so a long line does not
+	// wrap the box open (Style.Width wraps; see fit).
+	box := f.theme.panelStyle().Padding(0, panelPad).Width(f.width - 2).Height(inner)
+	lines := strings.Split(box.Render(fit(content, f.width-2-2*panelPad)), "\n")
+	// The top edge carries no label; the prompt is inside, where a composer's
+	// placeholder belongs.
+	out := make([]string, 0, rows)
+	for i := 0; i < rows; i++ {
+		var l string
+		if i < len(lines) {
+			l = lines[i]
+		}
+		out = append(out, fit(l, f.width))
+	}
+	return out
+}
+
+// statusRegion is the status bar: the transient message on the left and the
+// generated help on the right, so the bar always says both what just happened
+// and what you can do.
+func (f frame) statusRegion() string {
+	left := ""
+	if f.status != "" {
+		left = " " + sanitizeLine(f.status)
+	}
+	right := ""
+	if f.help != "" {
+		right = f.help
+	}
+	// The help is dropped before the status: a transient message is about what
+	// just happened, the help is always recoverable with `?`.
+	room := f.width - displayWidth(left) - displayWidth(right)
+	if room < 1 && right != "" {
+		right = ""
+		room = f.width - displayWidth(left)
+	}
+	if room < 0 {
+		room = 0
+	}
+	return fit(left+strings.Repeat(" ", room)+right, f.width)
 }
 
 // splitColumns divides available width into a left pane of leftFrac and a

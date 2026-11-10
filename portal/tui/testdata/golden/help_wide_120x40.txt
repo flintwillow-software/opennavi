@@ -1,0 +1,40 @@
+ home · nothing running                                                                                            idle 
+                                                                                                                        
+                                                                                                                        
+ keys · conversation                                                                                                    
+                                                                                                                        
+ enter  send      s   pause      ↑/↓       scroll       1   home                                                        
+ ctrl+a actions   r   resume     pgup/pgdn page         esc back                                                        
+ ctrl+o fold      c   cancel     home/end  jump         ?   help                                                        
+ ctrl+f follow    R   retry      esc       clear/blur   q   quit                                                        
+                  p/P priority   tab       blur                                                                         
+                  P   priority                                                                                          
+                                                                                                                        
+ any key closes this                                                                                                    
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ new ›                                                                                                                │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+                                                                          s pause · r resume · c cancel · p/P priority …

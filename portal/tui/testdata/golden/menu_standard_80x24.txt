@@ -1,24 +1,24 @@
-╭──┤ home · t-run ────────────────────────────────────────┤ live · following ──╮
-│                                                                              │
-│                                                                              │
-│  actions · t-run                                                             │
-│                                                                              │
-│    s  pause                                                                  │
-│    p  bump                                                                   │
-│                                                                              │
-│  esc to close                                                                │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+ home · t-run                                                  live · following 
+                                                                                
+                                                                                
+ actions · t-run                                                                
+                                                                                
+   s  pause                                                                     
+   p  bump                                                                      
+                                                                                
+ esc to close                                                                   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
 │ steer › █                                                                    │
 │                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- actions for t-run actions: s pause p bump · esc close                          
+                                                                                
+ actions for t-run                                       actions: s pause p bump

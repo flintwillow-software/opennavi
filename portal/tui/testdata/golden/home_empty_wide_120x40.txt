@@ -1,40 +1,40 @@
-╭──┤ home · nothing running ──────────────────────────────────────────────────────────────────────────────────┤ idle ──╮
-│                                                                                                                      │
-│                                                                                                                      │
-│  nothing is running                                                                                                  │
-│                                                                                                                      │
-│  type a prompt below and press enter to enqueue a thought                                                            │
-│                                                                                                                      │
-│  2 thoughts in the queue — esc twice for the queue                                                                   │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
+ home · nothing running                                                                                            idle 
+                                                                                                                        
+                                                                                                                        
+ nothing is running                                                                                                     
+                                                                                                                        
+ type a prompt below and press enter to enqueue a thought                                                               
+                                                                                                                        
+ 2 thoughts in the queue — esc twice for the queue                                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ new › █                                                                                                              │
 │                                                                                                                      │
+│                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow · tab blur                                 
+                                                                                                                        
+                                                            enter send · ctrl+a actions · esc clear/blur · ctrl+o fold …

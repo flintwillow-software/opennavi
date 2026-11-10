@@ -1,20 +1,20 @@
-╭──┤ home · nothing running ────────────┤ idle ──╮
-│                                                │
-│                                                │
-│  terminal too narrow — need at least 60 colum… │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│ new › █                                        │
-│                                                │
-╰────────────────────────────────────────────────╯
+ home · nothing running                      idle 
                                                   
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+ terminal too narrow — need at least 60 columns, …
+                                                  
+                                      enter send …

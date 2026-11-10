@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -347,6 +348,15 @@ type tuiModel struct {
 	height int
 	// theme is the single source of colour and text style (theme.go).
 	theme theme
+	// keys is the declared keymap: what a key does and what the help
+	// advertises are the same data (NAVI-593, ADR 0038 decision 7).
+	keys keyMap
+	// help renders the footer help from the active bindings, truncating to
+	// the terminal rather than overflowing it.
+	help help.Model
+	// helpOpen is the full-screen help overlay (`?`), which shows every
+	// binding in the current context grouped as columns.
+	helpOpen bool
 	// debug shows the diagnostic chrome (form factor, terminal size) in the
 	// header. Off by default: it is information about the renderer, not about
 	// the navi, so it belongs behind a toggle rather than in every screen's
@@ -365,6 +375,8 @@ func NewModel(tr Transport) *tuiModel {
 		transcripts: make(map[string][]turn),
 		mode:        ModeHome,
 		theme:       newTheme(),
+		keys:        defaultKeyMap(),
+		help:        newHelp(),
 		// The input is focused on arrival: steering the running thought is the
 		// default gesture (ADR 0038 decision 3).
 		inputFocused: true,
@@ -1011,6 +1023,25 @@ func (m *tuiModel) typeByName(name string) (object.Type, bool) {
 
 // key handles a key press; returns true when the user quits.
 func (m *tuiModel) key(k tea.KeyMsg) bool {
+	// The help overlay owns the keyboard while it is open: any key closes it
+	// (a reader who opened it wants to get back, not to navigate from it).
+	// `q` and ctrl+c still quit, so there is always a way out.
+	if m.helpOpen {
+		if matchesAny(k, m.keys.Quit) {
+			return true
+		}
+		m.helpOpen = false
+		return false
+	}
+	// `?` opens the overlay — but NOT while the steer input has focus, because
+	// `?` is a character people type ("does this work?"), and swallowing it
+	// would make the input unable to express a question. This is the same rule
+	// the action letters follow: while the input owns the keyboard, printable
+	// runes are text. `esc` reaches the blurred state, where `?` opens help.
+	if matchesAny(k, m.keys.Help) && !m.inputOwnsKeyboard() {
+		m.helpOpen = true
+		return false
+	}
 	// Input mode owns the keyboard: every printable rune goes into the
 	// buffer and only explicit control keys act. Command keys (q/n/a/p/s/…)
 	// must never fire while typing — a real terminal delivers them one
@@ -1053,7 +1084,7 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 	// printable rune, so it is reachable even while the input owns the
 	// keyboard — that is what makes an action possible without leaving the
 	// steer field. It is checked before the input so it always wins.
-	if k.String() == "ctrl+a" {
+	if matchesAny(k, m.keys.Actions) {
 		m.openActionMenu()
 		return false
 	}
@@ -1068,59 +1099,51 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		return m.conversationKey(k)
 	}
 
-	switch k.String() {
-	case "q", "ctrl+c":
+	// The dispatch matches against the SAME bindings the help renders, so a key
+	// cannot be advertised and handled differently (NAVI-593).
+	switch {
+	case matchesAny(k, m.keys.Quit):
 		return true
-	case "1":
+	case matchesAny(k, m.keys.Home):
 		m.goHome()
-	case "esc", "escape", "l":
-		if m.mode == ModeDetail {
-			m.mode = ModeList
-			m.detail = nil
-		}
-	case "up", "k":
+	case matchesAny(k, m.keys.Debug):
+		// Toggle the diagnostic header (form factor, terminal size).
+		m.debug = !m.debug
+	case matchesAny(k, m.keys.Back) && m.mode == ModeDetail:
+		m.mode = ModeList
+		m.detail = nil
+	case matchesAny(k, m.keys.Up):
 		if m.mode == ModeList && m.sel > 0 {
 			m.sel--
 		}
-	case "down", "j":
+	case matchesAny(k, m.keys.Down):
 		if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
 			m.sel++
 		}
-	case "enter":
-		if m.mode == ModeList {
-			if id, ok := m.focused(); ok {
-				m.open(id)
-			}
+	case matchesAny(k, m.keys.Open) && m.mode == ModeList:
+		if id, ok := m.focused(); ok {
+			m.open(id)
 		}
-	case "t":
-		if m.mode == ModeList {
-			if next, ok := m.nextListableType(); ok {
-				m.typeIdx = next
-				m.sel = 0
-				m.detail = nil
-				m.refreshList()
-				m.status = "type: " + m.typeLabel(m.typeIdx)
-			}
+	case matchesAny(k, m.keys.Types) && m.mode == ModeList:
+		if next, ok := m.nextListableType(); ok {
+			m.typeIdx = next
+			m.sel = 0
+			m.detail = nil
+			m.refreshList()
+			m.status = "type: " + m.typeLabel(m.typeIdx)
 		}
-	case "D":
-		// Toggle the diagnostic header (form factor, terminal size).
-		m.debug = !m.debug
-	case "n":
-		if m.mode == ModeList {
-			m.enqueue = true
-			m.inputID = ""
-			m.stage = 0
-			m.input = ""
-			m.mode = ModeInput
-		}
-	case "a":
-		if m.mode == ModeList && len(m.list.Rows) > 0 {
-			m.enqueue = false
-			m.inputID = m.list.Rows[m.sel].ID
-			m.stage = 0
-			m.input = ""
-			m.mode = ModeInput
-		}
+	case matchesAny(k, m.keys.New) && m.mode == ModeList:
+		m.enqueue = true
+		m.inputID = ""
+		m.stage = 0
+		m.input = ""
+		m.mode = ModeInput
+	case matchesAny(k, m.keys.Attach) && m.mode == ModeList && len(m.list.Rows) > 0:
+		m.enqueue = false
+		m.inputID = m.list.Rows[m.sel].ID
+		m.stage = 0
+		m.input = ""
+		m.mode = ModeInput
 	default:
 		// The action letters are bound to the FOCUSED OBJECT in every mode,
 		// not to list mode (ADR 0038 decision 7).
@@ -1133,12 +1156,9 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 // It is what lets a blurred conversation distinguish "pause this thought"
 // (`s`) from "start writing a word containing s" — the action letters are
 // reserved while blurred, and any other rune resumes typing.
-func isActionLetter(k tea.KeyMsg) bool {
-	switch k.String() {
-	case "s", "r", "c", "R", "p", "P":
-		return true
-	}
-	return false
+func (m *tuiModel) isActionLetter(k tea.KeyMsg) bool {
+	return matchesAny(k, m.keys.Pause, m.keys.Resume, m.keys.Cancel,
+		m.keys.Retry, m.keys.RisePri, m.keys.DropPri)
 }
 
 // actionKey dispatches the plain action letters on the focused object. It is
@@ -1192,22 +1212,19 @@ func (m *tuiModel) actOnFocused(action string) {
 // the plain action letters become reachable without leaving the screen.
 func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 	// Quit and the leader always win, focused or not.
-	if k.String() == "q" && !m.inputFocused {
-		return true
-	}
-	if k.String() == "ctrl+c" {
+	if k.String() == "ctrl+c" || (matchesAny(k, m.keys.Quit) && !m.inputFocused) {
 		return true
 	}
 	// `tab` toggles focus explicitly, for a reader who does not want to clear
 	// or leave anything.
-	if k.String() == "tab" {
+	if matchesAny(k, m.keys.Focus) {
 		m.inputFocused = !m.inputFocused
 		return false
 	}
 	// `1` is the tab bar's home key (ADR 0038 decision 4). It is not a
 	// printable rune, so it works with the input focused, and it is a no-op on
 	// home itself.
-	if k.String() == "1" {
+	if matchesAny(k, m.keys.Home) {
 		m.goHome()
 		return false
 	}
@@ -1219,22 +1236,18 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 		// re-enter. The action letters are checked BEFORE the generic rune
 		// case; otherwise every letter would re-focus and type, and the action
 		// keys would be unreachable on the very screen this issue is about.
-		if chatHandles(k) {
+		switch {
+		case chatHandles(k):
 			m.chat.update(k)
 			return false
-		}
-		switch k.String() {
-		case "esc", "escape":
+		case matchesAny(k, m.keys.Back):
 			m.leaveConversation()
 			return false
-		case "enter":
+		case matchesAny(k, m.keys.Send):
 			m.inputFocused = true
 			return false
-		case "up", "down", "left", "right":
-			m.chat.update(k)
-			return false
 		}
-		if isActionLetter(k) {
+		if m.isActionLetter(k) {
 			return m.actionKey(k)
 		}
 		if len(k.Runes) > 0 {
@@ -1247,8 +1260,8 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 
 	// Focused: printable runes are text, and only the keys that can never be
 	// text act.
-	switch k.String() {
-	case "esc", "escape":
+	switch {
+	case matchesAny(k, m.keys.Blur):
 		// Clear a non-empty buffer first; on an empty buffer `esc` BLURS the
 		// input (staying on the screen) rather than leaving, so the action
 		// letters are one key away. A second `esc` leaves the conversation.
@@ -1258,19 +1271,20 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 		}
 		m.inputFocused = false
 		return false
-	case "enter":
+	case matchesAny(k, m.keys.Send):
 		// Enter submits: steering on a running thought, enqueuing on home's
 		// empty state. A newline needs a modifier, which is what a one-line
 		// field implies.
 		m.submitConversation()
 		return false
-	case "backspace":
+	case matchesAny(k, m.keys.ClearIn):
+		m.input = ""
+		return false
+	}
+	if k.String() == "backspace" {
 		if r := []rune(m.input); len(r) > 0 {
 			m.input = string(r[:len(r)-1])
 		}
-		return false
-	case "ctrl+u":
-		m.input = ""
 		return false
 	}
 	if chatHandles(k) {
@@ -1280,6 +1294,20 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 	if len(k.Runes) > 0 {
 		m.input += string(k.Runes)
 		return false
+	}
+	return false
+}
+
+// inputOwnsKeyboard reports whether a text input currently has focus, in which
+// case a printable rune is text and must not be claimed as a command. It is
+// the ONE predicate the dispatch consults for that rule, so the help key, the
+// action letters, and any future printable binding cannot disagree about it.
+func (m *tuiModel) inputOwnsKeyboard() bool {
+	if m.mode == ModeInput {
+		return true
+	}
+	if m.mode == ModeHome || m.mode == ModeLive {
+		return m.inputFocused
 	}
 	return false
 }
@@ -1722,66 +1750,87 @@ func (m *tuiModel) doAction(action, id string, prio int) {
 func (m *tuiModel) render() string {
 	f := newFrame(m.width, m.height, m.theme)
 
-	// The panel's top edge is labelled with where you are, the way a titled
-	// module announces its contents. It is the only place the location needs
-	// to be said: a separate header repeating the app's own name ("navi ·
-	// portal") is furniture, and it costs a body row on every screen. The
-	// chat's follow/trim state rides along in the same label rather than
-	// spending a body row of its own.
+	// The HEADER region: where you are on the left, the secondary facts on the
+	// right. The facts are the thought's lifecycle and the view's own state
+	// (following, trimmed) — the things worth a glance that are not identity.
 	f.title = m.panelLabel()
-	f.status = m.chatStatus()
-	f.statusStyle = m.conversationStatusStyle()
+	f.subtitle = m.headerSubtitle()
+	f.subtitleStyle = m.conversationStatusStyle()
+	f.hasHeader = true
 
-	// The conversation screens carry a persistent input: steering the thought
-	// you are watching is the default gesture and must cost no keystroke to
-	// reach (ADR 0038 decision 3). It is not a mode — you type here without
-	// leaving the conversation. The input is CONTEXTUAL: a steer box when a
-	// thought is running, an enqueue box when none is — so there is never a
-	// steer field with no target.
+	// The EDITOR region: present only on screens that take typing. The input
+	// is CONTEXTUAL (ADR 0038 decision 3) — a steer box when a thought is
+	// running, an enqueue box when none is — so there is never a steer field
+	// with no target.
 	if m.mode == ModeLive || m.mode == ModeHome {
-		switch {
-		case m.mode == ModeHome && m.homeID == "":
+		if m.mode == ModeHome && m.homeID == "" {
 			f.inputPrompt = m.enqueuePrompt()
-		case m.mode == ModeHome:
-			f.inputPrompt = "steer ›"
-		default:
+		} else {
 			f.inputPrompt = "steer ›"
 		}
 		if m.inputFocused {
 			f.input = m.input + m.theme.Marker("█")
 		} else {
-			// Blurred: the cursor is gone and the prompt says what the plain
-			// letters now act on, so a reader is never guessing which widget
-			// owns the keyboard.
+			// Blurred: the cursor is gone, so a reader is never guessing which
+			// widget owns the keyboard.
 			f.input = m.input
 		}
 	}
 
-	// The header line exists only to carry a warning. A healthy TUI has
-	// nothing to put here, so it gets no line at all — the frame then spends
-	// that row on content instead of on chrome that says nothing.
-	header := ""
+	// The NOTICE region: the one thing worth interrupting for is an incomplete
+	// view (a dropped stream). It gets its own line above the status bar
+	// rather than being a suffix on the title.
+	if m.lost {
+		f.notice = "stream gap — the portal dropped events (slow UI); this view may be incomplete"
+	}
+	// The diagnostic readout is a notice too: it is information about the
+	// renderer, not about the navi.
 	if m.debug {
-		header = m.theme.Subtle(f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
+		f.notice = f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height)
+		if m.lost {
+			f.notice = "stream gap · " + f.notice
+		}
+		f.noticeStyle = m.theme.Subtle
 	}
-	if gap := terminalSuffix(m); gap != "" {
-		// A dropped-event gap is the one thing worth interrupting the panel
-		// title for: the reader's view is incomplete and nothing else says so.
-		header = m.theme.Warn(strings.TrimPrefix(gap, " · "))
+
+	// The STATUS region: the transient message on the left, the generated help
+	// on the right. The running activity line rides on the left when there is
+	// one, so the thing a thought is DOING right now is visible without
+	// opening it (NAVI-335).
+	f.status = m.status
+	if m.mode == ModeList && m.active != "" {
+		f.status = m.activeID + " · " + m.active
+		if m.status != "" {
+			f.status += "   " + m.status
+		}
 	}
-	f.hasHeader = header != ""
+	f.help = m.helpText(f)
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
-		return f.render(header, []string{
-			"",
-			" " + m.theme.Warn("terminal too narrow") + " — " +
-				m.theme.Subtle("need at least "+itoa(narrowFloor)+" columns, have "+itoa(f.width)),
-		}, m.footerLine(f))
+		f.inputPrompt = ""
+		f.notice = "terminal too narrow — need at least " + itoa(narrowFloor) + " columns, have " + itoa(f.width)
+		f.noticeStyle = m.theme.Warn
+		f.hasHeader = true
+		return f.render("", []string{}, "")
 	}
 
-	body := m.bodyLines(f)
-	return f.render(header, body, m.footerLine(f))
+	return f.render("", m.bodyLines(f), "")
+}
+
+// headerSubtitle is the HEADER region's right-hand text: the secondary facts
+// about what you are looking at. On a conversation that is the thought's
+// lifecycle and the view's own state; on the queue it is the running
+// activity, which is the thing a reader glancing at the list wants to know
+// (NAVI-335).
+func (m *tuiModel) headerSubtitle() string {
+	if m.mode == ModeHome || m.mode == ModeLive {
+		return m.chatStatus()
+	}
+	if m.active != "" {
+		return m.activeID + " · " + m.active
+	}
+	return ""
 }
 
 // panelLabel is the label on the panel's top edge: the screen and the object
@@ -1858,6 +1907,9 @@ func listable(t object.Type) bool {
 // overlay, not a screen, so it costs no mode and the reader keeps their
 // context behind it.
 func (m *tuiModel) bodyLines(f frame) []string {
+	if m.helpOpen {
+		return m.bodyHelp(f)
+	}
 	if m.menuOpen {
 		return m.bodyActionMenu(f)
 	}
@@ -1872,6 +1924,40 @@ func (m *tuiModel) bodyLines(f frame) []string {
 		return m.bodyInput(f)
 	}
 	return m.bodyList(f)
+}
+
+// bodyHelp is the full-screen help overlay (`?`): every binding live in the
+// current context, grouped as columns. It is generated from the same keymap
+// the dispatch uses, so it cannot list a key that does nothing — which is the
+// whole reason the keymap is declared rather than compared (ADR 0038
+// decision 7).
+func (m *tuiModel) bodyHelp(f frame) []string {
+	km := m.keyMapFor()
+	// The overlay shows the FULL help, not the short form: a reader who asked
+	// for help wants everything available here, not the footer again. It calls
+	// FullHelpView explicitly rather than setting help.ShowAll, because the
+	// footer is rendered from the same help.Model in the same frame — a
+	// ShowAll flag would still be set when the footer rendered and would turn
+	// the footer into the full help too.
+	m.help.Width = maxInt(1, f.innerWidth())
+
+	title := "keys"
+	switch m.mode {
+	case ModeHome, ModeLive:
+		title = "keys · conversation"
+	case ModeDetail:
+		title = "keys · detail"
+	case ModeInput:
+		title = "keys · input"
+	default:
+		title = "keys · queue"
+	}
+	out := []string{"", " " + m.theme.Title(title), ""}
+	for _, l := range strings.Split(m.help.FullHelpView(km.FullHelp()), "\n") {
+		out = append(out, " "+l)
+	}
+	out = append(out, "", " "+m.theme.Subtle("any key closes this"))
+	return out
 }
 
 // bodyActionMenu draws the leader menu: the focused object and the actions its
@@ -1979,47 +2065,27 @@ func plural(n int) string {
 	return "s"
 }
 
-// footerLine is the status plus the CONTEXT-SENSITIVE help line: the help is
-// derived from the bindings that are actually live, so a key is never
-// advertised that does not work (ADR 0038 decision 7). It is still a hand-kept
-// string per context rather than generated from a keymap table; that
-// generation is NAVI-593.
-func (m *tuiModel) footerLine(f frame) string {
-	line := " " + sanitizeLine(m.status)
-	if m.mode == ModeList && m.active != "" {
-		line = " " + m.theme.Marker("▸") + " " + sanitizeLine(m.activeID) +
-			" · " + sanitizeLine(m.active) + "   " + line
-	}
-	if f.tooNarrow() {
-		return line
-	}
-	return line + m.theme.Subtle(m.helpLine())
-}
-
-// helpLine names the bindings that are live in the current context. The
-// conversation screens advertise the leader and the blur, because that is how
-// an action is reached while the input owns the keyboard; the list advertises
-// the plain letters, because there they fire directly.
-func (m *tuiModel) helpLine() string {
+// helpText is the STATUS region's right-hand text: the generated help for the
+// current context (NAVI-593, ADR 0038 decision 7). It reads the same keymap
+// the dispatch does, so a key that renders here is one that works.
+//
+// The menu's own letters are not in the keymap — they are the focused object's
+// DECLARED actions, unknown until the menu is built — so the menu advertises
+// itself instead.
+func (m *tuiModel) helpText(f frame) string {
 	if m.menuOpen {
-		help := " actions:"
+		line := "actions:"
 		for _, a := range m.actionMenu {
-			help += " " + menuLetter(a.Name) + " " + actionName(a)
+			line += " " + m.theme.Marker(menuLetter(a.Name)) + " " + m.theme.Subtle(actionName(a))
 		}
-		return help + " · esc close"
+		return m.theme.Subtle(line)
 	}
-	switch m.mode {
-	case ModeHome, ModeLive:
-		if m.inputFocused {
-			return " enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow · tab blur"
-		}
-		return " s pause · r resume · c cancel · R retry · p/P priority · ctrl+a actions · esc back · type to write"
-	case ModeDetail:
-		return " s pause · r resume · c cancel · R retry · p/P priority · ctrl+a actions · esc back"
-	case ModeInput:
-		return " enter next · esc cancel"
-	}
-	return " 1 home · q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · R retry"
+	m.help.Width = maxInt(1, f.width/2)
+	line := m.help.View(m.keyMapFor())
+	// help truncates ITEMS but can still emit a line wider than Width (its
+	// shouldAddItem adds the item when there is no room for the ellipsis), so
+	// the final width is enforced here.
+	return truncate(line, f.width/2, "…")
 }
 
 // actionName is a declared action's label for the menu, falling back to the
@@ -2029,13 +2095,6 @@ func actionName(a view.Action) string {
 		return a.Label
 	}
 	return a.Name
-}
-
-func terminalSuffix(m *tuiModel) string {
-	if m.lost {
-		return " · STREAM GAP"
-	}
-	return ""
 }
 
 // itoa is strconv.Itoa without the import at every call site in the
