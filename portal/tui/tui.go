@@ -580,7 +580,7 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
 	if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Kind != "enqueued" {
-		m.addTurn(turn{role: TurnSystem, text: "· " + displayStatus(ev.Kind)})
+		m.addTurn(turn{role: TurnSystem, text: displayStatus(ev.Kind)})
 	}
 }
 
@@ -886,9 +886,43 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 	// depending on which screen happens to be showing (ADR 0038 decision 7:
 	// actions bind to the focused object, not to a mode). Quit and back stay
 	// the model's, so a reader can always leave.
-	if m.mode == ModeLive && k.String() != "q" && k.String() != "ctrl+c" &&
-		k.String() != "esc" && k.String() != "escape" && k.String() != "l" {
-		if m.chat.update(k) {
+	// The chat screen owns its own input: printable runes are text to steer
+	// with, and the scroll keys are the ones that can never be text. This is
+	// what makes the input persistent rather than a mode you enter and leave
+	// (ADR 0038 decision 3) — you type into the conversation you are reading.
+	if m.mode == ModeLive {
+		switch k.String() {
+		case "q", "ctrl+c":
+			return true // quit still wins
+		case "esc", "escape":
+			// Clear a non-empty buffer first; a second esc leaves the chat.
+			if m.input != "" {
+				m.input = ""
+				return false
+			}
+			m.mode = ModeList
+			m.detail = nil
+			return false
+		case "enter":
+			// Enter sends. A newline needs a modifier, which is what a
+			// one-line steer field implies; a textarea would invert this.
+			m.sendSteer()
+			return false
+		case "backspace":
+			if r := []rune(m.input); len(r) > 0 {
+				m.input = string(r[:len(r)-1])
+			}
+			return false
+		case "ctrl+f", "ctrl+b", "ctrl+g", "ctrl+e", "ctrl+o",
+			"up", "down", "pgup", "pgdown", "home", "end":
+			m.chat.update(k)
+			return false
+		case "ctrl+u":
+			m.input = ""
+			return false
+		}
+		if len(k.Runes) > 0 {
+			m.input += string(k.Runes)
 			return false
 		}
 	}
@@ -968,6 +1002,25 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		}
 	}
 	return false
+}
+
+// sendSteer routes the chat's input buffer to the open thought through the
+// one write path (object.Surface.Act, ADR 0019 decision 7) — the same call the
+// list's attach flow uses, so there is no second way to reach the queue.
+func (m *tuiModel) sendSteer() {
+	msg := strings.TrimSpace(m.input)
+	if msg == "" || m.liveID == "" {
+		return
+	}
+	if err := m.act(m.liveID, "steer", map[string]any{"message": msg}); err != nil {
+		m.status = "steer failed: " + err.Error()
+		return
+	}
+	// The buffer clears on send, not on the ack: the ack arrives on the stream
+	// and lands as a turn, and holding the text until then would let a slow
+	// round trip block the next message.
+	m.status = "steered " + m.liveID
+	m.input = ""
 }
 
 // submitInput handles enter in input mode: an attach-message flow steers
@@ -1146,6 +1199,15 @@ func (m *tuiModel) render() string {
 	f.title = m.panelLabel()
 	f.status = m.chatStatus()
 
+	// The chat screen carries a persistent steer input: steering the thought
+	// you are watching is the default gesture and must cost no keystroke to
+	// reach (ADR 0038 decision 3). It is not a mode — you type here without
+	// leaving the conversation.
+	if m.mode == ModeLive {
+		f.inputPrompt = "steer ›"
+		f.input = m.input + m.theme.Marker("█")
+	}
+
 	// The header line exists only to carry a warning. A healthy TUI has
 	// nothing to put here, so it gets no line at all — the frame then spends
 	// that row on content instead of on chrome that says nothing.
@@ -1322,7 +1384,8 @@ type grid struct {
 
 // buildGrid resolves the descriptor's columns against the frame.
 func (m *tuiModel) buildGrid(f frame) grid {
-	g := grid{markW: 3}
+	// The marker column is two cells: the selection glyph and a space.
+	g := grid{markW: 2}
 	g.cols = m.columnLayout(f.innerWidth())
 	for _, c := range g.cols {
 		g.widths = append(g.widths, c.width)
@@ -1394,7 +1457,7 @@ func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
 	if i == m.sel {
 		mark = th.Marker("▸")
 	}
-	line := " " + mark + " "
+	line := mark + " "
 	for ci, c := range g.cols {
 		if ci > 0 {
 			line += th.Subtle(" " + colSep + " ")

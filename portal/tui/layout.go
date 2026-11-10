@@ -22,7 +22,10 @@ const (
 	frameHeaderRows = 1 // the optional header line inside the panel
 	frameBorderRows = 2 // the top and bottom panel edges
 	frameFooterRows = 1 // the status/help line below the panel
-	frameBaseChrome = frameBorderRows + frameFooterRows
+	frameInputRows  = 1 // the optional input line below the panel
+	// frameBaseChrome includes the vertical padding rows, which are part of
+	// the panel's chrome rather than its content.
+	frameBaseChrome = frameBorderRows + frameFooterRows + 2*panelPadY
 	frameChromeRows = frameBaseChrome + frameHeaderRows
 )
 
@@ -94,7 +97,24 @@ type frame struct {
 	// so transient state (a paused scrollback, a trimmed window) does not cost
 	// a body row the way a header line would.
 	status string
+	// input is the persistent input line drawn below the panel, with the
+	// cursor at the end. Empty means no input row, which is the case on
+	// screens that take no typing.
+	input string
+	// inputPrompt labels the input line (`steer ›`), so the reader knows what
+	// submitting will do.
+	inputPrompt string
 }
+
+// panelPad is the gutter between the panel's rail and its content. One column
+// is enough to read as a margin at terminal sizes; two would cost real width
+// on a narrow terminal.
+const panelPad = 1
+
+// panelPadY is the blank rows between the panel's edges and its content. One
+// row top and bottom keeps the content off the border without costing much
+// height; on a short terminal the frame's minimum body still wins.
+const panelPadY = 1
 
 // maxInt is a local helper: the standard library's max is generic in newer
 // Go, but this keeps the layout readable at the call sites.
@@ -123,7 +143,7 @@ func newFrame(width, height int, t theme) frame {
 // against this rather than the raw frame width, so the right rail is never
 // pushed off the edge by content sized to the full width.
 func (f frame) innerWidth() int {
-	w := f.width - 3
+	w := f.width - 2*panelPad - 2
 	if w < 1 {
 		w = 1
 	}
@@ -136,6 +156,9 @@ func (f frame) chromeRows() int {
 	n := frameBaseChrome
 	if f.hasHeader {
 		n += frameHeaderRows
+	}
+	if f.inputPrompt != "" {
+		n += frameInputRows
 	}
 	return n
 }
@@ -183,25 +206,42 @@ func (f frame) render(header string, body []string, footer string) string {
 	if f.status != "" {
 		status = f.theme.Subtle("┤ " + f.status + " ├")
 	}
-	fill := f.width - 2 - displayWidth(title) - displayWidth(status)
+	fill := f.width - 2 - 2*panelPad - displayWidth(title) - displayWidth(status)
 	if fill < 0 {
 		// Not enough room for both: drop the status, then let the title clip.
 		status = ""
-		fill = f.width - 2 - displayWidth(title)
+		fill = f.width - 2 - 2*panelPad - displayWidth(title)
 	}
-	top := b.TopLeft + title + strings.Repeat(b.Top, maxInt(0, fill)) + status + b.TopRight
+	// The title sits inside the corner with a gutter, matching the body, so
+	// the label lines up with the content beneath it rather than with the
+	// frame's own edge.
+	top := b.TopLeft + strings.Repeat(b.Top, panelPad) + title +
+		strings.Repeat(b.Top, maxInt(0, fill)) + status +
+		strings.Repeat(b.Top, panelPad) + b.TopRight
 
-	// Every interior line is railed on BOTH sides and padded to the width, so
-	// the panel closes as a frame rather than hanging off a left rail. The
-	// content between the rails is width-2, which is why the rail helper
-	// truncates the body to that.
-	inner := maxInt(1, f.width-2)
+	// Every interior line is railed on BOTH sides, with a gutter between the
+	// rail and the content. The gutter is what stops the panel from reading as
+	// a cramped box: content pressed against the rail has no margin, and the
+	// eye has nothing to separate the frame from what it frames.
+	//
+	// The gutter is symmetric — the same on the left and the right — so a
+	// centred or right-aligned cell lines up with the same margin as a
+	// left-aligned one.
+	const gutter = panelPad
+	inner := maxInt(1, f.width-2*gutter-2)
 	line := func(content string) string {
-		return pad(rail(b.Left)+" "+pad(content, inner-1)+rail(b.Right), f.width)
+		return pad(rail(b.Left)+strings.Repeat(" ", gutter)+
+			pad(content, inner)+strings.Repeat(" ", gutter)+rail(b.Right), f.width)
 	}
 
 	lines := make([]string, 0, f.height)
 	lines = append(lines, pad(top, f.width))
+	// Blank rows inside the panel, top and bottom, so the content is not
+	// pressed against the frame's own edges. Without them the first body line
+	// reads as part of the border and the last as part of the footer.
+	for i := 0; i < panelPadY; i++ {
+		lines = append(lines, line(""))
+	}
 	if f.hasHeader {
 		lines = append(lines, line(header))
 	}
@@ -215,6 +255,17 @@ func (f frame) render(header string, body []string, footer string) string {
 		lines = append(lines, line(content))
 	}
 
+	// The input line sits inside the panel above the bottom edge, where a
+	// chat's composer belongs: it reads as part of the conversation rather
+	// than as a separate bar, and the panel's own frame contains it.
+	if f.inputPrompt != "" {
+		lines = append(lines, line(""))
+		lines = append(lines, line(f.inputPrompt+" "+f.input))
+	}
+
+	for i := 0; i < panelPadY; i++ {
+		lines = append(lines, line(""))
+	}
 	bottom := b.BottomLeft + strings.Repeat(b.Bottom, maxInt(0, f.width-2)) + b.BottomRight
 	lines = append(lines, pad(bottom, f.width))
 	lines = append(lines, pad(footer, f.width))

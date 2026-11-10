@@ -1,7 +1,7 @@
-╱─┤ Thoughts ├─────────────────────────┐
+╱──┤ Thoughts ├────────────────────────┐
 │                                      │
-│  terminal too narrow — need at least…│
 │                                      │
+│  terminal too narrow — need at leas… │
 │                                      │
 │                                      │
 │                                      │

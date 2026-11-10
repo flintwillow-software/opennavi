@@ -48,8 +48,8 @@ func TestChatScrollBackSuspendsFollow(t *testing.T) {
 	_ = c.view(th) // establish content and tail position
 
 	// Scroll up.
-	if !c.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}) {
-		t.Fatal("k was not consumed by the chat")
+	if !c.update(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("up was not consumed by the chat")
 	}
 	if c.following {
 		t.Error("scrolling up should suspend tail-follow")
@@ -74,15 +74,16 @@ func TestChatJumpToTailResumesFollow(t *testing.T) {
 	th := newThemeFor(false)
 	_ = c.view(th)
 
-	c.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	c.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	c.update(tea.KeyMsg{Type: tea.KeyUp})
+	c.update(tea.KeyMsg{Type: tea.KeyUp})
 	if c.following {
 		t.Fatal("expected follow suspended after scrolling")
 	}
 
-	// `f` is the jump-to-tail binding.
-	if !c.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")}) {
-		t.Fatal("f was not consumed")
+	// ctrl+f is the jump-to-tail binding: plain `f` is a letter the input
+	// needs, so the scroll binding moved to a control key.
+	if !c.update(tea.KeyMsg{Type: tea.KeyCtrlF}) {
+		t.Fatal("ctrl+f was not consumed")
 	}
 	if !c.following {
 		t.Error("jump-to-tail should resume following")
@@ -100,13 +101,18 @@ func TestChatScrollKeysCoverTheBindings(t *testing.T) {
 		key  tea.KeyMsg
 		want bool
 	}{
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}, true},
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}, true},
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}, true},
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")}, true},
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")}, true},
+		{tea.KeyMsg{Type: tea.KeyUp}, true},
+		{tea.KeyMsg{Type: tea.KeyDown}, true},
 		{tea.KeyMsg{Type: tea.KeyPgUp}, true},
 		{tea.KeyMsg{Type: tea.KeyPgDown}, true},
+		{tea.KeyMsg{Type: tea.KeyHome}, true},
+		{tea.KeyMsg{Type: tea.KeyEnd}, true},
+		{tea.KeyMsg{Type: tea.KeyCtrlF}, true},
+		{tea.KeyMsg{Type: tea.KeyCtrlB}, true},
+		// Letters are NOT scroll bindings: the input needs them.
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}, false},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}, false},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")}, false},
 		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")}, false},
 	}
 	for _, c := range keys {
@@ -138,20 +144,23 @@ func TestChatToolTurnsStartCollapsedAndExpand(t *testing.T) {
 	if !strings.Contains(view, "enter to expand") {
 		t.Errorf("collapsed tool turn should advertise expansion:\n%s", view)
 	}
-	// The collapsed form is a ONE-LINE summary: it may show a short marker of
-	// the output, but the turn must occupy a single line rather than the full
+	// The collapsed form is a labelled band plus ONE summary line: it may show
+	// a short marker of the output, but the turn must not render the full
 	// input/output block.
 	block := c.blocks(th)[0]
-	if len(block) != 1 {
-		t.Errorf("collapsed tool turn should be one line, got %d: %q", len(block), block)
+	if len(block) != 2 {
+		t.Errorf("collapsed tool turn should be band + one line, got %d: %q", len(block), block)
+	}
+	if !strings.Contains(block[0], "├─ tool") {
+		t.Errorf("collapsed tool turn should be labelled by its band: %q", block[0])
 	}
 	if strings.Contains(view, "in:") {
 		t.Errorf("collapsed tool turn should not show its input block:\n%s", view)
 	}
 
-	// enter expands the most recent foldable turn.
-	if !c.update(tea.KeyMsg{Type: tea.KeyEnter}) {
-		t.Fatal("enter was not consumed for a foldable turn")
+	// ctrl+o expands the most recent foldable turn (enter sends the steer).
+	if !c.update(tea.KeyMsg{Type: tea.KeyCtrlO}) {
+		t.Fatal("ctrl+o was not consumed for a foldable turn")
 	}
 	view = strings.Join(c.view(th), "\n")
 	if !strings.Contains(view, "wrote the note") {
@@ -344,5 +353,40 @@ func TestChatResizeInvalidatesBlocks(t *testing.T) {
 		if displayWidth(l) > 30 {
 			t.Errorf("line wider than the new viewport: %d > 30: %q", displayWidth(l), l)
 		}
+	}
+}
+
+// TestChatTrimsBlankLinesAroundTurns pins that a turn's trailing newlines do
+// not render as blank rows. Model output routinely ends with newlines — an
+// assistant message handing off to a tool call is often "…first.\n\n" — and
+// those rendered as real rows, putting an unexplained gap after some turns and
+// not others.
+func TestChatTrimsBlankLinesAroundTurns(t *testing.T) {
+	c := newTestChat(60, 20)
+	th := newThemeFor(false)
+	c.reset([]turn{
+		{role: TurnAssistant, text: "I'll read the file first.\n\n"},
+		{role: TurnTool, tool: "file_read", toolOut: "contents", collapsed: true},
+	})
+
+	lines := c.lines(th)
+	// Between the assistant's text and the tool band there is exactly ONE
+	// blank row — the separator `lines` inserts — not one per trailing
+	// newline plus the separator.
+	blanks := 0
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			blanks++
+		}
+	}
+	if blanks != 1 {
+		t.Errorf("want exactly 1 blank row between turns, got %d:\n%s", blanks, strings.Join(lines, "\n"))
+	}
+
+	// Interior blank lines are content and must survive.
+	c.reset([]turn{{role: TurnAssistant, text: "para one\n\npara two"}})
+	joined := strings.Join(c.lines(th), "\n")
+	if !strings.Contains(joined, "para one") || !strings.Contains(joined, "para two") {
+		t.Errorf("interior blank line handling lost content:\n%s", joined)
 	}
 }

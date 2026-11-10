@@ -159,29 +159,28 @@ func (c *chat) toggleLastFold() bool {
 // they return to the end.
 func (c *chat) update(k tea.KeyMsg) bool {
 	switch k.String() {
-	case "j", "down":
+	case "down":
 		c.vp.LineDown(1)
-	case "k", "up":
+	case "up":
 		c.vp.LineUp(1)
-	case "pgdown", "ctrl+f":
+	case "pgdown":
 		c.vp.PageDown()
 	case "pgup", "ctrl+b":
 		c.vp.PageUp()
-	case "g", "home":
+	case "ctrl+g", "home":
 		c.vp.GotoTop()
-	case "G", "end":
+	case "ctrl+e", "end":
 		c.vp.GotoBottom()
 		c.following = true
-	case "f":
-		// Jump to tail: the explicit "resume following" binding.
+	case "ctrl+f":
+		// Jump to tail: the explicit "resume following" binding. It is a
+		// control key because plain `f` is a letter the input needs.
 		c.vp.GotoBottom()
 		c.following = true
-	case "enter":
-		// Expand/collapse the most recent foldable turn.
-		if c.toggleLastFold() {
-			return true
-		}
-		return false
+	case "ctrl+o":
+		// Expand/collapse the most recent foldable turn. `enter` sends the
+		// steer now, so folding needs a key of its own.
+		c.toggleLastFold()
 	default:
 		return false
 	}
@@ -241,6 +240,11 @@ func (c *chat) lines(th theme) []string {
 	var out []string
 	for i, b := range blocks {
 		if i > 0 {
+			// A blank line between turns is not enough once a turn wraps to
+			// several lines: the reader loses where one ends. Each turn is
+			// instead opened by a labelled band (see band), which marks its
+			// start unambiguously and names the role — information the glyph
+			// alone does not carry.
 			out = append(out, "")
 		}
 		out = append(out, b...)
@@ -249,6 +253,63 @@ func (c *chat) lines(th theme) []string {
 		out = append(out, th.Subtle("  (no conversation yet — stream events land here)"))
 	}
 	return out
+}
+
+// band renders a turn's opening line: a role label, then a rule filling the
+// remaining width. It is the turn's boundary marker and its label in one row,
+// so four turns cost four rows rather than the eight a full box would.
+func (c *chat) band(th theme, role TurnRole) string {
+	label, style := roleBand(role, th)
+	if label == "" {
+		return ""
+	}
+	stub := "├─ "
+	close_ := " ─"
+	used := displayWidth(stub) + displayWidth(label) + displayWidth(close_)
+	// The band stops one column short of the viewport so it does not touch the
+	// panel's right rail — a band that meets the frame reads as a second
+	// border rather than as a divider inside one.
+	// The frame supplies the gutter on both sides, so the band fills exactly
+	// the inner width — reserving a column here would leave a gap before the
+	// rail.
+	fill := c.width - used
+	if fill < 0 {
+		fill = 0
+	}
+	return style(stub) + style(label) + style(close_+strings.Repeat("─", fill))
+}
+
+// systemBand is a turn's band with the system text set into it: a labelled
+// divider whose label is the event itself.
+func (c *chat) systemBand(th theme, text string) string {
+	stub := "├─ "
+	close_ := " ─"
+	used := displayWidth(stub) + displayWidth(text) + displayWidth(close_)
+	fill := c.width - used
+	if fill < 0 {
+		// Too long for the band: fall back to the text on its own line under a
+		// plain band, so nothing is silently dropped.
+		return c.band(th, TurnSystem) + " " + th.System(truncate(text, c.width-4, "…"))
+	}
+	return th.System(stub) + th.System(text) + th.System(close_+strings.Repeat("─", fill))
+}
+
+// roleBand is a role's label and the style it is drawn in. The label is what
+// distinguishes a turn; the glyph only says which way it points.
+func roleBand(role TurnRole, th theme) (string, func(string) string) {
+	switch role {
+	case TurnUser:
+		return "you", th.User
+	case TurnAssistant:
+		return "assistant", th.Assistant
+	case TurnTool:
+		return "tool", th.Tool
+	case TurnThinking:
+		return "thinking", th.Subtle
+	case TurnSystem:
+		return "system", th.System
+	}
+	return string(role), th.System
 }
 
 // view renders the chat: it refreshes the viewport content (following the
@@ -275,59 +336,97 @@ func (c *chat) view(th theme) []string {
 // intact.
 func (c *chat) renderTurn(t turn, th theme) []string {
 	w := c.width
+	band := c.band(th, t.role)
+
+	// A turn's text is trimmed of leading and trailing blank lines before it
+	// is laid out. Model output routinely ends with newlines (an assistant
+	// message that hands off to a tool call is often `"…first.\n\n"`), and
+	// those blank lines are invisible data that render as real rows — which
+	// is why a gap appeared after some turns and not others.
+	text := trimBlankLines(t.text)
+
 	switch t.role {
 	case TurnUser:
-		return labelledLines("▸ ", sanitizeLine(t.text), th.User, w)
+		return append([]string{band}, labelledLines("  ", sanitizeLine(text), th.User, w)...)
 	case TurnAssistant:
 		// Assistant content wraps: split on newlines, no sanitization.
-		return labelledLines("◂ ", t.text, th.Assistant, w)
+		return append([]string{band}, labelledLines("  ", text, th.Assistant, w)...)
 	case TurnThinking:
-		// Reasoning: dimmed and italic, collapsible. Renders nothing when
-		// there is no reasoning content, which is the state until NAVI-590
-		// lands the upstream event.
-		if strings.TrimSpace(t.text) == "" {
+		// Reasoning: dimmed and collapsible. Renders nothing when there is no
+		// reasoning content, which is the state until NAVI-590 lands the
+		// upstream event.
+		if strings.TrimSpace(text) == "" {
 			return nil
 		}
 		if t.collapsed {
-			return []string{th.Subtle("  ~ thinking (enter to expand)")}
+			return []string{band + th.Subtle("  (enter to expand)")}
 		}
-		lines := []string{th.Subtle("  ~ thinking")}
-		lines = append(lines, labelledLines("    ", sanitizeLine(t.text), th.Subtle, w)...)
-		return lines
+		return append([]string{band}, labelledWrapped("  ", sanitizeLine(text), th.Subtle, w)...)
 	case TurnTool:
-		return c.renderToolTurn(t, th)
+		return c.renderToolTurn(t, th, band)
 	case TurnSystem:
-		return labelledLines("  · ", sanitizeLine(t.text), th.System, w)
+		// A system line is a short lifecycle note (`turn_end`), so it goes ON
+		// the band rather than under it — a band plus an indented line wastes a
+		// row per event for four words.
+		return []string{c.systemBand(th, sanitizeLine(t.text))}
 	}
-	return labelledLines("  ? ", sanitizeLine(t.text), th.System, w)
+	return []string{c.systemBand(th, sanitizeLine(t.text))}
 }
 
 // renderToolTurn renders a tool call compactly by default and in full when
 // expanded. The compact form is one line: the tool name plus a short result
 // marker, so a run with twenty tool calls is readable rather than a wall.
-func (c *chat) renderToolTurn(t turn, th theme) []string {
+func (c *chat) renderToolTurn(t turn, th theme, band string) []string {
 	name := sanitizeLine(t.tool)
 	if name == "" {
 		name = "tool"
 	}
 	if t.collapsed {
-		summary := "⚙ " + name
+		// The band already says `tool`, so the summary carries the call
+		// itself: what was run, and a preview of what came back.
+		summary := "  " + th.Tool("⚙ "+name)
 		if t.toolOut != "" {
-			summary += th.Subtle(" · " + truncate(sanitizeLine(t.toolOut), 40, "…"))
+			summary += th.Subtle(" · " + truncate(firstLine(sanitizeLine(t.toolOut)), 60, "…"))
 		} else if t.toolIn != "" {
-			summary += th.Subtle(" · " + truncate(sanitizeLine(t.toolIn), 40, "…"))
+			summary += th.Subtle(" · " + truncate(firstLine(sanitizeLine(t.toolIn)), 60, "…"))
 		}
 		summary += th.Subtle("  (enter to expand)")
-		return []string{"  " + th.Tool(summary)}
+		return []string{band, summary}
 	}
-	lines := []string{"  " + th.Tool("⚙ "+name)}
+	lines := []string{band, "  " + th.Tool("⚙ "+name)}
 	if t.toolIn != "" {
-		lines = append(lines, labelledWrapped("    in: ", sanitizeLine(t.toolIn), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("  in: ", sanitizeLine(t.toolIn), th.Tool, c.width)...)
 	}
 	if t.toolOut != "" {
-		lines = append(lines, labelledWrapped("    out: ", sanitizeLine(t.toolOut), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("  out: ", sanitizeLine(t.toolOut), th.Tool, c.width)...)
 	}
 	return lines
+}
+
+// trimBlankLines removes leading and trailing blank lines from a turn's text,
+// keeping interior ones. Blank lines at the ends are not content: they are an
+// artefact of how a model or a tool framed its output, and rendering them
+// puts unexplained gaps between turns.
+func trimBlankLines(s string) string {
+	lines := strings.Split(s, "\n")
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+// firstLine is the first line of a block, for a collapsed summary: a tool
+// result's first line is its most identifying part.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // labelledWrapped lays text out with a prefix on the first line and a hanging
@@ -427,14 +526,23 @@ func labelledLines(prefix, text string, style func(string) string, width int) []
 // whether to route a key to the chat or handle it itself. This is the seed of
 // the generated-help work (NAVI-593): the chat declares what it handles
 // rather than the model guessing.
+// chatKeys are the bindings the chat consumes while its input is focused.
+//
+// The letters `j`/`k`/`g`/`G`/`f` are deliberately NOT here. A chat screen
+// with a persistent input has to let those characters be typed — a reader
+// steering a thought writes prose, and swallowing `k` to scroll would make the
+// input unusable. Scrolling therefore uses the keys that are never text: the
+// arrows, Page Up/Down, Home/End, and the ctrl combos. `f` (jump to tail)
+// moves to ctrl+f, since plain `f` is a letter.
 var chatKeys = map[string]bool{
-	"j": true, "down": true,
-	"k": true, "up": true,
-	"pgdown": true, "ctrl+f": true,
-	"pgup": true, "ctrl+b": true,
-	"g": true, "home": true,
-	"G": true, "end": true,
-	"f": true, "enter": true,
+	"down": true, "up": true,
+	"pgdown": true, "pgup": true,
+	"home": true, "end": true,
+	"ctrl+f": true, "ctrl+b": true,
+	"ctrl+g": true, "ctrl+e": true,
+	// Folding a turn moves to a control key: `enter` sends the steer, and a
+	// tool block expands on ctrl+o (for "open").
+	"ctrl+o": true,
 }
 
 // chatHandles reports whether the chat should receive this key.

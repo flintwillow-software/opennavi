@@ -366,7 +366,9 @@ func TestModelLiveView(t *testing.T) {
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "!"},
 	})
 	drain(m)
-	if !strings.Contains(m.View(), "hello world!") || !strings.Contains(m.View(), "◂") {
+	// The assistant turn is identified by its role band, not a glyph: the band
+	// is what marks a turn now.
+	if !strings.Contains(m.View(), "hello world!") || !strings.Contains(m.View(), "├─ assistant") {
 		t.Errorf("deltas did not accumulate into one assistant turn:\n%s", m.View())
 	}
 	// Tool calls render as indented blocks.
@@ -387,7 +389,9 @@ func TestModelLiveView(t *testing.T) {
 		t.Fatal(err)
 	}
 	drain(m)
-	if !strings.Contains(m.View(), "complete") {
+	// A lifecycle transition renders as a system turn, whose band is labelled
+	// with the event itself.
+	if !strings.Contains(m.View(), "├─ complete") {
 		t.Errorf("lifecycle system line missing:\n%s", m.View())
 	}
 	// Events for OTHER thoughts do not pollute the live window.
