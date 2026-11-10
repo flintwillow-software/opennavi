@@ -286,17 +286,17 @@ type tuiModel struct {
 	sel    int
 	mode   ModeKind
 	liveID string
-	// turns is the reconstructed chat for the live view (NAVI-330):
-	// prompt as the opening user turn, assistant deltas accumulated,
-	// tool blocks, lifecycle system lines, steers as user turns.
-	// Presentation-only — the stream stays the source of truth.
-	turns []turn
+	// chat is the shared conversation component (NAVI-589, ADR 0038
+	// decision 5): home's running thought and a thought opened from the queue
+	// render through this one implementation, which owns the turns, the
+	// scroll viewport, and the per-turn blocks. Presentation-only — the
+	// stream stays the source of truth.
+	chat chat
 	// transcripts accumulates each thought's conversation from the event
 	// stream, regardless of which view is open, so a thought enqueued
 	// from the list still shows its response when opened after it ran.
 	// In-session only; durable restore is NAVI-353.
 	transcripts map[string][]turn
-	liveScroll  int // 0 = tail-follow; >0 = lines scrolled back
 	input       string
 	// active reports the running thought's inference activity in the
 	// home view status line (NAVI-335).
@@ -322,6 +322,11 @@ type tuiModel struct {
 	height int
 	// theme is the single source of colour and text style (theme.go).
 	theme theme
+	// debug shows the diagnostic chrome (form factor, terminal size) in the
+	// header. Off by default: it is information about the renderer, not about
+	// the navi, so it belongs behind a toggle rather than in every screen's
+	// chrome.
+	debug bool
 }
 
 // NewModel builds the model over a transport.
@@ -372,6 +377,17 @@ func (m *tuiModel) loadTypes() {
 	if len(types) > 0 {
 		m.types = types
 		m.typesErr = nil
+		// Start on a type that can be listed. The first registered type is
+		// not necessarily one — a navi may register a collection type
+		// (a thought's transcript entries) before the type it belongs to.
+		if !listable(m.types[m.typeIdx]) {
+			for i := range m.types {
+				if listable(m.types[i]) {
+					m.typeIdx = i
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -393,6 +409,12 @@ func (m *tuiModel) refreshList() {
 	}
 	objs, next, err := m.objects.List(t.Name, object.Query{Limit: listPage})
 	if err != nil {
+		// A failed read clears the page. Keeping the previous type's rows on
+		// screen under the new type's title is the worst of both: the reader
+		// sees data that does not belong to what the panel says it is.
+		m.list = view.List{}
+		m.items = make(map[string]object.Object)
+		m.sel = 0
 		m.status = "list " + t.Name + ": " + err.Error()
 		return
 	}
@@ -558,7 +580,7 @@ func (m *tuiModel) queueEvent(ev portal.Event) {
 	// Lifecycle transitions render as system lines in the live chat
 	// window (NAVI-330): started/paused/resumed/completed/failed/...
 	if m.mode == ModeLive && ev.ThoughtID == m.liveID && ev.Kind != "enqueued" {
-		m.addTurn(turn{role: TurnSystem, text: "· " + displayStatus(ev.Kind)})
+		m.addTurn(turn{role: TurnSystem, text: displayStatus(ev.Kind)})
 	}
 }
 
@@ -633,12 +655,28 @@ func (m *tuiModel) chatAgentEvent(ev portal.Event) {
 		} else {
 			add(turn{role: TurnAssistant, text: ev.Detail})
 		}
+	case "reasoning_delta", "agent_reasoning_delta":
+		// Reasoning content (ADR 0038 decision 9). The upstream event does
+		// not exist yet (NAVI-590), so this case is unreachable today — it is
+		// here so that landing the event is a change to the provider and the
+		// agent rather than to this fold. Accumulates like assistant text.
+		if n := len(tr); n > 0 && tr[n-1].role == TurnThinking {
+			tr[n-1].text += ev.Detail
+		} else {
+			add(turn{role: TurnThinking, text: ev.Detail, collapsed: false})
+		}
 	case "turn_start", "agent_start":
 		add(turn{role: TurnSystem, text: ev.Kind})
 	case "tool_call":
-		add(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), toolIn: ""})
+		add(turn{role: TurnTool, tool: m.clip(ev.Detail, 40), collapsed: true})
 	case "tool_result":
-		add(turn{role: TurnTool, tool: "result", toolOut: m.clip(ev.Detail, 60)})
+		// A result lands on the trailing tool turn when there is one, so a
+		// call and its result are ONE block rather than two.
+		if n := len(tr); n > 0 && tr[n-1].role == TurnTool && tr[n-1].toolOut == "" {
+			tr[n-1].toolOut = ev.Detail
+		} else {
+			add(turn{role: TurnTool, tool: "result", toolOut: ev.Detail, collapsed: true})
+		}
 	case "agent_end":
 		add(turn{role: TurnSystem, text: "agent ended"})
 	case "error":
@@ -648,7 +686,7 @@ func (m *tuiModel) chatAgentEvent(ev portal.Event) {
 	}
 	m.transcripts[ev.ThoughtID] = tr
 	if m.liveID == ev.ThoughtID {
-		m.turns = tr
+		m.chat.reset(tr)
 	}
 }
 
@@ -678,15 +716,13 @@ func (m *tuiModel) homeAgentEvent(ev portal.Event) {
 	m.active = preview
 }
 
-// addTurn appends a chat turn, bounding the scrollback window; the
-// tail (scroll 0) auto-follows.
+// addTurn appends a chat turn to the open conversation, and mirrors it into
+// the thought's accumulated transcript so it survives a re-open. The chat
+// component owns the scrollback bound.
 func (m *tuiModel) addTurn(t turn) {
-	m.turns = append(m.turns, t)
-	if len(m.turns) > maxLiveTurns {
-		m.turns = m.turns[len(m.turns)-maxLiveTurns:]
-	}
+	m.chat.append(t)
 	if m.liveID != "" && m.transcripts != nil {
-		m.transcripts[m.liveID] = m.turns
+		m.transcripts[m.liveID] = m.chat.turns
 	}
 }
 
@@ -714,29 +750,6 @@ func sanitizeLine(s string) string {
 	}, s)
 }
 
-// key handles a key press; returns true when the user quits.
-// TurnRole renders one conversation turn in the live chat window.
-type TurnRole string
-
-const (
-	TurnUser      TurnRole = "user"
-	TurnAssistant TurnRole = "assistant"
-	TurnTool      TurnRole = "tool"
-	TurnSystem    TurnRole = "system"
-)
-
-// turn is one chat-window block (NAVI-330 presentation).
-type turn struct {
-	role    TurnRole
-	text    string // accumulated content (assistant deltas append here)
-	tool    string // tool name for tool turns
-	toolIn  string // input summary for tool turns
-	toolOut string // result for tool turns
-}
-
-// maxLiveTurns bounds the reconstructed chat (scrollback window).
-const maxLiveTurns = 80
-
 // enterLive opens a thought's conversation: the persisted transcript detail,
 // read through the object surface and resolved by the toolkit, so a completed
 // thought opened after the fact shows its full conversation and the in-process
@@ -745,7 +758,6 @@ const maxLiveTurns = 80
 func (m *tuiModel) enterLive(thoughtID string) {
 	m.liveID = thoughtID
 	m.mode = ModeLive
-	m.liveScroll = 0
 	if tr := m.transcripts[thoughtID]; len(tr) > 0 {
 		// The accumulated stream may have started mid-run: the prompt opens
 		// the conversation when nothing else does.
@@ -753,11 +765,12 @@ func (m *tuiModel) enterLive(thoughtID string) {
 			tr = append([]turn{{role: TurnUser, text: m.promptOf(thoughtID)}}, tr...)
 			m.transcripts[thoughtID] = tr
 		}
-		m.turns = tr
+		m.chat.reset(tr)
 		return
 	}
-	m.turns = m.seedTurns(thoughtID)
-	m.transcripts[thoughtID] = m.turns
+	tr := m.seedTurns(thoughtID)
+	m.transcripts[thoughtID] = tr
+	m.chat.reset(tr)
 }
 
 // seedTurns reads a thought's transcript through the surface and maps it to
@@ -771,7 +784,13 @@ func (m *tuiModel) seedTurns(thoughtID string) []turn {
 			if v, ok := view.Hint(t, object.ViewChat); ok && v.Detail != "" {
 				detail = v.Detail
 			}
-			if chat, err := view.ReadChat(m.objects, t.Name, thoughtID, detail, object.Query{Limit: listPage}); err == nil {
+			chat, err := view.ReadChat(m.objects, t.Name, thoughtID, detail, object.Query{Limit: listPage})
+			if err != nil {
+				// A failed transcript read is not silent: a completed thought
+				// whose conversation will not load is a defect the reader should
+				// see rather than a blank panel they must interpret.
+				m.status = "transcript " + thoughtID + ": " + err.Error()
+			} else {
 				out = turnsOf(chat)
 			}
 		}
@@ -786,11 +805,16 @@ func (m *tuiModel) seedTurns(thoughtID string) []turn {
 func turnsOf(chat view.Chat) []turn {
 	out := make([]turn, 0, len(chat.Turns))
 	for _, t := range chat.Turns {
+		// A seeded tool turn starts collapsed, exactly as a live one does: a
+		// tool result is machine output that can be thousands of lines, so an
+		// opened transcript must not open by dumping all of it. The live path
+		// sets this in chatAgentEvent; the two must agree or the same
+		// conversation renders differently depending on when it is opened.
 		switch {
 		case t.Role == "tool" || (t.Tool != "" && t.Output != ""):
-			out = append(out, turn{role: TurnTool, tool: t.Tool, toolOut: t.Output})
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolOut: t.Output, collapsed: true})
 		case t.Tool != "" && t.Text == "":
-			out = append(out, turn{role: TurnTool, tool: t.Tool, toolIn: t.Input})
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolIn: t.Input, collapsed: true})
 		default:
 			role := TurnAssistant
 			switch t.Role {
@@ -857,6 +881,52 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		return false
 	}
 
+	// The chat has first refusal on its own scroll/fold keys while the
+	// conversation is open, so the same key does not mean two things
+	// depending on which screen happens to be showing (ADR 0038 decision 7:
+	// actions bind to the focused object, not to a mode). Quit and back stay
+	// the model's, so a reader can always leave.
+	// The chat screen owns its own input: printable runes are text to steer
+	// with, and the scroll keys are the ones that can never be text. This is
+	// what makes the input persistent rather than a mode you enter and leave
+	// (ADR 0038 decision 3) — you type into the conversation you are reading.
+	if m.mode == ModeLive {
+		switch k.String() {
+		case "q", "ctrl+c":
+			return true // quit still wins
+		case "esc", "escape":
+			// Clear a non-empty buffer first; a second esc leaves the chat.
+			if m.input != "" {
+				m.input = ""
+				return false
+			}
+			m.mode = ModeList
+			m.detail = nil
+			return false
+		case "enter":
+			// Enter sends. A newline needs a modifier, which is what a
+			// one-line steer field implies; a textarea would invert this.
+			m.sendSteer()
+			return false
+		case "backspace":
+			if r := []rune(m.input); len(r) > 0 {
+				m.input = string(r[:len(r)-1])
+			}
+			return false
+		case "ctrl+f", "ctrl+b", "ctrl+g", "ctrl+e", "ctrl+o",
+			"up", "down", "pgup", "pgdown", "home", "end":
+			m.chat.update(k)
+			return false
+		case "ctrl+u":
+			m.input = ""
+			return false
+		}
+		if len(k.Runes) > 0 {
+			m.input += string(k.Runes)
+			return false
+		}
+	}
+
 	switch k.String() {
 	case "q", "ctrl+c":
 		return true
@@ -866,17 +936,11 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.detail = nil
 		}
 	case "up", "k":
-		if m.mode == ModeLive {
-			m.liveScroll++
-		} else if m.mode == ModeList && m.sel > 0 {
+		if m.mode == ModeList && m.sel > 0 {
 			m.sel--
 		}
 	case "down", "j":
-		if m.mode == ModeLive {
-			if m.liveScroll > 0 {
-				m.liveScroll--
-			}
-		} else if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
+		if m.mode == ModeList && m.sel < len(m.list.Rows)-1 {
 			m.sel++
 		}
 	case "enter":
@@ -884,15 +948,18 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.open(id)
 		}
 	case "t":
-		if m.mode == ModeList && len(m.types) > 1 {
-			m.typeIdx = (m.typeIdx + 1) % len(m.types)
-			m.sel = 0
-			m.detail = nil
-			m.refreshList()
-			if t, ok := m.currentType(); ok {
-				m.status = "type: " + t.Name
+		if m.mode == ModeList {
+			if next, ok := m.nextListableType(); ok {
+				m.typeIdx = next
+				m.sel = 0
+				m.detail = nil
+				m.refreshList()
+				m.status = "type: " + m.typeLabel(m.typeIdx)
 			}
 		}
+	case "D":
+		// Toggle the diagnostic header (form factor, terminal size).
+		m.debug = !m.debug
 	case "n":
 		if m.mode == ModeList {
 			m.enqueue = true
@@ -935,6 +1002,25 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		}
 	}
 	return false
+}
+
+// sendSteer routes the chat's input buffer to the open thought through the
+// one write path (object.Surface.Act, ADR 0019 decision 7) — the same call the
+// list's attach flow uses, so there is no second way to reach the queue.
+func (m *tuiModel) sendSteer() {
+	msg := strings.TrimSpace(m.input)
+	if msg == "" || m.liveID == "" {
+		return
+	}
+	if err := m.act(m.liveID, "steer", map[string]any{"message": msg}); err != nil {
+		m.status = "steer failed: " + err.Error()
+		return
+	}
+	// The buffer clears on send, not on the ack: the ack arrives on the stream
+	// and lands as a turn, and holding the text until then would let a slow
+	// round trip block the next message.
+	m.status = "steered " + m.liveID
+	m.input = ""
 }
 
 // submitInput handles enter in input mode: an attach-message flow steers
@@ -1104,13 +1190,37 @@ func (m *tuiModel) doAction(action, id string, prio int) {
 func (m *tuiModel) render() string {
 	f := newFrame(m.width, m.height, m.theme)
 
-	title := "thought queue"
-	if t, ok := m.currentType(); ok && t.Label != "" {
-		title = t.Label
+	// The panel's top edge is labelled with where you are, the way a titled
+	// module announces its contents. It is the only place the location needs
+	// to be said: a separate header repeating the app's own name ("navi ·
+	// portal") is furniture, and it costs a body row on every screen. The
+	// chat's follow/trim state rides along in the same label rather than
+	// spending a body row of its own.
+	f.title = m.panelLabel()
+	f.status = m.chatStatus()
+
+	// The chat screen carries a persistent steer input: steering the thought
+	// you are watching is the default gesture and must cost no keystroke to
+	// reach (ADR 0038 decision 3). It is not a mode — you type here without
+	// leaving the conversation.
+	if m.mode == ModeLive {
+		f.inputPrompt = "steer ›"
+		f.input = m.input + m.theme.Marker("█")
 	}
-	header := " " + m.theme.Title("navi") + " · " + sanitizeLine(title) +
-		m.theme.Subtle(" (portal"+terminalSuffix(m)+")") +
-		m.theme.Subtle("  "+f.form().String()+" "+itoa(f.width)+"×"+itoa(f.height))
+
+	// The header line exists only to carry a warning. A healthy TUI has
+	// nothing to put here, so it gets no line at all — the frame then spends
+	// that row on content instead of on chrome that says nothing.
+	header := ""
+	if m.debug {
+		header = m.theme.Subtle(f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
+	}
+	if gap := terminalSuffix(m); gap != "" {
+		// A dropped-event gap is the one thing worth interrupting the panel
+		// title for: the reader's view is incomplete and nothing else says so.
+		header = m.theme.Warn(strings.TrimPrefix(gap, " · "))
+	}
+	f.hasHeader = header != ""
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
@@ -1123,6 +1233,70 @@ func (m *tuiModel) render() string {
 
 	body := m.bodyLines(f)
 	return f.render(header, body, m.footerLine(f))
+}
+
+// panelLabel is the label on the panel's top edge: the screen and the object
+// it is showing, so the frame says where you are without a separate header.
+func (m *tuiModel) panelLabel() string {
+	switch m.mode {
+	case ModeLive:
+		return "chat · " + m.liveID
+	case ModeDetail:
+		if m.detail != nil {
+			return "detail · " + m.detail.Title
+		}
+		return "detail"
+	case ModeInput:
+		return "input"
+	}
+	return m.typeLabel(m.typeIdx)
+}
+
+// typeLabel is a type's name for a LIST context. The descriptor's own Label
+// is singular — it names one object in a detail view ("Thought") — while a
+// list view carries its own plural label ("Thoughts"). Using the singular for
+// a list reads wrong ("the Thought list" for six thoughts), so the list
+// view's label wins where the descriptor declares one.
+func (m *tuiModel) typeLabel(idx int) string {
+	if idx < 0 || idx >= len(m.types) {
+		return "objects"
+	}
+	t := m.types[idx]
+	if v, ok := view.Hint(t, object.ViewList); ok && v.Label != "" {
+		return v.Label
+	}
+	if t.Label != "" {
+		return t.Label
+	}
+	return t.Name
+}
+
+// nextListableType is the next type in declaration order that can be listed
+// on its own, wrapping around. It returns false when there is no other one,
+// so the switcher does not cycle onto a type it cannot render.
+func (m *tuiModel) nextListableType() (int, bool) {
+	n := len(m.types)
+	if n == 0 {
+		return 0, false
+	}
+	for step := 1; step <= n; step++ {
+		i := (m.typeIdx + step) % n
+		if listable(m.types[i]) {
+			return i, i != m.typeIdx
+		}
+	}
+	return m.typeIdx, false
+}
+
+// listable reports whether a type is meant to be listed on its own. A type
+// with no list view is reached through another type's detail collection — the
+// `entry` type is a thought's transcript, and its provider refuses a bare
+// List — so the type switcher must not offer it. Cycling to it rendered the
+// previous type's rows under the new type's title, because the failed List
+// left the model's stale page in place.
+func listable(t object.Type) bool {
+	v, ok := view.Hint(t, object.ViewList)
+	return ok && len(v.Columns) > 0
 }
 
 // bodyLines dispatches to the current screen and returns its body rows.
@@ -1169,75 +1343,214 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // columns, decorating each row with the live overlay (status, a derived
 // blocked flag, a checkpoint marker, a running preview).
 func (m *tuiModel) bodyList(f frame) []string {
-	t, ok := m.currentType()
-	if !ok {
+	if _, ok := m.currentType(); !ok {
 		return []string{" " + m.theme.Subtle("(waiting for the navi's object types…)")}
 	}
 	var out []string
-	if len(m.types) > 1 {
-		line := " type: "
-		for i, ty := range m.types {
-			if i > 0 {
-				line += " · "
-			}
-			label := ty.Label
-			if label == "" {
-				label = ty.Name
-			}
-			if i == m.typeIdx {
-				line += m.theme.Selected("[" + sanitizeLine(label) + "]")
-			} else {
-				line += sanitizeLine(label)
-			}
-		}
-		out = append(out, line)
-	}
 	if len(m.list.Rows) == 0 {
-		return append(out, " "+m.theme.Subtle("("+sanitizeLine(t.Name)+" empty)"))
+		return append(out, " "+m.theme.Subtle("(no "+strings.ToLower(m.typeLabel(m.typeIdx))+" yet)"))
 	}
 
-	// Columns are laid out from the descriptor's declared columns, sized by
-	// display width, and fitted to the frame so a wide value cannot push the
-	// rest off the screen (NAVI-588).
-	cols := m.columnLayout(f.width)
-	out = append(out, "    "+m.renderColumnHeader(cols))
+	// The rows are a grid: a marker gutter, the declared columns separated by
+	// a rule, and a trailing flags/activity gutter. The grid draws the
+	// header, the rule beneath it, and the rows from ONE column model, so the
+	// header and the body cannot drift apart.
+	g := m.buildGrid(f)
+	out = append(out, g.header(m.theme)...)
+	out = append(out, g.rule(m.theme))
 	for i, row := range m.list.Rows {
-		b := m.badges[row.ID]
-		flags := "  "
-		if b.checkpoint {
-			flags = " C "
+		// A light dotted rule between rows, and none after the last. It says
+		// "next record in the same table" where a full rule would read as a
+		// new section, and it is a character rather than a colour, so it
+		// survives NO_COLOR. Without it, consecutive rows are three lines of
+		// text with nothing marking where one ends.
+		if i > 0 {
+			out = append(out, g.separator(m.theme))
 		}
-		if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
-			flags += "V"
-		}
-		mark := " "
-		if i == m.sel {
-			mark = m.theme.Marker(">")
-		}
-		line := " " + mark + " "
-		for _, c := range cols {
-			value := cellValue(row, c.column.Field)
-			if c.column.Field == "status" {
-				value = m.statusOf(row.ID)
-				if b.blocked {
-					value = "blocked"
-				}
-			}
-			line += pad(sanitizeLine(value), c.width) + " "
-		}
-		line += flags + " "
-		if b.activity != "" && f.width >= activityMinFrame {
-			line += " «" + truncate(sanitizeLine(b.activity), activityReserve-2, "…")
-		}
-		out = append(out, line)
+		out = append(out, g.row(m.theme, m, i, row)...)
 	}
 	return out
+}
+
+// grid is the resolved column model for the list: the columns, their widths,
+// and their alignment. It is built once per frame and used for the header,
+// the rule, and every row, so all three agree by construction.
+type grid struct {
+	cols    []laidOutColumn
+	widths  []int
+	markW   int
+	gutterW int
+}
+
+// buildGrid resolves the descriptor's columns against the frame.
+func (m *tuiModel) buildGrid(f frame) grid {
+	// The marker column is two cells: the selection glyph and a space.
+	g := grid{markW: 2}
+	g.cols = m.columnLayout(f.innerWidth())
+	for _, c := range g.cols {
+		g.widths = append(g.widths, c.width)
+	}
+	// The trailing gutter holds the flags and, where there is room, the
+	// running activity preview. It is computed here and used by both the row
+	// and the spine, so the two cannot disagree about where a column ends.
+	g.gutterW = flagsReserve
+	if f.innerWidth() >= activityMinFrame && m.pageHasActivity() {
+		g.gutterW += activityReserve
+	}
+	return g
+}
+
+// colSep is the column separator. A single rule character with a space each
+// side reads as a table without stealing much width.
+const colSep = "│"
+
+// header renders the column labels, aligned to match their column's kind and
+// separated by the same rule as the rows.
+func (g grid) header(th theme) []string {
+	line := strings.Repeat(" ", g.markW)
+	for i, c := range g.cols {
+		if i > 0 {
+			line += th.Subtle(" " + colSep + " ")
+		}
+		line += th.Subtle(alignCell(sanitizeLine(c.column.Label), c.width, c.align))
+	}
+	return []string{line}
+}
+
+// rule is the line under the header: a rule character spanning each column,
+// joined at the column separators. It is what makes the rows read as a grid
+// rather than as floating text.
+func (g grid) rule(th theme) string {
+	return th.Subtle(g.spine("─", "─", "┼"))
+}
+
+// spine builds a horizontal line across the grid: the marker column, each
+// column's width, and the trailing gutter, joined at the column separators.
+// The rule, the dotted separator, and the header all derive their shape from
+// this one function, so they cannot disagree about where a column ends.
+func (g grid) spine(fill, join, cross string) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat(fill, g.markW))
+	for i, w := range g.widths {
+		if i > 0 {
+			b.WriteString(fill + cross + fill)
+		}
+		b.WriteString(strings.Repeat(fill, w))
+	}
+	b.WriteString(strings.Repeat(fill, g.gutterW))
+	return b.String()
+}
+
+// separator is the light rule drawn between rows: a dotted line through each
+// column, joined at the separators. It is deliberately lighter than the
+// header rule so the header still reads as the table's edge.
+func (g grid) separator(th theme) string {
+	return th.Subtle(g.spine("·", "·", "┼"))
+}
+
+// row renders one data row: the marker gutter, each cell aligned by its
+// column's kind, the flags, and the activity preview.
+func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
+	b := m.badges[row.ID]
+
+	mark := " "
+	if i == m.sel {
+		mark = th.Marker("▸")
+	}
+	line := mark + " "
+	for ci, c := range g.cols {
+		if ci > 0 {
+			line += th.Subtle(" " + colSep + " ")
+		}
+		value := cellValue(row, c.column.Field)
+		if c.column.Field == "status" {
+			value = m.statusOf(row.ID)
+			if b.blocked {
+				value = "blocked"
+			}
+		}
+		raw := sanitizeLine(value)
+		if c.column.Field == "id" {
+			raw = truncateLeft(raw, c.width, "…")
+		}
+		cell := alignCell(raw, c.width, c.align)
+		// Status is an enum: colour it so the eye finds a row's state without
+		// reading every word. The text is identical either way.
+		if c.column.Kind == object.KindEnum {
+			cell = th.Status(sanitizeLine(value), cell, c.width, c.align)
+		}
+		line += cell
+	}
+
+	// The flags gutter: a checkpoint marker and a verification flag, always
+	// reserved so a flag can never be squeezed off the edge.
+	flags := "  "
+	if b.checkpoint {
+		flags = " C"
+	}
+	if v, _ := m.items[row.ID].Fields["verification"].(bool); v {
+		flags += "V"
+	} else {
+		flags += " "
+	}
+	line += " " + th.Subtle(flags)
+
+	if b.activity != "" && g.gutterW > flagsReserve {
+		line += " " + th.Subtle("«"+truncate(sanitizeLine(b.activity), activityReserve-2, "…"))
+	}
+	return []string{line}
+}
+
+// alignCell pads a value to the column width according to its alignment.
+//
+// Truncation is from the LEFT for an identity column: a generated id puts its
+// distinguishing characters at the end (`cli-1794295713624121722`), so cutting
+// the tail would render every row as the same constant prefix and leave the
+// reader unable to tell two records apart — which is what made a list of three
+// different thoughts look like three copies of one row.
+func alignCell(s string, width int, a align) string {
+	s = truncate(s, width, "…")
+	space := width - displayWidth(s)
+	if space <= 0 {
+		return s
+	}
+	switch a {
+	case alignRight:
+		return strings.Repeat(" ", space) + s
+	case alignCenter:
+		left := space / 2
+		return strings.Repeat(" ", left) + s + strings.Repeat(" ", space-left)
+	}
+	return s + strings.Repeat(" ", space)
+}
+
+// align is how a column's values sit within their width. Alignment follows
+// the value's kind, because that is what makes a table scannable: numbers and
+// dates line up on the right, short enums sit centred, text reads left.
+type align int
+
+const (
+	alignLeft align = iota
+	alignRight
+	alignCenter
+)
+
+// alignFor picks the alignment for a field kind.
+func alignFor(k object.Kind) align {
+	switch k {
+	case object.KindInt, object.KindFloat, object.KindTime:
+		return alignRight
+	case object.KindEnum, object.KindBool:
+		return alignCenter
+	}
+	return alignLeft
 }
 
 // laidOutColumn is a declared column paired with the width it was given.
 type laidOutColumn struct {
 	column view.Column
 	width  int
+	align  align
 }
 
 // columnLayout sizes the descriptor's columns to the frame. It reserves room
@@ -1246,10 +1559,24 @@ type laidOutColumn struct {
 // room to be read; everything else keeps a floor so a header stays legible.
 func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	const (
-		leading = 4 // " > " plus the space before the first column
+		// leading is the marker column: the selection glyph and the space
+		// after it. The frame's own gutter is NOT included here — the layout
+		// is given the inner width, which is already net of the rails.
+		leading = 2
 		gap     = 1
 	)
 	cols := m.list.Columns
+	if len(cols) == 0 {
+		return nil
+	}
+
+	// A column every row leaves empty is dropped before any sizing. Reserving
+	// width for a column that renders nothing steals it from the columns that
+	// do have something to say — the fixture's empty `model` was pushing the
+	// `updated` date off the edge at 80 columns, and shrinking to `…` at 60.
+	// A column that is empty for THIS page is not shown; the descriptor still
+	// declares it, so a page that fills it shows it.
+	cols = m.dropEmptyColumns(cols)
 	if len(cols) == 0 {
 		return nil
 	}
@@ -1262,15 +1589,31 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	flags := flagsReserve
 
 	// The activity preview shares the row with the columns. Reserve room for
-	// it when there is any, so a running thought's preview is legible rather
-	// than squeezed to a single ellipsis at the edge; on a narrow terminal
-	// the preview is dropped instead of starving the columns.
+	// it only when the page actually has one to show, and only when the
+	// terminal is wide enough: reserving unconditionally left a dead gap
+	// before the right rail on every page whose thoughts were not running,
+	// which is most of them.
 	activity := 0
-	if frameWidth >= activityMinFrame {
+	if frameWidth >= activityMinFrame && m.pageHasActivity() {
 		activity = activityReserve
 	}
 
-	avail := frameWidth - leading - flags - activity - gap // trailing space after the last column
+	// Each column after the first costs a separator: " " + rule + " ".
+	seps := 0
+	if len(cols) > 1 {
+		seps = (len(cols) - 1) * 3
+	}
+
+	// avail is exactly the space the columns may occupy: the inner width less
+	// the marker column, the inter-column separators, and the trailing gutter
+	// (flags plus, where reserved, the activity preview). Deriving it this way
+	// — rather than subtracting loose constants — is what makes the row fill
+	// its width and the rule reach the rail.
+	gutter := flags
+	if activity > 0 {
+		gutter += activity
+	}
+	avail := frameWidth - leading - gutter - seps
 	if avail < 1 {
 		avail = 1
 	}
@@ -1289,19 +1632,20 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	}
 	cols = cols[:keep]
 
-	// Start every column at its natural width, capped.
+	// Start every column at its natural width, capped. The inter-column
+	// separators are accounted for separately (seps), so they are NOT added
+	// here — adding both double-counted them and left the row short.
 	out := make([]laidOutColumn, len(cols))
 	total := 0
 	textIdx := -1
 	for i, c := range cols {
 		w := naturalColumnWidth(c)
-		out[i] = laidOutColumn{column: c, width: w}
-		total += w + gap
+		out[i] = laidOutColumn{column: c, width: w, align: alignFor(c.Kind)}
+		total += w
 		if c.Kind == object.KindText {
 			textIdx = i
 		}
 	}
-	total -= gap // no trailing gap after the last column
 
 	// Too wide: shrink the text column first (it can spare width), then the
 	// widest remaining column, never below a per-column floor.
@@ -1338,10 +1682,16 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	}
 
 	// Room left over goes to the text column, so a wide terminal shows more
-	// prompt rather than a stretched status column.
-	if textIdx >= 0 {
+	// prompt rather than a stretched status column. When there is no text
+	// column the last column takes it, so the row always fills its width —
+	// an under-filled row leaves a dead gap before the right rail.
+	grow := textIdx
+	if grow < 0 {
+		grow = len(out) - 1
+	}
+	if grow >= 0 {
 		for total < avail {
-			out[textIdx].width++
+			out[grow].width++
 			total++
 		}
 	}
@@ -1373,6 +1723,18 @@ const (
 	activityMinFrame = 90
 )
 
+// pageHasActivity reports whether any row on the current page has a running
+// activity preview to draw. The column layout uses it to decide whether to
+// reserve room for that preview, so a quiet page gets the width back.
+func (m *tuiModel) pageHasActivity() bool {
+	for _, row := range m.list.Rows {
+		if m.badges[row.ID].activity != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // columnsMinTotal is the total width a column set needs at its floors,
 // including the inter-column gaps. The layout uses it to decide how many
 // columns fit before it starts truncating them.
@@ -1387,18 +1749,55 @@ func columnsMinTotal(cols []view.Column, gap int) int {
 	return total
 }
 
-// columnFloor is the narrowest a column may be rendered. The identity column
-// gets a wider floor than the rest, because a row whose id is unreadable is
-// not a row a reader can act on.
+// columnFloor is the narrowest a column may be rendered. The floor is the
+// column's own label width where that is wider than the generic minimum,
+// because a header truncated to `Priori…` tells the reader less than no column
+// at all — a table whose headings are cut in half is worse than one with fewer
+// headings. The identity column gets a wider floor still, since a row whose id
+// is unreadable is not a row a reader can act on.
 func columnFloor(c view.Column) int {
+	floor := minColumn
+	if w := displayWidth(c.Label); w > floor {
+		floor = w
+	}
 	switch {
 	case c.Kind == object.KindText:
-		return minTextColumn
+		if minTextColumn > floor {
+			floor = minTextColumn
+		}
 	case c.Kind == object.KindRef || c.Field == "id":
-		// An identity column: readable ids, not `t-pen…`.
-		return idColumnFloor
+		if idColumnFloor > floor {
+			floor = idColumnFloor
+		}
 	}
-	return minColumn
+	return floor
+}
+
+// dropEmptyColumns removes columns whose value is empty in every row of the
+// current page. The header label is not a reason to keep a column: a column
+// whose every cell is blank is furniture.
+func (m *tuiModel) dropEmptyColumns(cols []view.Column) []view.Column {
+	if len(m.list.Rows) == 0 {
+		return cols
+	}
+	out := make([]view.Column, 0, len(cols))
+	for _, c := range cols {
+		empty := true
+		for _, row := range m.list.Rows {
+			if strings.TrimSpace(cellValue(row, c.Field)) != "" {
+				empty = false
+				break
+			}
+		}
+		// The identity column is never dropped, and neither is a column the
+		// live overlay fills (status), because their emptiness here is an
+		// artefact of what the page carried rather than of the type.
+		if empty && c.Field != "id" && c.Field != "status" && c.Kind != object.KindText {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // naturalColumnWidth is a column's preferred width: a text column wants
@@ -1415,16 +1814,6 @@ func naturalColumnWidth(c view.Column) int {
 		w = maxColumn
 	}
 	return w
-}
-
-// renderColumnHeader lays out the column labels at the same widths as the
-// rows, so the header and the body cannot drift.
-func (m *tuiModel) renderColumnHeader(cols []laidOutColumn) string {
-	line := ""
-	for _, c := range cols {
-		line += pad(m.theme.Subtle(sanitizeLine(c.column.Label)), c.width) + " "
-	}
-	return line
 }
 
 // cellValue reads one resolved cell from a toolkit row.
@@ -1452,17 +1841,17 @@ func (m *tuiModel) bodyDetail(f frame) []string {
 	// The field-label column is sized to the frame so a long label cannot
 	// push the value off the edge.
 	labelW := 18
-	if f.width < 60 {
+	if f.innerWidth() < 60 {
 		labelW = 12
 	}
-	if labelW > f.width/2 {
+	if labelW > f.innerWidth()/2 {
 		labelW = f.width / 2
 	}
 	for _, s := range d.Sections {
 		out = append(out, " "+m.theme.Subtle(sanitizeLine(s.Label)))
 		for _, field := range s.Fields {
 			line := "   " + pad(sanitizeLine(field.Label), labelW) + " " +
-				truncate(sanitizeLine(field.Value), f.width-4-labelW-1, "…")
+				truncate(sanitizeLine(field.Value), f.innerWidth()-4-labelW-1, "…")
 			out = append(out, line)
 		}
 	}
@@ -1497,85 +1886,59 @@ func (m *tuiModel) bodyInput(f frame) []string {
 	// The cursor sits after the text; the line is truncated so a long input
 	// does not overflow the frame.
 	text := sanitizeLine(m.input)
-	room := f.width - displayWidth(prompt) - 1
+	room := f.innerWidth() - displayWidth(prompt) - 1
 	if room < 0 {
 		room = 0
 	}
 	return []string{"", prompt + truncate(text, room, "…") + m.theme.Marker("█")}
 }
 
-// bodyLive draws the chat window: the reconstructed turns, tail-following
-// unless the user has scrolled back, sized to the frame.
+// bodyLive draws the conversation through the shared chat component: the
+// component renders the turn blocks and owns the scroll position, and this
+// only supplies the header and the viewport size.
 func (m *tuiModel) bodyLive(f frame) []string {
-	head := " " + m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
-		m.theme.Subtle(" · live (esc returns)")
-	if m.liveScroll > 0 {
-		head += m.theme.Subtle(" · scrolled −" + itoa(m.liveScroll) + " lines")
-	}
+	// No header line here: the panel's top edge already names the conversation
+	// (`chat · <id>`), and repeating it inside the panel was the same defect
+	// the list had. The state that header carried — whether the view is
+	// following the tail, and whether the scrollback has been trimmed — is in
+	// the panel title's status suffix instead (see chatStatus).
+	//
+	// The viewport gets the whole body, so the conversation fills whatever the
+	// terminal gives it rather than losing a row to a title it already has.
+	m.chat.setSize(f.innerWidth(), f.bodyHeight())
 
-	lines := m.chatLines()
-	if m.liveScroll >= len(lines) {
-		m.liveScroll = len(lines) - 1
-	}
-	if m.liveScroll < 0 {
-		m.liveScroll = 0
-	}
-	// The window is the body height minus the header line, so the chat fills
-	// whatever the terminal gives it rather than a fixed 24 lines.
-	window := f.bodyHeight() - 1
-	if window < 1 {
-		window = 1
-	}
-	end := len(lines) - m.liveScroll
-	start := end - window
-	if start < 0 {
-		start = 0
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	out := []string{head}
-	for i := start; i < end; i++ {
-		out = append(out, " "+truncate(lines[i], f.width-1, "…"))
+	// The frame supplies the rail and the leading space, so the chat's lines
+	// are laid out to the full inner width without adding a margin of their
+	// own — an extra column here pushed the right rail off the edge.
+	out := make([]string, 0, f.bodyHeight())
+	for _, l := range m.chat.view(m.theme) {
+		out = append(out, truncate(l, f.innerWidth(), "…"))
 	}
 	return out
 }
 
-// chatLines flattens the reconstructed turns into display lines
-// (assistant content lines are indented; tool blocks offset).
-// Non-assistant lines are sanitized — the assistant content is the
-// legitimately multi-line context (NAVI-330/333 distinction).
-func (m *tuiModel) chatLines() []string {
-	lines := []string{}
-	for _, t := range m.turns {
-		switch t.role {
-		case TurnUser:
-			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, m.theme.User("▸ "+sanitizeLine(l)))
-			}
-		case TurnAssistant:
-			for _, l := range strings.Split(t.text, "\n") {
-				lines = append(lines, m.theme.Assistant("◂ "+l))
-			}
-		case TurnTool:
-			if t.tool != "" {
-				lines = append(lines, m.theme.Tool("  ⚙ "+sanitizeLine(t.tool)))
-			}
-			if t.toolIn != "" {
-				lines = append(lines, m.theme.Tool("    in: "+sanitizeLine(t.toolIn)))
-			}
-			if t.toolOut != "" {
-				lines = append(lines, m.theme.Tool("    out: "+sanitizeLine(t.toolOut)))
-			}
-		case TurnSystem:
-			lines = append(lines, m.theme.System("  · "+sanitizeLine(t.text)))
-		}
+// chatStatus is the state suffix the panel title shows while a conversation is
+// open: whether the view follows the tail, and whether the scrollback window
+// has dropped turns. It is the chat's replacement for the header line it used
+// to spend a body row on.
+func (m *tuiModel) chatStatus() string {
+	if m.mode != ModeLive {
+		return ""
 	}
-	if len(lines) == 0 {
-		lines = append(lines, " (no conversation yet — stream events land here)")
+	// "live" is load-bearing: a running thought's conversation is being
+	// appended to, while an opened completed one is a transcript read. The
+	// reader needs to know which they are looking at.
+	status := "live · following"
+	if m.chat.followSuspended() {
+		// The indicator is the promise that the view will not yank the reader
+		// to the bottom while they are reading history — and that it will
+		// resume once they return.
+		status = "live · paused (f to follow)"
 	}
-	return lines
+	if n := m.chat.trimNotice(); n != "" {
+		status += " " + n
+	}
+	return status
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

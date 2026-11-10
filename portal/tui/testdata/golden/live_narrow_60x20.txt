@@ -1,20 +1,20 @@
- navi · Thought (portal)  standard 60×20                    
-────────────────────────────────────────────────────────────
- chat · t-run · live (esc returns)                          
- ▸ summarise the release notes                              
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-                                                            
-────────────────────────────────────────────────────────────
-  q quit · j/k move · enter open · t type · n new · a attac…
+╱──┤ chat · t-run ├───────────────────┤ live · following ├─┐
+│                                                          │
+│   summarise the release notes                            │
+│                                                          │
+│ ├─ thinking ──────────────────────────────────────────── │
+│   the user wants the highlights, not every commit        │
+│                                                          │
+│ ├─ assistant ─────────────────────────────────────────── │
+│   Here are the highlights:                               │
+│   1. terminal sizing                                     │
+│   2. rune-correct columns                                │
+│                                                          │
+│ ├─ tool ──────────────────────────────────────────────── │
+│   ⚙ note_write · wrote summary  (enter to expand)        │
+│                                                          │
+│ ├─ turn_end ──────────────────────────────────────────── │
+│                                                          │
+│ steer › █                                                │
+│                                                          │
+└──────────────────────────────────────────────────────────╱

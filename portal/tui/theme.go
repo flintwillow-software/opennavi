@@ -34,6 +34,10 @@ type theme struct {
 	// each call site.
 	colored bool
 
+	// accent is the chrome colour: panel borders, the marker, the selected
+	// row. It is a lipgloss terminal colour so it can colour a border edge.
+	accent lipgloss.TerminalColor
+
 	title    lipgloss.Style
 	subtle   lipgloss.Style
 	marker   lipgloss.Style
@@ -86,6 +90,7 @@ func newThemeFor(colored bool) theme {
 
 	return theme{
 		colored:  true,
+		accent:   adapt(lipgloss.Color("#5A3FC0"), accent),
 		title:    lipgloss.NewStyle().Bold(true).Foreground(adapt(lipgloss.Color("#5A3FC0"), accent)),
 		subtle:   lipgloss.NewStyle().Foreground(adapt(lipgloss.Color("#8A8A8A"), darkSubtle)),
 		marker:   lipgloss.NewStyle().Foreground(adapt(lipgloss.Color("#5A3FC0"), accent)).Bold(true),
@@ -127,6 +132,110 @@ func (t theme) Bad(s string) string       { return t.apply(t.bad, s) }
 func (t theme) Warn(s string) string      { return t.apply(t.warn, s) }
 func (t theme) Confirm(s string) string   { return t.apply(t.confirm, s) }
 
+// ── panel chrome ───────────────────────────────────────────────────────
+
+// The panel vocabulary is opencode's spatial structure with augmented-ui's
+// visual language: the screen is divided into named panels that are visibly
+// delineated, and the delineation is a clipped-corner frame rather than a
+// plain rectangle.
+//
+// augmented-ui's signature is a CLIPPED corner — one or more corners cut away
+// with the edge running at an angle. In terminal runes the translation is a
+// diagonal glyph against straight edges, which is what borderClipped is. The
+// heavy top edge (borderBand) is the second augmented-ui idiom: a header band
+// that reads as a labelled module rather than a box.
+
+// borderClipped cuts the top-left and bottom-right corners, so the frame reads
+// as a notched module. Opposite-diagonal cuts are the augmented-ui signature.
+func borderClipped() lipgloss.Border {
+	return lipgloss.Border{
+		Top: "─", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "╱", TopRight: "┐", BottomLeft: "└", BottomRight: "╱",
+	}
+}
+
+// borderBand is a heavy top edge with a light body: a header band.
+func borderBand() lipgloss.Border {
+	return lipgloss.Border{
+		Top: "━", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "┏", TopRight: "┓", BottomLeft: "└", BottomRight: "┘",
+	}
+}
+
+// borderRail is opencode's rail: a single heavy vertical on the left, with a
+// notch at each end, and no other edges.
+func borderRail() lipgloss.Border {
+	return lipgloss.Border{Left: "┃", TopLeft: "╻", BottomLeft: "╹"}
+}
+
+// panelStyle is the border style panels use. It is one function so the whole
+// app's chrome changes in one place.
+func (t theme) panelStyle() lipgloss.Style {
+	if !t.colored {
+		// An uncoloured theme still draws the structure — the border is
+		// layout, not decoration — but without the accent.
+		return lipgloss.NewStyle().Border(borderClipped())
+	}
+	return lipgloss.NewStyle().
+		Border(borderClipped()).
+		BorderForeground(t.accent)
+}
+
+// panelTitle renders a title for a panel's top edge: a short label in the
+// accent colour, prefixed by a rule stub, so a panel announces what it holds
+// the way augmented-ui's labelled modules do.
+func (t theme) panelTitle(label string) string {
+	if label == "" {
+		return ""
+	}
+	stub := "─┤ "
+	close_ := " ├"
+	if !t.colored {
+		return stub + label + close_
+	}
+	return t.subtle.Render(stub) + t.title.Render(label) + t.subtle.Render(close_)
+}
+
+// Status colours an enum cell (a thought's state, a memory scope) so the eye
+// finds a row's state without reading every word. It takes the already-aligned
+// cell and the raw value, so the colour is chosen from the value while the
+// layout stays exactly what the grid computed — colouring must not change the
+// text's width or position.
+func (t theme) Status(value, aligned string, width int, a align) string {
+	if !t.colored {
+		return aligned
+	}
+	var style lipgloss.Style
+	switch value {
+	case "running", "started", "active":
+		style = t.good
+	case "failed", "error", "cancelled":
+		style = t.bad
+	case "paused", "preempted", "blocked":
+		style = t.warn
+	case "complete", "completed", "done":
+		style = t.subtle
+	default:
+		style = t.subtle
+	}
+	// Render only the trimmed value, then re-pad, so the escape codes never
+	// count toward the column width.
+	trimmed := strings.TrimSpace(aligned)
+	rendered := style.Render(trimmed)
+	space := width - displayWidth(trimmed)
+	if space <= 0 {
+		return rendered
+	}
+	switch a {
+	case alignRight:
+		return strings.Repeat(" ", space) + rendered
+	case alignCenter:
+		left := space / 2
+		return strings.Repeat(" ", left) + rendered + strings.Repeat(" ", space-left)
+	}
+	return rendered + strings.Repeat(" ", space)
+}
+
 // ── rune-correct text helpers ───────────────────────────────────────────
 
 // displayWidth is the terminal cell width of s, in columns rather than bytes,
@@ -145,6 +254,23 @@ func truncate(s string, width int, tail string) string {
 		return s
 	}
 	return ansi.Truncate(s, width, tail)
+}
+
+// truncateLeft cuts from the LEFT, keeping the tail, and marks the cut at the
+// front. It is the identity-column rule: a generated id's distinguishing
+// characters are at the end, so the tail is what the reader needs.
+func truncateLeft(s string, width int, marker string) string {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(s) <= width {
+		return s
+	}
+	mw := displayWidth(marker)
+	if width <= mw {
+		return truncate(s, width, "")
+	}
+	return marker + ansi.TruncateLeft(s, displayWidth(s)-(width-mw), "")
 }
 
 // pad right-pads s to exactly width display columns, truncating first when it
