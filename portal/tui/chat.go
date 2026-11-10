@@ -322,12 +322,83 @@ func (c *chat) renderToolTurn(t turn, th theme) []string {
 	}
 	lines := []string{"  " + th.Tool("⚙ "+name)}
 	if t.toolIn != "" {
-		lines = append(lines, labelledLines("    in: ", sanitizeLine(t.toolIn), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("    in: ", sanitizeLine(t.toolIn), th.Tool, c.width)...)
 	}
 	if t.toolOut != "" {
-		lines = append(lines, labelledLines("    out: ", sanitizeLine(t.toolOut), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("    out: ", sanitizeLine(t.toolOut), th.Tool, c.width)...)
 	}
 	return lines
+}
+
+// labelledWrapped lays text out with a prefix on the first line and a hanging
+// indent on the rest, WRAPPING at the width rather than truncating.
+//
+// A tool result is a block of machine output — a command's stdout, a file's
+// contents, an API error — and its tail is usually the part that matters, so
+// cutting it off at the edge would hide the answer. Turn text (a prompt, an
+// assistant reply) is truncated instead, because it is prose the reader can
+// re-read in full elsewhere.
+func labelledWrapped(prefix, text string, style func(string) string, width int) []string {
+	indent := strings.Repeat(" ", displayWidth(prefix))
+	room := width - displayWidth(prefix)
+	if room < 1 {
+		room = 1
+	}
+	var out []string
+	for i, l := range strings.Split(text, "\n") {
+		p := prefix
+		if i > 0 {
+			p = indent
+		}
+		for _, seg := range wrapRunes(l, room) {
+			out = append(out, style(p+seg))
+			p = indent
+		}
+	}
+	return out
+}
+
+// wrapRunes breaks a line into segments of at most width display columns,
+// preferring a break at a space so words stay whole. A single word longer
+// than the width is broken rather than dropped.
+func wrapRunes(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	if displayWidth(s) <= width {
+		return []string{s}
+	}
+	var out []string
+	var cur strings.Builder
+	curW := 0
+	lastSpace := -1
+	for _, r := range s {
+		rw := displayWidth(string(r))
+		if curW+rw > width {
+			// Break here, backing up to the last space if there is one.
+			line := cur.String()
+			if lastSpace > 0 {
+				out = append(out, strings.TrimRight(line[:lastSpace], " "))
+				cur.Reset()
+				cur.WriteString(line[lastSpace+1:])
+				curW = displayWidth(cur.String())
+			} else {
+				out = append(out, line)
+				cur.Reset()
+				curW = 0
+			}
+			lastSpace = -1
+		}
+		if r == ' ' {
+			lastSpace = cur.Len()
+		}
+		cur.WriteRune(r)
+		curW += rw
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // labelledLines renders text with a prefix on the first line and a hanging

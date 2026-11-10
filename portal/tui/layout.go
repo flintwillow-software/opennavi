@@ -90,6 +90,10 @@ type frame struct {
 	// hasHeader says whether the optional header row inside the panel is
 	// drawn. It carries only a warning, so it is usually absent.
 	hasHeader bool
+	// status is a short state suffix shown at the right of the title's rule,
+	// so transient state (a paused scrollback, a trimmed window) does not cost
+	// a body row the way a header line would.
+	status string
 }
 
 // maxInt is a local helper: the standard library's max is generic in newer
@@ -170,8 +174,22 @@ func (f frame) render(header string, body []string, footer string) string {
 	b := borderClipped()
 	rail := f.theme.Subtle
 
-	top := f.theme.panelTitle(f.title) + strings.Repeat(b.Top, maxInt(0, f.width-2-displayWidth(f.theme.panelTitle(f.title))))
-	top = b.TopLeft + top + b.TopRight
+	// The title is left-aligned on the top edge and the status is
+	// right-aligned, with the rule filling between them. The status is
+	// dropped before the title is, because the title says where you are and
+	// the status only says how the view is behaving.
+	title := f.theme.panelTitle(f.title)
+	status := ""
+	if f.status != "" {
+		status = f.theme.Subtle("┤ " + f.status + " ├")
+	}
+	fill := f.width - 2 - displayWidth(title) - displayWidth(status)
+	if fill < 0 {
+		// Not enough room for both: drop the status, then let the title clip.
+		status = ""
+		fill = f.width - 2 - displayWidth(title)
+	}
+	top := b.TopLeft + title + strings.Repeat(b.Top, maxInt(0, fill)) + status + b.TopRight
 
 	// Every interior line is railed on BOTH sides and padded to the width, so
 	// the panel closes as a frame rather than hanging off a left rail. The

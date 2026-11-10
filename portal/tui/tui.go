@@ -805,11 +805,16 @@ func (m *tuiModel) seedTurns(thoughtID string) []turn {
 func turnsOf(chat view.Chat) []turn {
 	out := make([]turn, 0, len(chat.Turns))
 	for _, t := range chat.Turns {
+		// A seeded tool turn starts collapsed, exactly as a live one does: a
+		// tool result is machine output that can be thousands of lines, so an
+		// opened transcript must not open by dumping all of it. The live path
+		// sets this in chatAgentEvent; the two must agree or the same
+		// conversation renders differently depending on when it is opened.
 		switch {
 		case t.Role == "tool" || (t.Tool != "" && t.Output != ""):
-			out = append(out, turn{role: TurnTool, tool: t.Tool, toolOut: t.Output})
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolOut: t.Output, collapsed: true})
 		case t.Tool != "" && t.Text == "":
-			out = append(out, turn{role: TurnTool, tool: t.Tool, toolIn: t.Input})
+			out = append(out, turn{role: TurnTool, tool: t.Tool, toolIn: t.Input, collapsed: true})
 		default:
 			role := TurnAssistant
 			switch t.Role {
@@ -1135,8 +1140,11 @@ func (m *tuiModel) render() string {
 	// The panel's top edge is labelled with where you are, the way a titled
 	// module announces its contents. It is the only place the location needs
 	// to be said: a separate header repeating the app's own name ("navi ·
-	// portal") is furniture, and it costs a body row on every screen.
+	// portal") is furniture, and it costs a body row on every screen. The
+	// chat's follow/trim state rides along in the same label rather than
+	// spending a body row of its own.
 	f.title = m.panelLabel()
+	f.status = m.chatStatus()
 
 	// The header line exists only to carry a warning. A healthy TUI has
 	// nothing to put here, so it gets no line at all — the frame then spends
@@ -1794,38 +1802,48 @@ func (m *tuiModel) bodyInput(f frame) []string {
 // component renders the turn blocks and owns the scroll position, and this
 // only supplies the header and the viewport size.
 func (m *tuiModel) bodyLive(f frame) []string {
-	head := m.theme.Title("chat") + " · " + sanitizeLine(m.liveID) +
-		m.theme.Subtle(" · live (esc returns)")
-	if m.chat.followSuspended() {
-		// The indicator is the promise that the view will not yank the reader
-		// to the bottom while they are reading history — and that it will
-		// resume once they return.
-		head += m.theme.Warn(" · paused (f to follow)")
-	} else {
-		head += m.theme.Subtle(" · following")
-	}
-	// The scrollback trim is reported here rather than in the content, which
-	// follows the tail and would scroll the notice out of sight.
-	if n := m.chat.trimNotice(); n != "" {
-		head += m.theme.Subtle(" " + n)
-	}
-
-	// The viewport gets the body minus the header, so the chat fills whatever
-	// the terminal gives it.
-	rows := f.bodyHeight() - 1
-	if rows < 1 {
-		rows = 1
-	}
-	m.chat.setSize(f.innerWidth(), rows)
+	// No header line here: the panel's top edge already names the conversation
+	// (`chat · <id>`), and repeating it inside the panel was the same defect
+	// the list had. The state that header carried — whether the view is
+	// following the tail, and whether the scrollback has been trimmed — is in
+	// the panel title's status suffix instead (see chatStatus).
+	//
+	// The viewport gets the whole body, so the conversation fills whatever the
+	// terminal gives it rather than losing a row to a title it already has.
+	m.chat.setSize(f.innerWidth(), f.bodyHeight())
 
 	// The frame supplies the rail and the leading space, so the chat's lines
 	// are laid out to the full inner width without adding a margin of their
 	// own — an extra column here pushed the right rail off the edge.
-	out := []string{head}
+	out := make([]string, 0, f.bodyHeight())
 	for _, l := range m.chat.view(m.theme) {
 		out = append(out, truncate(l, f.innerWidth(), "…"))
 	}
 	return out
+}
+
+// chatStatus is the state suffix the panel title shows while a conversation is
+// open: whether the view follows the tail, and whether the scrollback window
+// has dropped turns. It is the chat's replacement for the header line it used
+// to spend a body row on.
+func (m *tuiModel) chatStatus() string {
+	if m.mode != ModeLive {
+		return ""
+	}
+	// "live" is load-bearing: a running thought's conversation is being
+	// appended to, while an opened completed one is a transcript read. The
+	// reader needs to know which they are looking at.
+	status := "live · following"
+	if m.chat.followSuspended() {
+		// The indicator is the promise that the view will not yank the reader
+		// to the bottom while they are reading history — and that it will
+		// resume once they return.
+		status = "live · paused (f to follow)"
+	}
+	if n := m.chat.trimNotice(); n != "" {
+		status += " " + n
+	}
+	return status
 }
 
 // ── run entry ───────────────────────────────────────────────────────────

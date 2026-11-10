@@ -1,5 +1,4 @@
-╱─┤ chat · t-run ├─────────────────────────────────────────┐
-│ chat · t-run · live (esc returns) · following            │
+╱─┤ chat · t-run ├─────────────────────┤ live · following ├┐
 │ ▸ summarise the release notes                            │
 │                                                          │
 │   ~ thinking                                             │
@@ -12,6 +11,7 @@
 │   ⚙ note_write · wrote summary  (enter to expand)        │
 │                                                          │
 │   · turn_end                                             │
+│                                                          │
 │                                                          │
 │                                                          │
 │                                                          │
