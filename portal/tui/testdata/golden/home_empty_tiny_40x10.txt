@@ -1,10 +1,10 @@
-╱──┤ home · nothing running ├─┤ idle ├─┐
+╭──┤ home · nothing running ───────────…
 │                                      │
 │                                      │
 │  terminal too narrow — need at leas… │
 │                                      │
 │                                      │
-│                                      │
 │ new › █                              │
 │                                      │
-└──────────────────────────────────────╱
+╰──────────────────────────────────────╯
+                                        

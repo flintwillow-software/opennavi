@@ -331,3 +331,50 @@ Decision 3's **two-pane 66/33 split** is not delivered by this amendment or by
 NAVI-587. The single-pane home is; the split is tracked separately (NAVI-601),
 because it is a layout over the queue page (NAVI-592) and is the **wide-only**
 form factor of decision 6.
+
+## Amendment — the chrome is lipgloss's, not a private vocabulary
+
+**Recorded on implementation (NAVI-602).** The Context above describes the
+panel chrome as "opencode's spatial structure with augmented-ui's visual
+language", and decision 1 adopted the Charm stack so the TUI would stop
+hand-rolling presentation. The chrome was hand-rolled anyway: a private border
+vocabulary (`borderClipped`, the `╱ ┐ └` clipped-corner pastiche), a
+`frame.render` that drew every rail and rule by character arithmetic, and
+`pad`/`truncate`/`alignCell`/`displayWidth` helpers reimplementing
+`lipgloss.Width`, `Style.Width`, `Style.MaxWidth`, and `Style.Align`.
+
+**The chrome is now lipgloss's.** The panel is a `lipgloss.Style` with
+`RoundedBorder()` and `Padding`, sized with `Width`/`Height`, and the titled
+top edge is composited from styled blocks with `lipgloss.Width` measurement
+rather than from a private vocabulary of glyphs. The text helpers are the
+library's primitives. This **supersedes the augmented-ui chrome vocabulary**
+named in the Context; the *structure* decision 6 describes — a framed panel,
+three form factors, a 60-column floor — is unchanged.
+
+Two findings worth recording, because both are traps a later change would
+re-enter:
+
+- **`Style.Width` wraps overflow; it does not clip it.** Every single-row
+  caller (a table cell, the footer, a border edge) must truncate *before*
+  padding with `Width`, or the line silently becomes two rows and pushes the
+  frame's bottom border and footer out of the terminal. This is why `fit`
+  exists and why body lines are fitted before the panel style sees them.
+- **`Style.Width`/`Height` are the content box.** lipgloss draws the border
+  outside them and padding inside, so a caller with a terminal size subtracts
+  the border. `frame.render` is the one place that arithmetic lives.
+
+The frame's **exact-size contract** is unchanged and is the check on the whole
+migration: the output is still exactly `height` lines of exactly `width`
+display columns, asserted by `TestFrameIsExactlyTerminalSized` and the goldens
+at every form factor.
+
+**Not in scope, deliberately:** the list's column layout (`columnLayout`,
+`grid`) stays custom. `bubbles/table` takes static column widths, while these
+are resolved from the object surface at runtime with per-kind alignment,
+per-column floors, left-truncation for identity columns (NAVI-600), and
+low-value columns dropped on a narrow terminal — adopting it would regress
+decision 2, that a new object type needs no new screen.
+
+**Follow-up:** the keymap and the persistent input are still hand-rolled
+(`chatKeys`, `helpLine`, `menuLetter`, and a `string` with manual backspace).
+Moving them to `bubbles/key` + `bubbles/help` + `bubbles/textarea` is NAVI-593.
