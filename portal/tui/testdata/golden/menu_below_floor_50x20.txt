@@ -1,5 +1,6 @@
- home · t-run                    live · following 
+ 1 home · 2 queue · 3 status                      
                                                   
+ home · t-run                    live · following 
                                                   
                                                   
                                                   
@@ -17,4 +18,3 @@
                                                   
  terminal too narrow — need at least 60 columns, …
                                                   
- actions for t-run         actions: s pause p bump

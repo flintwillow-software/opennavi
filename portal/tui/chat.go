@@ -238,60 +238,17 @@ func (c *chat) blocks(th theme) [][]string {
 func (c *chat) lines(th theme) []string {
 	blocks := c.blocks(th)
 	var out []string
-	for i, b := range blocks {
-		if i > 0 {
-			// A blank line between turns is not enough once a turn wraps to
-			// several lines: the reader loses where one ends. Each turn is
-			// instead opened by a labelled band (see band), which marks its
-			// start unambiguously and names the role — information the glyph
-			// alone does not carry.
-			out = append(out, "")
-		}
+	for _, b := range blocks {
+		// No separator row between turns: each turn is a closed, labelled box,
+		// so its own edges mark the boundary and name the role. A blank line on
+		// top of that would spend a row per turn saying what the box already
+		// says.
 		out = append(out, b...)
 	}
 	if len(out) == 0 {
 		out = append(out, th.Subtle("  (no conversation yet — stream events land here)"))
 	}
 	return out
-}
-
-// band renders a turn's opening line: a role label, then a rule filling the
-// remaining width. It is the turn's boundary marker and its label in one row,
-// so four turns cost four rows rather than the eight a full box would.
-func (c *chat) band(th theme, role TurnRole) string {
-	label, style := roleBand(role, th)
-	if label == "" {
-		return ""
-	}
-	stub := "├─ "
-	close_ := " ─"
-	used := displayWidth(stub) + displayWidth(label) + displayWidth(close_)
-	// The band stops one column short of the viewport so it does not touch the
-	// panel's right rail — a band that meets the frame reads as a second
-	// border rather than as a divider inside one.
-	// The frame supplies the gutter on both sides, so the band fills exactly
-	// the inner width — reserving a column here would leave a gap before the
-	// rail.
-	fill := c.width - used
-	if fill < 0 {
-		fill = 0
-	}
-	return style(stub) + style(label) + style(close_+strings.Repeat("─", fill))
-}
-
-// systemBand is a turn's band with the system text set into it: a labelled
-// divider whose label is the event itself.
-func (c *chat) systemBand(th theme, text string) string {
-	stub := "├─ "
-	close_ := " ─"
-	used := displayWidth(stub) + displayWidth(text) + displayWidth(close_)
-	fill := c.width - used
-	if fill < 0 {
-		// Too long for the band: fall back to the text on its own line under a
-		// plain band, so nothing is silently dropped.
-		return c.band(th, TurnSystem) + " " + th.System(truncate(text, c.width-4, "…"))
-	}
-	return th.System(stub) + th.System(text) + th.System(close_+strings.Repeat("─", fill))
 }
 
 // roleBand is a role's label and the style it is drawn in. The label is what
@@ -336,7 +293,7 @@ func (c *chat) view(th theme) []string {
 // intact.
 func (c *chat) renderTurn(t turn, th theme) []string {
 	w := c.width
-	band := c.band(th, t.role)
+	label, labelStyle := roleBand(t.role, th)
 
 	// A turn's text is trimmed of leading and trailing blank lines before it
 	// is laid out. Model output routinely ends with newlines (an assistant
@@ -345,12 +302,20 @@ func (c *chat) renderTurn(t turn, th theme) []string {
 	// is why a gap appeared after some turns and not others.
 	text := trimBlankLines(t.text)
 
+	// The body is the turn's content laid out to the box's INNER width, then
+	// handed to box() which draws the frame around it. A turn and the editor
+	// are the same kind of object (see box), so they share the frame.
+	inner := boxInner(w)
+	body := func(prefix, text string, style func(string) string) []string {
+		return labelledLines(prefix, text, style, inner)
+	}
+
 	switch t.role {
 	case TurnUser:
-		return append([]string{band}, labelledLines("  ", sanitizeLine(text), th.User, w)...)
+		return box(label, labelStyle, nil, body("", sanitizeLine(text), th.User), w)
 	case TurnAssistant:
 		// Assistant content wraps: split on newlines, no sanitization.
-		return append([]string{band}, labelledLines("  ", text, th.Assistant, w)...)
+		return box(label, labelStyle, nil, body("", text, th.Assistant), w)
 	case TurnThinking:
 		// Reasoning: dimmed and collapsible. Renders nothing when there is no
 		// reasoning content, which is the state until NAVI-590 lands the
@@ -359,48 +324,49 @@ func (c *chat) renderTurn(t turn, th theme) []string {
 			return nil
 		}
 		if t.collapsed {
-			return []string{band + th.Subtle("  (enter to expand)")}
+			return box(label, labelStyle, nil, []string{th.Subtle("(ctrl+o to expand)")}, w)
 		}
-		return append([]string{band}, labelledWrapped("  ", sanitizeLine(text), th.Subtle, w)...)
+		return box(label, labelStyle, nil, labelledWrapped("", sanitizeLine(text), th.Subtle, inner), w)
 	case TurnTool:
-		return c.renderToolTurn(t, th, band)
+		return c.renderToolTurn(t, th, label, labelStyle)
 	case TurnSystem:
-		// A system line is a short lifecycle note (`turn_end`), so it goes ON
-		// the band rather than under it — a band plus an indented line wastes a
-		// row per event for four words.
-		return []string{c.systemBand(th, sanitizeLine(t.text))}
+		// A system line is a short lifecycle note (`turn_end`). It is boxed
+		// like every other turn, but with the note as the label so it reads as
+		// a marker rather than as content with an empty body.
+		return box(sanitizeLine(t.text), th.System, nil, nil, w)
 	}
-	return []string{c.systemBand(th, sanitizeLine(t.text))}
+	return box(sanitizeLine(t.text), th.System, nil, nil, w)
 }
 
 // renderToolTurn renders a tool call compactly by default and in full when
 // expanded. The compact form is one line: the tool name plus a short result
 // marker, so a run with twenty tool calls is readable rather than a wall.
-func (c *chat) renderToolTurn(t turn, th theme, band string) []string {
+func (c *chat) renderToolTurn(t turn, th theme, label string, labelStyle func(string) string) []string {
 	name := sanitizeLine(t.tool)
 	if name == "" {
 		name = "tool"
 	}
+	inner := boxInner(c.width)
 	if t.collapsed {
-		// The band already says `tool`, so the summary carries the call
-		// itself: what was run, and a preview of what came back.
-		summary := "  " + th.Tool("⚙ "+name)
+		// The box is labelled `tool`, so the body carries the call itself:
+		// what was run, and a preview of what came back.
+		summary := th.Tool("⚙ " + name)
 		if t.toolOut != "" {
 			summary += th.Subtle(" · " + truncate(firstLine(sanitizeLine(t.toolOut)), 60, "…"))
 		} else if t.toolIn != "" {
 			summary += th.Subtle(" · " + truncate(firstLine(sanitizeLine(t.toolIn)), 60, "…"))
 		}
-		summary += th.Subtle("  (enter to expand)")
-		return []string{band, summary}
+		summary += th.Subtle("  (ctrl+o to expand)")
+		return box(label, labelStyle, nil, []string{summary}, c.width)
 	}
-	lines := []string{band, "  " + th.Tool("⚙ "+name)}
+	lines := []string{th.Tool("⚙ " + name)}
 	if t.toolIn != "" {
-		lines = append(lines, labelledWrapped("  in: ", sanitizeLine(t.toolIn), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("in: ", sanitizeLine(t.toolIn), th.Tool, inner)...)
 	}
 	if t.toolOut != "" {
-		lines = append(lines, labelledWrapped("  out: ", sanitizeLine(t.toolOut), th.Tool, c.width)...)
+		lines = append(lines, labelledWrapped("out: ", sanitizeLine(t.toolOut), th.Tool, inner)...)
 	}
-	return lines
+	return box(label, labelStyle, nil, lines, c.width)
 }
 
 // trimBlankLines removes leading and trailing blank lines from a turn's text,

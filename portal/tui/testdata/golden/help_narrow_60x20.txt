@@ -1,3 +1,5 @@
+ 1 home · 2 queue · 3 status                                
+                                                            
  home · nothing running                                idle 
                                                             
                                                             
@@ -10,11 +12,9 @@
                   p/P priority   tab       blur             
                   P   priority                              
                                                             
+ any key closes this                                        
                                                             
-╭──────────────────────────────────────────────────────────╮
-│ new ›                                                    │
-│                                                          │
-│                                                          │
-╰──────────────────────────────────────────────────────────╯
                                                             
-                              s pause · r resume · c cancel…
+                                                            
+                                                            
+                                                            

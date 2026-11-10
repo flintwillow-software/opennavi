@@ -1,4 +1,6 @@
- Thoughts                                                                       
+ 1 home · 2 queue · 3 status                                                    
+                                                                                
+ queue                                                                          
                                                                                 
   Id         │ Prompt             │   Status   │   Priority │ Updated at        
 ─────────────┼────────────────────┼────────────┼────────────┼───────────────    
@@ -20,5 +22,3 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                        j/k move · enter open · n new · a attac…

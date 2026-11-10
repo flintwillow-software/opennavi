@@ -218,6 +218,43 @@ func notifyChan(feed portal.Subscription) <-chan struct{} {
 // ModeKind selects the rendered screen.
 type ModeKind string
 
+// Page is a top-level destination in the tab bar (ADR 0038 decision 4). It is
+// coarser than ModeKind: a page is where you ARE, a mode is what the page is
+// showing (a list, a pushed detail, a conversation).
+type Page string
+
+const (
+	// PageHome is the running thought beside the queue. It is the default.
+	PageHome Page = "home"
+	// PageQueue is the queue as its own page (NAVI-592).
+	PageQueue Page = "queue"
+	// PageStatus is the navi's health (NAVI-598).
+	PageStatus Page = "status"
+)
+
+// pages is the tab bar's inventory, in order. It is the ONE list: the tab bar
+// renders from it and the number keys select from it, so a page cannot be
+// reachable by a key the bar does not show.
+var pages = []struct {
+	key   string
+	page  Page
+	label string
+}{
+	{"1", PageHome, "home"},
+	{"2", PageQueue, "queue"},
+	{"3", PageStatus, "status"},
+}
+
+// pageFor returns the page a number key selects.
+func pageFor(key string) (Page, bool) {
+	for _, p := range pages {
+		if p.key == key {
+			return p.page, true
+		}
+	}
+	return "", false
+}
+
 const (
 	// ModeHome is the default screen (ADR 0038 decision 3): the running
 	// thought as a conversation, with a persistent steer input focused on
@@ -227,6 +264,8 @@ const (
 	ModeDetail ModeKind = "detail"
 	ModeLive   ModeKind = "live"
 	ModeInput  ModeKind = "input"
+	// ModeStatus is the navi health page (NAVI-598).
+	ModeStatus ModeKind = "status"
 )
 
 // badge is the live overlay for one object: state the descriptor carries but
@@ -348,6 +387,10 @@ type tuiModel struct {
 	height int
 	// theme is the single source of colour and text style (theme.go).
 	theme theme
+	// page is the TAB the model is on (ADR 0038 decision 4). Modes are the
+	// finer-grained screen state WITHIN a page: the queue page's list and a
+	// pushed detail both live on different pages.
+	page Page
 	// keys is the declared keymap: what a key does and what the help
 	// advertises are the same data (NAVI-593, ADR 0038 decision 7).
 	keys keyMap
@@ -374,6 +417,7 @@ func NewModel(tr Transport) *tuiModel {
 		badges:      make(map[string]badge),
 		transcripts: make(map[string][]turn),
 		mode:        ModeHome,
+		page:        PageHome,
 		theme:       newTheme(),
 		keys:        defaultKeyMap(),
 		help:        newHelp(),
@@ -1104,8 +1148,8 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 	switch {
 	case matchesAny(k, m.keys.Quit):
 		return true
-	case matchesAny(k, m.keys.Home):
-		m.goHome()
+	case m.pageKey(k) != "":
+		m.gotoPage(m.pageKey(k))
 	case matchesAny(k, m.keys.Debug):
 		// Toggle the diagnostic header (form factor, terminal size).
 		m.debug = !m.debug
@@ -1132,12 +1176,16 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.refreshList()
 			m.status = "type: " + m.typeLabel(m.typeIdx)
 		}
-	case matchesAny(k, m.keys.New) && m.mode == ModeList:
+	case matchesAny(k, m.keys.New):
+		// `n` opens the enqueue input from ANY page: home is watch-only
+		// (NAVI-604), so this is how a new thought is started without a
+		// dedicated editor region there.
 		m.enqueue = true
 		m.inputID = ""
 		m.stage = 0
 		m.input = ""
 		m.mode = ModeInput
+		m.inputFocused = true
 	case matchesAny(k, m.keys.Attach) && m.mode == ModeList && len(m.list.Rows) > 0:
 		m.enqueue = false
 		m.inputID = m.list.Rows[m.sel].ID
@@ -1221,11 +1269,24 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 		m.inputFocused = !m.inputFocused
 		return false
 	}
+	// `n` starts a thought. It is a LETTER, so it must not fire while the
+	// steer input owns the keyboard — typing "focus on the tests" would
+	// otherwise switch screens mid-word. On home's empty state there is no
+	// editor, so nothing owns the keyboard and `n` works there.
+	if matchesAny(k, m.keys.New) && !m.inputOwnsKeyboard() {
+		m.enqueue = true
+		m.inputID = ""
+		m.stage = 0
+		m.input = ""
+		m.mode = ModeInput
+		m.inputFocused = true
+		return false
+	}
 	// `1` is the tab bar's home key (ADR 0038 decision 4). It is not a
 	// printable rune, so it works with the input focused, and it is a no-op on
 	// home itself.
-	if matchesAny(k, m.keys.Home) {
-		m.goHome()
+	if p := m.pageKey(k); p != "" {
+		m.gotoPage(p)
 		return false
 	}
 
@@ -1244,7 +1305,12 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 			m.leaveConversation()
 			return false
 		case matchesAny(k, m.keys.Send):
-			m.inputFocused = true
+			// Blurred, `enter` OPENS the thought's own page — the same gesture
+			// as `enter` on a queue row opening its detail. Focused, it sends
+			// (below), so the two meanings never collide.
+			if id, ok := m.focused(); ok {
+				m.open(id)
+			}
 			return false
 		}
 		if m.isActionLetter(k) {
@@ -1307,7 +1373,33 @@ func (m *tuiModel) inputOwnsKeyboard() bool {
 		return true
 	}
 	if m.mode == ModeHome || m.mode == ModeLive {
-		return m.inputFocused
+		// The editor is only PRESENT where there is something to steer. Home
+		// with nothing running shows no box, so nothing owns the keyboard
+		// there and `n` (and the action letters) work without blurring first.
+		return m.inputFocused && m.editorPresent()
+	}
+	return false
+}
+
+// steerable reports whether a thought can receive a steer right now. It mirrors
+// the queue's own rule (only a RUNNING thought has a steering bridge), so the
+// editor box is present exactly when submitting would do something.
+func (m *tuiModel) steerable(id string) bool {
+	return id != "" && m.statusOf(id) == "running"
+}
+
+// editorPresent reports whether the current screen actually draws an editor
+// box. It is the predicate inputOwnsKeyboard consults, so "an input has focus"
+// and "there is an input" cannot disagree — a focused-but-absent editor would
+// swallow every printable key on a screen with nowhere to type.
+func (m *tuiModel) editorPresent() bool {
+	switch m.mode {
+	case ModeInput:
+		return true
+	case ModeHome:
+		return m.steerable(m.homeID)
+	case ModeLive:
+		return m.liveID != ""
 	}
 	return false
 }
@@ -1325,15 +1417,33 @@ func (m *tuiModel) leaveConversation() {
 // a place you can only visit once. The tab bar of decision 4 is not built yet
 // (NAVI-593), so this is the binding until it is; `1` is the tab bar's own
 // home key, so it survives that change.
-func (m *tuiModel) goHome() {
-	m.mode = ModeHome
+func (m *tuiModel) goHome() { m.gotoPage(PageHome) }
+
+// gotoPage switches tabs (ADR 0038 decision 4). Each page sets the mode its
+// content starts in, so a page is a destination rather than a mode the caller
+// has to know the shape of. It is the ONE place a page transition happens, so
+// the tab bar, the number keys, and any future palette cannot disagree about
+// what a page is.
+func (m *tuiModel) gotoPage(p Page) {
+	m.page = p
 	m.detail = nil
 	m.menuOpen = false
 	m.actionMenu = nil
+	m.helpOpen = false
 	m.inputFocused = true
-	// Re-derive the tracked thought: the queue may have moved while the list
-	// was open.
-	m.trackRunning("")
+	switch p {
+	case PageQueue:
+		m.mode = ModeList
+		m.inputFocused = false
+	case PageStatus:
+		m.mode = ModeStatus
+		m.inputFocused = false
+	default:
+		m.mode = ModeHome
+		// Re-derive the tracked thought: the queue may have moved while we were
+		// elsewhere.
+		m.trackRunning("")
+	}
 }
 
 // submitConversation handles enter on a conversation screen. The input is
@@ -1577,17 +1687,15 @@ func parseMinutes(s string) int {
 // stays on home, where the stream then delivers the new thought and the screen
 // becomes the steer page.
 func (m *tuiModel) enqueueStep() {
-	fromHome := m.mode == ModeHome
+	// The flow runs in ModeInput, so the page it STARTED from is remembered
+	// rather than inferred from the mode — otherwise an enqueue begun on home
+	// would always land on the queue list.
+	from := m.page
 	finish := func() {
 		m.enqueue = false
 		m.stage = 0
 		m.input = ""
-		if fromHome {
-			m.mode = ModeHome
-			m.inputFocused = true
-			return
-		}
-		m.mode = ModeList
+		m.gotoPage(from)
 	}
 	switch m.stage {
 	case 0:
@@ -1753,6 +1861,7 @@ func (m *tuiModel) render() string {
 	// The HEADER region: where you are on the left, the secondary facts on the
 	// right. The facts are the thought's lifecycle and the view's own state
 	// (following, trimmed) — the things worth a glance that are not identity.
+	f.tabs = m.tabsBar()
 	f.title = m.panelLabel()
 	f.subtitle = m.headerSubtitle()
 	f.subtitleStyle = m.conversationStatusStyle()
@@ -1762,17 +1871,30 @@ func (m *tuiModel) render() string {
 	// is CONTEXTUAL (ADR 0038 decision 3) — a steer box when a thought is
 	// running, an enqueue box when none is — so there is never a steer field
 	// with no target.
-	if m.mode == ModeLive || m.mode == ModeHome {
-		if m.mode == ModeHome && m.homeID == "" {
-			f.inputPrompt = m.enqueuePrompt()
-		} else {
-			f.inputPrompt = "steer ›"
+	// The editor region is on the screens that STEER: home (the thought it is
+	// tracking, which is the whole point of watching it) and a thought's own
+	// page. The label is the ACTION, not a prompt glyph, in the same
+	// vocabulary a turn uses.
+	if m.mode == ModeHome || m.mode == ModeLive || m.mode == ModeInput {
+		switch {
+		case m.mode == ModeInput:
+			f.inputPrompt = m.enqueueLabel()
+		case m.mode == ModeHome && m.homeID == "":
+			// Nothing running: home's empty state has no steer target, so the
+			// box would be a field with nothing to send to.
+			f.inputPrompt = ""
+		case m.mode == ModeHome && !m.steerable(m.homeID):
+			// Home is still SHOWING a finished thought (its transcript stays
+			// on screen, NAVI-587), but a finished thought cannot be steered —
+			// so the box would be a field whose only outcome is a refusal.
+			f.inputPrompt = ""
+		default:
+			f.inputPrompt = "steer"
 		}
+		f.inputFocused = m.inputFocused
 		if m.inputFocused {
 			f.input = m.input + m.theme.Marker("█")
 		} else {
-			// Blurred: the cursor is gone, so a reader is never guessing which
-			// widget owns the keyboard.
 			f.input = m.input
 		}
 	}
@@ -1818,6 +1940,40 @@ func (m *tuiModel) render() string {
 	return f.render("", m.bodyLines(f), "")
 }
 
+// tabsBar renders the tab bar: the page inventory with the active page marked,
+// so where you can GO is always on screen (ADR 0038 decision 4). It reads the
+// same `pages` list the number keys select from, so a page cannot be reachable
+// by a key the bar does not show.
+func (m *tuiModel) tabsBar() string {
+	var b strings.Builder
+	b.WriteString(" ")
+	for i, p := range pages {
+		if i > 0 {
+			b.WriteString(m.theme.Subtle(" · "))
+		}
+		label := p.key + " " + p.label
+		if p.page == m.page {
+			b.WriteString(m.theme.Marker(label))
+		} else {
+			b.WriteString(m.theme.Subtle(label))
+		}
+	}
+	return b.String()
+}
+
+// pageKey returns the page a number key selects, or "" when the key is not a
+// page key. It reads the same `pages` list the tab bar renders, so a page is
+// never reachable by a key the bar does not show.
+func (m *tuiModel) pageKey(k tea.KeyMsg) Page {
+	if len(k.Runes) != 1 {
+		return ""
+	}
+	if p, ok := pageFor(string(k.Runes)); ok {
+		return p
+	}
+	return ""
+}
+
 // headerSubtitle is the HEADER region's right-hand text: the secondary facts
 // about what you are looking at. On a conversation that is the thought's
 // lifecycle and the view's own state; on the queue it is the running
@@ -1851,6 +2007,11 @@ func (m *tuiModel) panelLabel() string {
 		return "detail"
 	case ModeInput:
 		return "input"
+	case ModeStatus:
+		return "status"
+	}
+	if m.page == PageQueue {
+		return "queue"
 	}
 	return m.typeLabel(m.typeIdx)
 }
@@ -1922,8 +2083,64 @@ func (m *tuiModel) bodyLines(f frame) []string {
 		return m.bodyLive(f)
 	case ModeInput:
 		return m.bodyInput(f)
+	case ModeStatus:
+		return m.bodyStatus(f)
 	}
 	return m.bodyList(f)
+}
+
+// bodyStatus draws the navi health page (NAVI-598, ADR 0038 decision 4). It is
+// the ONE page with a bespoke element: queue depth, concurrency, and stream
+// health are model state, not descriptors, so they cannot come from the object
+// surface the way every other screen's content does. Everything it shows is
+// state the model already tracks — nothing here is a private data path.
+func (m *tuiModel) bodyStatus(f frame) []string {
+	out := []string{"", " " + m.theme.Title("navi"), ""}
+
+	running, pending, paused, terminal := 0, 0, 0, 0
+	for _, row := range m.list.Rows {
+		switch m.statusOf(row.ID) {
+		case "running":
+			running++
+		case "pending":
+			pending++
+		case "paused":
+			paused++
+		default:
+			terminal++
+		}
+	}
+	row := func(label, value string) string {
+		return "   " + fit(label, 14) + " " + value
+	}
+	out = append(out,
+		row("thoughts", itoa(len(m.list.Rows))+" total"),
+		row("running", itoa(running)),
+		row("queued", itoa(pending)),
+		row("paused", itoa(paused)),
+		row("finished", itoa(terminal)),
+		"",
+	)
+	// The stream's own health: whether the portal has answered with its
+	// descriptors, and whether the feed has dropped events. Both are the
+	// things a reader consults a status page to find out.
+	types := "ok"
+	if len(m.types) == 0 {
+		types = "waiting for the navi's object types…"
+		if m.typesErr != nil {
+			types = "unreachable: " + m.typesErr.Error()
+		}
+	}
+	out = append(out, row("portal", types))
+	stream := m.theme.Good("ok")
+	if m.lost {
+		stream = m.theme.Bad("dropped events — this view may be incomplete")
+	}
+	out = append(out, row("stream", stream))
+	// The in-session limitation, said out loud rather than left for the reader
+	// to discover (NAVI-353 is the durable-restore work).
+	out = append(out, row("transcript", m.theme.Subtle("in-session only (durable restore is NAVI-353)")))
+	return out
 }
 
 // bodyHelp is the full-screen help overlay (`?`): every binding live in the
@@ -2116,42 +2333,93 @@ func (m *tuiModel) queuePane(w, rows int) []string {
 // enqueue inline rather than dead-ending, and it names the queue as the way to
 // reach what has already run.
 func (m *tuiModel) bodyHomeEmpty(f frame) []string {
+	// Two empty states, and the difference matters:
+	//
+	//   - work is QUEUED (pending or paused) — something is about to run, so
+	//     home stays quiet and says what is waiting;
+	//   - the queue is DONE (nothing running, nothing waiting) — the navi is
+	//     idle, and the screen should say so and name the way out.
+	//
+	// Collapsing the two would either nag a reader who is waiting for a
+	// queued thought, or leave an idle navi looking like a stalled one.
+	if m.queuedWork() {
+		return m.bodyHomeWaiting()
+	}
+	return m.bodyHomeSplash(f)
+}
+
+// queuedWork reports whether anything is waiting to run: pending (about to be
+// claimed) or paused (resumable). A terminal thought is not work.
+func (m *tuiModel) queuedWork() bool {
+	for _, row := range m.list.Rows {
+		switch m.statusOf(row.ID) {
+		case "pending", "paused":
+			return true
+		}
+	}
+	return false
+}
+
+// bodyHomeWaiting is home with work queued: something is about to run, so the
+// screen stays quiet and says what is waiting.
+func (m *tuiModel) bodyHomeWaiting() []string {
 	out := []string{
 		"",
-		" " + m.theme.Title("nothing is running"),
+		" " + m.theme.Title("waiting for work to start"),
 		"",
-		" " + m.theme.Subtle("type a prompt below and press enter to enqueue a thought"),
+		" " + m.theme.Subtle("a thought is queued and will start shortly"),
 	}
 	if m.stage > 0 {
 		// Mid-staging: say which field the input is asking for, so the
 		// multi-step flow is legible rather than a sequence of bare prompts.
 		out = append(out, "", " "+m.theme.Subtle(m.stageHint()))
 	}
-	// A short recap of the queue, so the empty state is informative rather
-	// than blank: what ran, and how much of it there is. It is deliberately
-	// not a table — the queue is its own page (NAVI-592) and home must not
-	// grow a second, worse one.
-	if n := len(m.list.Rows); n > 0 {
-		// The hint names the real gesture: `esc` blurs the input (the reader is
-		// typing here), and a second `esc` leaves for the queue. Saying "esc for
-		// the queue" would advertise a key that does something else first.
-		out = append(out, "",
-			" "+m.theme.Subtle(itoa(n)+" thought"+plural(n)+" in the queue")+
-				m.theme.Subtle(" — esc twice for the queue"))
+	return out
+}
+
+// bodyHomeSplash is home with NOTHING left to do: no running thought, nothing
+// queued. It is a splash rather than a quiet empty state because an idle navi
+// and a stalled one look identical otherwise — the screen has to say which it
+// is and name the hotkey that starts work. It names the KEY, not the concept,
+// because a reader who has never used the TUI needs to know what to press.
+func (m *tuiModel) bodyHomeSplash(f frame) []string {
+	done := 0
+	for _, row := range m.list.Rows {
+		if s := m.statusOf(row.ID); s == "complete" || s == "failed" || s == "cancelled" {
+			done++
+		}
+	}
+	out := []string{
+		"",
+		" " + m.theme.Title("idle"),
+		"",
+		" " + m.theme.Subtle("no thought is running and nothing is queued."),
+		"",
+	}
+	// The hotkey, set apart, because it is the one thing the reader needs.
+	out = append(out,
+		" "+m.theme.Subtle("press ")+m.theme.Marker("n")+m.theme.Subtle(" to queue a new thought"),
+		"",
+	)
+	if done > 0 {
+		out = append(out,
+			" "+m.theme.Subtle(itoa(done)+" thought"+plural(done)+" finished")+
+				m.theme.Subtle(" — press 2 for the queue"),
+		)
 	}
 	return out
 }
 
 // enqueuePrompt labels the contextual input line for home's empty state, per
 // stage, so the persistent field says what submitting will do.
-func (m *tuiModel) enqueuePrompt() string {
+func (m *tuiModel) enqueueLabel() string {
 	switch m.stage {
 	case 1:
-		return "priority ›"
+		return "priority"
 	case 2:
-		return "defer ›"
+		return "defer"
 	}
-	return "new ›"
+	return "new thought"
 }
 
 // stageHint describes the current enqueue stage for the empty state.
@@ -2757,25 +3025,21 @@ func (m *tuiModel) bodyDetail(f frame) []string {
 
 // bodyInput draws the enqueue / attach input stage.
 func (m *tuiModel) bodyInput(f frame) []string {
-	prompt := ""
+	// The editor BOX carries the prompt (`╭─ new thought ─╮`) and the text, so
+	// the body only explains the stage. Repeating the prompt here would say the
+	// same thing twice on one screen.
+	hint := "enter to continue"
 	switch {
 	case m.inputID != "":
-		prompt = " attach to " + sanitizeLine(m.inputID) + " > "
+		hint = "steering " + sanitizeLine(m.inputID) + " — enter to send"
 	case m.stage == 1:
-		prompt = " priority 1-10 (default 4) > "
+		hint = "priority 1-10 (enter for the default 4)"
 	case m.stage == 2:
-		prompt = " defer minutes (0 = now) > "
+		hint = "defer minutes (enter for now)"
 	default:
-		prompt = " new thought prompt > "
+		hint = "a prompt for a new thought — enter to continue"
 	}
-	// The cursor sits after the text; the line is truncated so a long input
-	// does not overflow the frame.
-	text := sanitizeLine(m.input)
-	room := f.innerWidth() - displayWidth(prompt) - 1
-	if room < 0 {
-		room = 0
-	}
-	return []string{"", prompt + truncate(text, room, "…") + m.theme.Marker("█")}
+	return []string{"", " " + m.theme.Subtle(hint)}
 }
 
 // bodyLive draws the conversation through the shared chat component: the

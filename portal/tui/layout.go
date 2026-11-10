@@ -29,6 +29,8 @@ const (
 	// frameHeaderRows is the header region: one row on a roomy terminal, and
 	// it is dropped entirely on a short one (see headerRows).
 	frameHeaderRows = 1
+	// frameTabsRows is the tab bar: one row naming the pages.
+	frameTabsRows = 1
 	// frameStatusRows is the status/help bar. It is always present: a screen
 	// with no help and no status still gets a blank bar, so the layout does
 	// not jump by a row as messages come and go.
@@ -103,6 +105,11 @@ type frame struct {
 	height int
 	theme  theme
 
+	// tabs is the TAB BAR's content: the page inventory (`1 home · 2 queue ·
+	// 3 status`), with the active page marked by the screen. It is its own
+	// region above the header, so where you can GO is always visible (ADR
+	// 0038 decision 4).
+	tabs string
 	// title is the HEADER region's left label: what this screen is showing
 	// (`home · <id>`, `queue`, `status`). It is a real region now, not a label
 	// on a border.
@@ -122,9 +129,13 @@ type frame struct {
 	// with inputPrompt empty means the screen takes no typing and the editor
 	// region is absent entirely.
 	input string
-	// inputPrompt labels the editor region (`steer ›`, `new ›`), so the
-	// reader knows what submitting will do.
+	// inputPrompt LABELS the editor box (`steer`, `new thought`, `priority`).
+	// It is the action the input performs, set into the box's top edge in the
+	// same vocabulary a conversation turn uses.
 	inputPrompt string
+	// inputFocused says whether the editor owns the keyboard, so it draws the
+	// cursor and the box is styled as active.
+	inputFocused bool
 
 	// notice is a full-width attention line drawn above the status bar (a
 	// dropped stream, an unreachable portal). It is a region of its own so a
@@ -227,6 +238,9 @@ func (f frame) render(header string, body []string, footer string) string {
 	// be computed in different places and drifted, which left the status bar
 	// floating above the bottom or clipped off it.
 	var regions [][]string
+	if r.tabs > 0 {
+		regions = append(regions, []string{fit(f.tabs, f.width)})
+	}
 	if r.header > 0 {
 		regions = append(regions, []string{f.headerRegion()})
 	}
@@ -280,6 +294,7 @@ func (f frame) render(header string, body []string, footer string) string {
 // the regions are sized, so render's output cannot drift from what bodyHeight
 // promises a screen: bodyHeight returns regionRows().main.
 type regionHeights struct {
+	tabs   int
 	header int
 	main   int
 	editor int
@@ -290,6 +305,9 @@ type regionHeights struct {
 func (f frame) regionRows() regionHeights {
 	var h regionHeights
 	h.status = frameStatusRows
+	if f.tabs != "" {
+		h.tabs = frameTabsRows
+	}
 	if f.notice != "" {
 		h.notice = 1
 	}
@@ -322,7 +340,7 @@ func (f frame) regionRows() regionHeights {
 	if regions > 1 {
 		gaps = (regions - 1) * frameGutter
 	}
-	used := h.header + h.editor + h.notice + h.status + gaps
+	used := h.tabs + h.header + h.editor + h.notice + h.status + gaps
 	h.main = f.height - used
 	// Too short: shed chrome in the order that loses the least. The editor is
 	// reduced to its minimum box, then dropped; the header is dropped; the
@@ -385,23 +403,25 @@ func (f frame) editorRegion(rows int) []string {
 	if rows < frameEditorMinRows {
 		rows = frameEditorMinRows
 	}
-	inner := rows - 2 // the box's own top and bottom edges
-	content := f.inputPrompt + " " + f.input
-	// The content is fitted to the box's inner width so a long line does not
-	// wrap the box open (Style.Width wraps; see fit).
-	box := f.theme.panelStyle().Padding(0, panelPad).Width(f.width - 2).Height(inner)
-	lines := strings.Split(box.Render(fit(content, f.width-2-2*panelPad)), "\n")
-	// The top edge carries no label; the prompt is inside, where a composer's
-	// placeholder belongs.
-	out := make([]string, 0, rows)
-	for i := 0; i < rows; i++ {
-		var l string
-		if i < len(lines) {
-			l = lines[i]
-		}
-		out = append(out, fit(l, f.width))
+	// The editor is the same kind of object as a conversation turn: a closed
+	// box whose top edge names it. The label is the ACTION the input will
+	// perform (`steer`, `new thought`, `priority`), so the box says what
+	// submitting will do rather than showing a bare prompt glyph.
+	bodyRows := rows - 2 // the box's own top and bottom edges
+	if bodyRows < 1 {
+		bodyRows = 1
 	}
-	return out
+	body := make([]string, 0, bodyRows)
+	if f.input != "" || f.inputFocused {
+		body = append(body, f.input)
+	}
+	for len(body) < bodyRows {
+		body = append(body, "")
+	}
+	if len(body) > bodyRows {
+		body = body[:bodyRows]
+	}
+	return box(f.inputPrompt, f.theme.Marker, f.theme.border, body, f.width)
 }
 
 // statusRegion is the status bar: the transient message on the left and the
@@ -427,6 +447,124 @@ func (f frame) statusRegion() string {
 		room = 0
 	}
 	return fit(left+strings.Repeat(" ", room)+right, f.width)
+}
+
+// ── labelled boxes ──────────────────────────────────────────────────────
+
+// box renders a CLOSED box of the given width, with a label set into its top
+// edge and the given body lines inside:
+//
+//	╭─ steer ──────────────────╮
+//	│ content                  │
+//	╰──────────────────────────╯
+//
+// It is the shared vocabulary for a conversation turn and for the editor: a
+// turn and the thing you type into are the same kind of object, so they are
+// drawn by the same function. lipgloss has no titled-border primitive, so the
+// label is composited onto the top edge from styled blocks — the same
+// technique the panel title used — rather than from a private set of glyphs.
+//
+// labelStyle styles the label; borderStyle styles the frame runes. Either may
+// be nil. body lines are fitted to the box's inner width, so a long line is
+// clipped rather than wrapping the box open (Style.Width wraps; see fit).
+func box(label string, labelStyle func(string) string, borderStyle func(string) string,
+	body []string, width int) []string {
+
+	if width < 4 {
+		// Too narrow for a box: fall back to the plain content so a tiny
+		// terminal degrades rather than drawing a one-column frame.
+		out := make([]string, 0, len(body))
+		for _, l := range body {
+			out = append(out, fit(l, maxInt(0, width)))
+		}
+		return out
+	}
+	if labelStyle == nil {
+		labelStyle = func(s string) string { return s }
+	}
+	if borderStyle == nil {
+		borderStyle = func(s string) string { return s }
+	}
+
+	// A box with NO BODY is just a label: it renders as a one-line band
+	// (`├─ turn_end ──────`) rather than a two-row empty frame. A lifecycle
+	// marker carries no content, so drawing it a top edge, nothing, and a
+	// bottom edge spends two rows saying what one says. The band is the same
+	// vocabulary — a labelled rule — so the two forms read as one family.
+	if len(body) == 0 || allBlank(body) {
+		return []string{band(label, labelStyle, borderStyle, width)}
+	}
+
+	// The body sits between the rails with a gutter each side, so text is not
+	// pressed against the frame — the same gutter the panel used.
+	inner := boxInner(width)
+	pad := strings.Repeat(" ", boxGutter)
+	out := make([]string, 0, len(body)+2)
+	out = append(out, boxEdge(label, labelStyle, borderStyle, width))
+	for _, l := range body {
+		out = append(out, borderStyle("│")+pad+fit(l, inner)+pad+borderStyle("│"))
+	}
+	out = append(out, borderStyle("╰"+strings.Repeat("─", width-2)+"╯"))
+	return out
+}
+
+// boxInner is the width a box's body content may occupy: the box width less
+// the two rails and a one-column gutter each side. It is a function so a
+// caller laying content out for box() cannot disagree with box() about how
+// much room there is.
+func boxInner(width int) int {
+	inner := width - 2 - 2*boxGutter
+	if inner < 1 {
+		return 1
+	}
+	return inner
+}
+
+// boxGutter is the space between a box's rail and its content.
+const boxGutter = 1
+
+// allBlank reports whether every line is empty, so a body of blank lines is
+// treated as no body at all.
+func allBlank(lines []string) bool {
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// band renders a labelled rule with no box: `├─ label ─────────`. It is the
+// bodyless form of box, used for a turn that carries only a name (a lifecycle
+// marker such as `turn_end`).
+func band(label string, labelStyle, borderStyle func(string) string, width int) string {
+	if label == "" {
+		return borderStyle(strings.Repeat("─", maxInt(0, width)))
+	}
+	head := borderStyle("├─ ") + labelStyle(label) + borderStyle(" ─")
+	fill := width - displayWidth(head)
+	if fill < 0 {
+		return fit(head, width)
+	}
+	return head + borderStyle(strings.Repeat("─", fill))
+}
+
+// boxEdge draws a box's top edge with its label set into it:
+// `╭─ label ─────────╮`. The label is dropped when there is no room for it,
+// because a box with a truncated label reads worse than a plain edge.
+func boxEdge(label string, labelStyle, borderStyle func(string) string, width int) string {
+	corner := borderStyle("╭")
+	closeCorner := borderStyle("╮")
+	if label == "" {
+		return corner + borderStyle(strings.Repeat("─", width-2)) + closeCorner
+	}
+	// `─ label ─` between the corners, with the rule filling the rest.
+	head := borderStyle("─ ") + labelStyle(label) + borderStyle(" ─")
+	fill := width - 2 - displayWidth(head)
+	if fill < 0 {
+		return corner + borderStyle(strings.Repeat("─", width-2)) + closeCorner
+	}
+	return corner + head + borderStyle(strings.Repeat("─", fill)) + closeCorner
 }
 
 // splitColumns divides available width into a left pane of leftFrac and a

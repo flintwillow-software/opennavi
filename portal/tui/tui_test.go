@@ -237,6 +237,9 @@ func resize(m *tuiModel, w, h int) {
 // call it after seeding; tests that assert on the keymap do not, because the
 // point of NAVI-587 is that the keys work from home too.
 func showList(m *tuiModel) {
+	// The PAGE matters as well as the mode: an enqueue begun here returns
+	// here, so a test that only set the mode would land somewhere else.
+	m.page = PageQueue
 	m.mode = ModeList
 	m.inputFocused = false
 }
@@ -405,9 +408,9 @@ func TestModelLiveView(t *testing.T) {
 		Message: &agent.AgentMessage{Role: agent.RoleAssistant, Content: "!"},
 	})
 	drain(m)
-	// The assistant turn is identified by its role band, not a glyph: the band
-	// is what marks a turn now.
-	if !strings.Contains(m.View(), "hello world!") || !strings.Contains(m.View(), "├─ assistant") {
+	// The assistant turn is identified by its box's label, not a glyph: the
+	// label is what marks a turn now (NAVI-604 boxes the turns).
+	if !strings.Contains(m.View(), "hello world!") || !strings.Contains(m.View(), "─ assistant ─") {
 		t.Errorf("deltas did not accumulate into one assistant turn:\n%s", m.View())
 	}
 	// Tool calls render as indented blocks.
@@ -428,9 +431,9 @@ func TestModelLiveView(t *testing.T) {
 		t.Fatal(err)
 	}
 	drain(m)
-	// A lifecycle transition renders as a system turn, whose band is labelled
+	// A lifecycle transition renders as a system turn, whose box is labelled
 	// with the event itself.
-	if !strings.Contains(m.View(), "├─ complete") {
+	if !strings.Contains(m.View(), "─ complete ─") {
 		t.Errorf("lifecycle system line missing:\n%s", m.View())
 	}
 	// Events for OTHER thoughts do not pollute the live window.

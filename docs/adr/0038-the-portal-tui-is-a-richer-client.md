@@ -483,3 +483,37 @@ The sidebar is deliberately **not** the full queue table: it shows the prompt
 and the lifecycle state, because a 33% column cannot show an id *and* a prompt
 *and* a date, and the prompt is what a reader scans for. Filtering and sorting
 are the queue page's job (NAVI-592).
+
+## Amendment — boxed turns, a labelled editor, and the tab bar
+
+**Recorded on implementation (NAVI-604).** Two reversals and one delivery.
+
+**Bands become boxes.** Decision 9 and NAVI-589 marked each turn with a
+one-row band (`├─ assistant ─────`) deliberately, to save rows. A turn is now a
+**closed box** whose top edge carries the label, so a turn and the editor read
+as the same kind of object. The row cost is real and accepted: a boxed turn
+spends three rows of chrome where a band spent one. **A turn with no body
+renders as a band** — a lifecycle marker (`turn_end`) carries no content, so
+boxing it would spend two rows saying what one says; the two forms share the
+band vocabulary.
+
+**The editor is labelled with its ACTION.** It was a prompt glyph
+(`steer ›`); it is now a box whose top edge names what submitting will do
+(`steer`, `new thought`, `priority`), in the same vocabulary a turn uses.
+
+**Home steers.** NAVI-604 briefly made home watch-only, on the reasoning that
+steering belongs where you opened the thought. That was wrong: watching a
+running thought and talking to it are the same gesture, and a home screen for
+the running thought that cannot talk to it is the inert-chat defect this whole
+revamp started from, one screen over. Home steers the thought it is tracking,
+and `enter` on a blurred home opens the thought's own page — the same gesture
+as `enter` on a queue row opening its detail. The box is present **only when
+the tracked thought is running**, because home keeps a finished thought's
+transcript on screen (NAVI-587) and a finished thought cannot be steered.
+
+**The tab bar is built** (decision 4, open question 4). `1 home · 2 queue ·
+3 status` in the header, with the active page marked, derived from the same
+list the number keys select from. It is what makes the queue and status pages
+reachable, so it is a prerequisite for NAVI-592 and NAVI-598 rather than a
+polish item — decision 4's answer to open question 4 was "tabs", and this is
+that tab bar.

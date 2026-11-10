@@ -1,4 +1,6 @@
- Thoughts                                                   
+ 1 home · 2 queue · 3 status                                
+                                                            
+ queue                                                      
                                                             
   Id         │ Prompt             │   Status                
 ─────────────┼────────────────────┼───────────────          
@@ -16,5 +18,3 @@
                                                             
                                                             
                                                             
-                                                            
-                              j/k move · enter open · n new…

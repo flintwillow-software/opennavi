@@ -141,18 +141,18 @@ func TestChatToolTurnsStartCollapsedAndExpand(t *testing.T) {
 	if !strings.Contains(view, "note_write") {
 		t.Errorf("collapsed tool turn lost its name:\n%s", view)
 	}
-	if !strings.Contains(view, "enter to expand") {
+	if !strings.Contains(view, "ctrl+o to expand") {
 		t.Errorf("collapsed tool turn should advertise expansion:\n%s", view)
 	}
-	// The collapsed form is a labelled band plus ONE summary line: it may show
-	// a short marker of the output, but the turn must not render the full
-	// input/output block.
+	// The collapsed form is a BOX (top edge, one summary row, bottom edge): it
+	// may show a short marker of the output, but the turn must not render the
+	// full input/output block.
 	block := c.blocks(th)[0]
-	if len(block) != 2 {
-		t.Errorf("collapsed tool turn should be band + one line, got %d: %q", len(block), block)
+	if len(block) != 3 {
+		t.Errorf("collapsed tool turn should be a 3-row box, got %d: %q", len(block), block)
 	}
-	if !strings.Contains(block[0], "├─ tool") {
-		t.Errorf("collapsed tool turn should be labelled by its band: %q", block[0])
+	if !strings.Contains(block[0], "─ tool ─") {
+		t.Errorf("collapsed tool turn should be labelled by its box edge: %q", block[0])
 	}
 	if strings.Contains(view, "in:") {
 		t.Errorf("collapsed tool turn should not show its input block:\n%s", view)
@@ -162,6 +162,7 @@ func TestChatToolTurnsStartCollapsedAndExpand(t *testing.T) {
 	if !c.update(tea.KeyMsg{Type: tea.KeyCtrlO}) {
 		t.Fatal("ctrl+o was not consumed for a foldable turn")
 	}
+	_ = th
 	view = strings.Join(c.view(th), "\n")
 	if !strings.Contains(view, "wrote the note") {
 		t.Errorf("expanded tool turn should show its output:\n%s", view)
@@ -370,17 +371,18 @@ func TestChatTrimsBlankLinesAroundTurns(t *testing.T) {
 	})
 
 	lines := c.lines(th)
-	// Between the assistant's text and the tool band there is exactly ONE
-	// blank row — the separator `lines` inserts — not one per trailing
-	// newline plus the separator.
+	// NO blank row between turns: each turn is a closed box whose own edges
+	// mark the boundary, so a separator would spend a row saying what the box
+	// already says. The trailing newlines in the assistant's text are trimmed
+	// rather than rendered.
 	blanks := 0
 	for _, l := range lines {
 		if strings.TrimSpace(l) == "" {
 			blanks++
 		}
 	}
-	if blanks != 1 {
-		t.Errorf("want exactly 1 blank row between turns, got %d:\n%s", blanks, strings.Join(lines, "\n"))
+	if blanks != 0 {
+		t.Errorf("want no blank rows between boxed turns, got %d:\n%s", blanks, strings.Join(lines, "\n"))
 	}
 
 	// Interior blank lines are content and must survive.

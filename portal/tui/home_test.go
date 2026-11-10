@@ -84,8 +84,11 @@ func TestHomeIsTheDefaultScreen(t *testing.T) {
 	if !strings.Contains(view, "task h1") {
 		t.Errorf("home does not show the thought's conversation:\n%s", view)
 	}
-	if !strings.Contains(view, "steer ›") {
-		t.Errorf("home has no persistent steer input:\n%s", view)
+	// Home STEERS the thought it is tracking: watching a running thought and
+	// talking to it are the same gesture, and `enter` opens its own page (the
+	// way `enter` on a queue row opens detail).
+	if !strings.Contains(view, "─ steer ─") {
+		t.Errorf("home has no steer box for the running thought:\n%s", view)
 	}
 }
 
@@ -93,9 +96,13 @@ func TestHomeIsTheDefaultScreen(t *testing.T) {
 // the displayed thought, and the delivery ack is reflected in the status line.
 // The write goes through object.Surface.Act — the one write path — so the test
 // asserts on the surface, not on a private field.
-func TestHomeSteerDispatchesThroughTheSurface(t *testing.T) {
+// TestSteerDispatchesThroughTheSurface: steering goes through the one write
+// path from the THOUGHT'S OWN PAGE. Home is watch-only (NAVI-604), so the
+// editor lives on the opened conversation.
+func TestSteerDispatchesThroughTheSurface(t *testing.T) {
 	steerLog() // clear injections recorded by earlier cases
 	m, q, s := runningModel(t)
+	m.enterLive("r1")
 
 	keyRunes(t, m, "focus on the tests")
 	if m.input != "focus on the tests" {
@@ -125,7 +132,7 @@ func TestHomeSteerDispatchesThroughTheSurface(t *testing.T) {
 // TestHomeSteerAckLandsInTheTranscript: the ack arrives on the stream and
 // renders as a user turn in the conversation home is showing (the "delivery
 // ack reflected in the transcript" half of the done-when).
-func TestHomeSteerAckLandsInTheTranscript(t *testing.T) {
+func TestSteerAckLandsInTheTranscript(t *testing.T) {
 	q := newQueue(t)
 	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
@@ -136,9 +143,7 @@ func TestHomeSteerAckLandsInTheTranscript(t *testing.T) {
 		t.Fatal("no claim")
 	}
 	drain(m)
-	if m.homeID != "a1" {
-		t.Fatalf("home tracks %q, want a1", m.homeID)
-	}
+	m.enterLive("a1")
 
 	keyRunes(t, m, "please continue")
 	keyEnter(m)
@@ -147,7 +152,7 @@ func TestHomeSteerAckLandsInTheTranscript(t *testing.T) {
 	drain(m)
 
 	if !strings.Contains(m.View(), "steered") {
-		t.Errorf("ack did not land in home's transcript:\n%s", m.View())
+		t.Errorf("ack did not land in the transcript:\n%s", m.View())
 	}
 }
 
@@ -162,21 +167,29 @@ func TestHomeEmptyStateEnqueues(t *testing.T) {
 	if m.homeID != "" {
 		t.Fatalf("precondition: nothing running, tracked %q", m.homeID)
 	}
-	if !strings.Contains(m.View(), "nothing is running") {
-		t.Fatalf("home does not show its empty state:\n%s", m.View())
+	// Nothing running and nothing queued: the SPLASH, which names the hotkey.
+	if !strings.Contains(m.View(), "idle") {
+		t.Fatalf("home does not show its idle splash:\n%s", m.View())
 	}
-	if !strings.Contains(m.View(), "new ›") {
-		t.Errorf("empty state's input is not an enqueue box:\n%s", m.View())
+	if !strings.Contains(m.View(), "to queue a new thought") {
+		t.Errorf("empty state does not say how to enqueue:\n%s", m.View())
 	}
 
-	// The staged flow, typed straight through the persistent input.
+	// `n` opens the enqueue input from home, and the staged flow runs there.
+	keyRunes(t, m, "n")
+	if m.mode != ModeInput {
+		t.Fatalf("n did not open the enqueue input: mode=%q", m.mode)
+	}
+	if !strings.Contains(m.View(), "─ new thought ─") {
+		t.Errorf("the input box is not labelled with its action:\n%s", m.View())
+	}
 	keyRunes(t, m, "draft the migration guide")
 	keyEnter(m)
 	if m.stage != 1 {
 		t.Fatalf("stage = %d, want 1 (priority) after the prompt", m.stage)
 	}
-	if !strings.Contains(m.View(), "priority ›") {
-		t.Errorf("input prompt did not become the priority stage:\n%s", m.View())
+	if !strings.Contains(m.View(), "─ priority ─") {
+		t.Errorf("the input box did not become the priority stage:\n%s", m.View())
 	}
 	keyEnter(m) // default priority
 	if m.stage != 2 {
@@ -184,8 +197,10 @@ func TestHomeEmptyStateEnqueues(t *testing.T) {
 	}
 	keyEnter(m) // due now
 
+	// The flow returns to the PAGE it started from — home here — so an
+	// enqueue begun on home does not dump the reader on another screen.
 	if m.mode != ModeHome {
-		t.Errorf("enqueue left home for %q; the flow stays where it started", m.mode)
+		t.Errorf("after enqueuing from home, mode = %q, want home", m.mode)
 	}
 	got := q.GetThoughts()
 	if len(got) != 1 || got[0].Prompt != "draft the migration guide" {
@@ -316,7 +331,12 @@ func TestHomeKeepsTheTranscriptWhenTheThoughtCompletes(t *testing.T) {
 // send — silently dropping it because the queue advanced is the same class of
 // defect as a key that does nothing. The panel title names the new target, so
 // the re-target is visible rather than silent.
-func TestHomeKeepsTheSteerBufferAcrossATrackedThoughtChange(t *testing.T) {
+// TestTheSteerBufferSurvivesATrackedThoughtChange: the buffer is the reader's
+// text, so the queue advancing must not silently discard it. The editor lives
+// on the thought's page (NAVI-604), so the send goes to the thought whose page
+// the reader is on — the one they opened — rather than to whatever home is
+// tracking.
+func TestTheSteerBufferSurvivesATrackedThoughtChange(t *testing.T) {
 	steerLog() // clear injections recorded by earlier cases
 	q := newQueue(t)
 	tport, _ := newInProcess(t, q)
@@ -333,6 +353,7 @@ func TestHomeKeepsTheSteerBufferAcrossATrackedThoughtChange(t *testing.T) {
 	if m.homeID != "old" {
 		t.Fatalf("home tracks %q, want old", m.homeID)
 	}
+	m.enterLive("old")
 
 	// The reader is part-way through a message when the thought completes and
 	// a new one takes its place.
@@ -354,15 +375,20 @@ func TestHomeKeepsTheSteerBufferAcrossATrackedThoughtChange(t *testing.T) {
 	if m.input != "half-written note" {
 		t.Fatalf("steer buffer was dropped on the tracked-thought change: %q", m.input)
 	}
-	// The target is visible, not silent.
-	if !strings.Contains(m.View(), "home · new") {
-		t.Errorf("home does not name the re-targeted thought:\n%s", m.View())
-	}
 
-	// Sending re-targets: it goes to the thought now on screen.
+	// Sending goes to the thought whose PAGE the reader is on — the one they
+	// opened — not to whatever home happens to be tracking. Here that thought
+	// has just FINISHED, so the steer is refused, and the refusal is REPORTED:
+	// silently discarding the message would be the defect, not the refusal.
 	keyEnter(m)
-	if got := steerLog(); len(got) != 1 || got[0] != "new|half-written note" {
-		t.Fatalf("re-targeted steer saw %v, want [new|half-written note]", got)
+	if got := steerLog(); len(got) != 0 {
+		t.Fatalf("steer reached a finished thought: %v", got)
+	}
+	if !strings.Contains(m.status, "steer failed") {
+		t.Errorf("a refused steer was not reported: %q", m.status)
+	}
+	if m.input != "half-written note" {
+		t.Errorf("a refused steer discarded the buffer: %q", m.input)
 	}
 	_ = q
 }
@@ -452,6 +478,7 @@ func TestTypingReturnsFocusToTheInput(t *testing.T) {
 func TestLeaderMenuReachesActionsWhileTyping(t *testing.T) {
 	steerLog() // clear injections recorded by earlier cases
 	m, q, _ := runningModel(t)
+	m.enterLive("r1")
 	keyRunes(t, m, "a draft I am not ready to send")
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
 	if !m.menuOpen {
@@ -723,5 +750,81 @@ func TestConversationStatusColoursFollowTheStatus(t *testing.T) {
 	}
 	if cell != running {
 		t.Errorf("table cell and panel suffix disagree: cell=%q panel=%q", cell, running)
+	}
+}
+
+// TestHomeShowsNoSteerBoxForAFinishedThought: home keeps a finished thought's
+// transcript on screen (NAVI-587), but a finished thought cannot be steered —
+// so the box must not be there. A field whose only outcome is a refusal is the
+// "advertised but does not work" defect in the other direction.
+func TestHomeShowsNoSteerBoxForAFinishedThought(t *testing.T) {
+	m, _, _ := runningModel(t)
+	resize(m, 120, 30)
+
+	// Running: the steer box is present.
+	m.setBadge("r1", func(b *badge) { b.status = "running" })
+	if !strings.Contains(m.View(), "─ steer ─") {
+		t.Fatalf("no steer box for a running thought:\n%s", m.View())
+	}
+
+	// Finished: the transcript stays, the box goes.
+	m.setBadge("r1", func(b *badge) { b.status = "complete" })
+	view := m.View()
+	if strings.Contains(view, "─ steer ─") {
+		t.Errorf("steer box shown for a finished thought:\n%s", view)
+	}
+	if !strings.Contains(view, "home · r1") {
+		t.Errorf("home stopped showing the finished thought:\n%s", view)
+	}
+}
+
+// TestHomeDistinguishesWaitingFromIdle: "nothing running" is two different
+// states, and collapsing them either nags a reader who is waiting for a queued
+// thought or leaves an idle navi looking stalled.
+func TestHomeDistinguishesWaitingFromIdle(t *testing.T) {
+	q := newQueue(t)
+	tport, _ := newInProcess(t, q)
+	m := NewModel(tport)
+	_ = m.Init()
+	resize(m, 120, 30)
+
+	// Nothing running, nothing queued: the IDLE SPLASH, naming the hotkey.
+	if m.queuedWork() {
+		t.Fatal("precondition: nothing should be queued")
+	}
+	view := m.View()
+	if !strings.Contains(view, "idle") || !strings.Contains(view, "to queue a new thought") {
+		t.Errorf("idle home does not show the splash with the hotkey:\n%s", view)
+	}
+
+	// A thought queued but not yet claimed: the WAITING state, not the splash.
+	if err := q.Enqueue(th("waiting", 4)); err != nil {
+		t.Fatal(err)
+	}
+	drain(m)
+	if !m.queuedWork() {
+		t.Fatal("a pending thought should count as queued work")
+	}
+	view = m.View()
+	if strings.Contains(view, "to queue a new thought") {
+		t.Errorf("home still nags to queue while work is waiting:\n%s", view)
+	}
+	if !strings.Contains(view, "waiting for work") {
+		t.Errorf("home does not say it is waiting:\n%s", view)
+	}
+
+	// Paused is also work (resumable), so it stays in the waiting state.
+	m.setBadge("waiting", func(b *badge) { b.status = "paused" })
+	if !m.queuedWork() {
+		t.Error("a paused thought should count as queued work")
+	}
+
+	// Terminal is not work: back to the splash.
+	m.setBadge("waiting", func(b *badge) { b.status = "complete" })
+	if m.queuedWork() {
+		t.Error("a completed thought should not count as queued work")
+	}
+	if !strings.Contains(m.View(), "to queue a new thought") {
+		t.Errorf("home did not return to the splash:\n%s", m.View())
 	}
 }

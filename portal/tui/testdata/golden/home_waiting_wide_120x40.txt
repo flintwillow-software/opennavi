@@ -1,11 +1,11 @@
+ 1 home · 2 queue · 3 status                                                                                            
+                                                                                                                        
  home · nothing running                                                                                            idle 
                                                                                                                         
                                                                              queue · 2                                  
- nothing is running                                                          ───────────────────────────────────────    
+ waiting for work to start                                                   ───────────────────────────────────────    
                                                                               summarise the release notes   complete    
- type a prompt below and press enter to enqueue a thought                     draft the migration guide      pending    
-                                                                                                                        
- 2 thoughts in the queue — esc twice for the queue                                                                      
+ a thought is queued and will start shortly                                   draft the migration guide      pending    
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -31,10 +31,10 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ new › █                                                                                                              │
-│                                                                                                                      │
-│                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                                         
-                                                            enter send · ctrl+a actions · esc clear/blur · ctrl+o fold …
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        

@@ -157,14 +157,39 @@ func TestGoldenHomeEmptyAtFixedSizes(t *testing.T) {
 	for _, size := range fixedSizes {
 		t.Run(size.name, func(t *testing.T) {
 			m := newGoldenModel(t)
-			// Nothing running: clear the overlay that marks t-run running.
+			// Nothing running, but t-pending IS queued — so this is the
+			// WAITING state, not the idle splash.
 			m.setBadge("t-run", func(b *badge) { b.status = string(thought.ThoughtComplete) })
 			m.trackRunning("")
 			if m.homeID != "" {
 				t.Fatalf("precondition: nothing should be running, tracked %q", m.homeID)
 			}
+			if !m.queuedWork() {
+				t.Fatal("precondition: the fixture should have queued work")
+			}
 			resize(m, size.w, size.h)
-			checkGolden(t, "home_empty_"+size.name, m.View())
+			checkGolden(t, "home_waiting_"+size.name, m.View())
+		})
+	}
+}
+
+// TestGoldenHomeSplashAtFixedSizes pins home's IDLE SPLASH: nothing running
+// and nothing queued, so the navi is idle and the screen says so and names the
+// hotkey. Without it an idle navi and a stalled one look identical.
+func TestGoldenHomeSplashAtFixedSizes(t *testing.T) {
+	for _, size := range fixedSizes {
+		t.Run(size.name, func(t *testing.T) {
+			m := newGoldenModel(t)
+			// Everything terminal: nothing running, nothing queued.
+			for _, id := range []string{"t-run", "t-pending"} {
+				m.setBadge(id, func(b *badge) { b.status = string(thought.ThoughtComplete) })
+			}
+			m.trackRunning("")
+			if m.queuedWork() {
+				t.Fatal("precondition: nothing should be queued")
+			}
+			resize(m, size.w, size.h)
+			checkGolden(t, "home_splash_"+size.name, m.View())
 		})
 	}
 }

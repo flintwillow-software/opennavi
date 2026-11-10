@@ -215,6 +215,8 @@ func keyMsgFor(k string) *tea.KeyMsg {
 // Blurred, it opens help.
 func TestQuestionMarkIsTypableWhileTheInputIsFocused(t *testing.T) {
 	m, _, _ := runningModel(t)
+	// The editor is on the thought's page (NAVI-604).
+	m.enterLive("r1")
 	m.inputFocused = true
 	keyRunes(t, m, "why?")
 	if m.input != "why?" {
@@ -237,23 +239,37 @@ func TestQuestionMarkIsTypableWhileTheInputIsFocused(t *testing.T) {
 func TestInputOwnsKeyboardIsTheOnePredicate(t *testing.T) {
 	m, _, _ := runningModel(t)
 	cases := []struct {
+		name    string
 		mode    ModeKind
 		focused bool
+		homeID  string
+		liveID  string
+		status  string
 		want    bool
 	}{
-		{ModeInput, false, true},
-		{ModeHome, true, true},
-		{ModeHome, false, false},
-		{ModeLive, true, true},
-		{ModeLive, false, false},
-		{ModeList, true, false},
-		{ModeDetail, true, false},
+		{"input flow", ModeInput, false, "", "", "", true},
+		// Home steers the tracked thought, so its input owns the keyboard —
+		// but only when there IS a thought to steer (the empty state draws no
+		// box, so `n` must work there).
+		{"home with a running thought", ModeHome, true, "t1", "", "running", true},
+		{"home empty", ModeHome, true, "", "", "", false},
+		{"home blurred", ModeHome, false, "t1", "", "running", false},
+		{"home with a finished thought", ModeHome, true, "t1", "", "complete", false},
+		{"live with a thought", ModeLive, true, "", "t1", "", true},
+		{"live empty", ModeLive, true, "", "", "", false},
+		{"list", ModeList, true, "", "", "", false},
+		{"detail", ModeDetail, true, "", "", "", false},
 	}
 	for _, c := range cases {
 		m.mode, m.inputFocused = c.mode, c.focused
+		m.homeID, m.liveID = c.homeID, c.liveID
+		// The editor is present only where the thought can be steered, so the
+		// tracked thought's status decides whether home owns the keyboard.
+		if c.homeID != "" && c.status != "" {
+			m.setBadge(c.homeID, func(b *badge) { b.status = c.status })
+		}
 		if got := m.inputOwnsKeyboard(); got != c.want {
-			t.Errorf("inputOwnsKeyboard(mode=%s, focused=%v) = %v, want %v",
-				c.mode, c.focused, got, c.want)
+			t.Errorf("%s: inputOwnsKeyboard() = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

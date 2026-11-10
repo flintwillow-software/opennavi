@@ -1,5 +1,6 @@
- home · t-run          live · following 
+ 1 home · 2 queue · 3 status            
                                         
+ home · t-run          live · following 
                                         
                                         
                                         
@@ -7,4 +8,3 @@
                                         
  terminal too narrow — need at least 60…
                                         
- actions for t-run                      

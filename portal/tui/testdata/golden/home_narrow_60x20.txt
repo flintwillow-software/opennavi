@@ -1,20 +1,20 @@
+ 1 home · 2 queue · 3 status                                
+                                                            
  home · t-run                              live · following 
                                                             
-                                                            
-├─ assistant ───────────────────────────────────────────    
-  Here are the highlights:                                  
-  1. terminal sizing                                        
-  2. rune-correct columns                                   
-                                                            
-├─ tool ────────────────────────────────────────────────    
-  ⚙ note_write · wrote summary  (enter to expand)           
-                                                            
+╭─ assistant ──────────────────────────────────────────╮    
+│ Here are the highlights:                             │    
+│ 1. terminal sizing                                   │    
+│ 2. rune-correct columns                              │    
+╰──────────────────────────────────────────────────────╯    
+╭─ tool ───────────────────────────────────────────────╮    
+│ ⚙ note_write · wrote summary  (ctrl+o to expand)     │    
+╰──────────────────────────────────────────────────────╯    
 ├─ turn_end ────────────────────────────────────────────    
                                                             
-╭──────────────────────────────────────────────────────────╮
-│ steer › █                                                │
+╭─ steer ──────────────────────────────────────────────────╮
+│ █                                                        │
 │                                                          │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
                                                             
-                               enter send · ctrl+a actions …

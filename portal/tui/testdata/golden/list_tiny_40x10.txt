@@ -1,5 +1,6 @@
- Thoughts                               
+ 1 home · 2 queue · 3 status            
                                         
+ queue                                  
                                         
                                         
                                         
@@ -7,4 +8,3 @@
                                         
  terminal too narrow — need at least 60…
                                         
-                              j/k move …

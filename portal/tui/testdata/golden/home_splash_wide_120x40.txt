@@ -1,0 +1,40 @@
+ 1 home · 2 queue · 3 status                                                                                            
+                                                                                                                        
+ home · nothing running                                                                                            idle 
+                                                                                                                        
+                                                                             queue · 2                                  
+ idle                                                                        ───────────────────────────────────────    
+                                                                              summarise the release notes   complete    
+ no thought is running and nothing is queued.                                 draft the migration guide     complete    
+                                                                                                                        
+ press n to queue a new thought                                                                                         
+                                                                                                                        
+ 2 thoughts finished — press 2 for the queue                                                                            
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        

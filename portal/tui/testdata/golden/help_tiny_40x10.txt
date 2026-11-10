@@ -1,5 +1,6 @@
- home · nothing running            idle 
+ 1 home · 2 queue · 3 status            
                                         
+ home · nothing running            idle 
                                         
                                         
                                         
@@ -7,4 +8,3 @@
                                         
  terminal too narrow — need at least 60…
                                         
-                    s pause · r resume …
