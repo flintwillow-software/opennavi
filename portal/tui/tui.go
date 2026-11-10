@@ -1133,16 +1133,24 @@ func (m *tuiModel) render() string {
 	f := newFrame(m.width, m.height, m.theme)
 
 	// The panel's top edge is labelled with where you are, the way a titled
-	// module announces its contents.
+	// module announces its contents. It is the only place the location needs
+	// to be said: a separate header repeating the app's own name ("navi ·
+	// portal") is furniture, and it costs a body row on every screen.
 	f.title = m.panelLabel()
-	// The header carries only what the panel title cannot: the navi's name and
-	// any stream-gap warning. The form factor and the terminal dimensions are
-	// diagnostic, not product — they belong behind a debug toggle, not in the
-	// chrome of every screen.
-	header := m.theme.Subtle("navi") + m.theme.Subtle(" · portal"+terminalSuffix(m))
+
+	// The header line exists only to carry a warning. A healthy TUI has
+	// nothing to put here, so it gets no line at all — the frame then spends
+	// that row on content instead of on chrome that says nothing.
+	header := ""
 	if m.debug {
-		header += m.theme.Subtle(" · " + f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
+		header = m.theme.Subtle(f.form().String() + " " + itoa(f.width) + "×" + itoa(f.height))
 	}
+	if gap := terminalSuffix(m); gap != "" {
+		// A dropped-event gap is the one thing worth interrupting the panel
+		// title for: the reader's view is incomplete and nothing else says so.
+		header = m.theme.Warn(strings.TrimPrefix(gap, " · "))
+	}
+	f.hasHeader = header != ""
 
 	// A terminal below the floor gets a notice rather than a corrupted row.
 	if f.tooNarrow() {
@@ -1281,6 +1289,14 @@ func (m *tuiModel) bodyList(f frame) []string {
 	out = append(out, g.header(m.theme)...)
 	out = append(out, g.rule(m.theme))
 	for i, row := range m.list.Rows {
+		// A light dotted rule between rows, and none after the last. It says
+		// "next record in the same table" where a full rule would read as a
+		// new section, and it is a character rather than a colour, so it
+		// survives NO_COLOR. Without it, consecutive rows are three lines of
+		// text with nothing marking where one ends.
+		if i > 0 {
+			out = append(out, g.separator(m.theme))
+		}
 		out = append(out, g.row(m.theme, m, i, row)...)
 	}
 	return out
@@ -1345,6 +1361,22 @@ func (g grid) rule(th theme) string {
 	return th.Subtle(b.String())
 }
 
+// separator is the light rule drawn between rows: a dotted line through each
+// column, joined at the separators. It is deliberately lighter than the
+// header rule so the header still reads as the table's edge.
+func (g grid) separator(th theme) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat("·", g.markW))
+	for i, w := range g.widths {
+		if i > 0 {
+			b.WriteString("·┼·")
+		}
+		b.WriteString(strings.Repeat("·", w))
+	}
+	b.WriteString(strings.Repeat("·", g.gutterW+1))
+	return th.Subtle(b.String())
+}
+
 // row renders one data row: the marker gutter, each cell aligned by its
 // column's kind, the flags, and the activity preview.
 func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
@@ -1366,7 +1398,11 @@ func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
 				value = "blocked"
 			}
 		}
-		cell := alignCell(sanitizeLine(value), c.width, c.align)
+		raw := sanitizeLine(value)
+		if c.column.Field == "id" {
+			raw = truncateLeft(raw, c.width, "…")
+		}
+		cell := alignCell(raw, c.width, c.align)
 		// Status is an enum: colour it so the eye finds a row's state without
 		// reading every word. The text is identical either way.
 		if c.column.Kind == object.KindEnum {
@@ -1395,6 +1431,12 @@ func (g grid) row(th theme, m *tuiModel, i int, row view.Row) []string {
 }
 
 // alignCell pads a value to the column width according to its alignment.
+//
+// Truncation is from the LEFT for an identity column: a generated id puts its
+// distinguishing characters at the end (`cli-1794295713624121722`), so cutting
+// the tail would render every row as the same constant prefix and leave the
+// reader unable to tell two records apart — which is what made a list of three
+// different thoughts look like three copies of one row.
 func alignCell(s string, width int, a align) string {
 	s = truncate(s, width, "…")
 	space := width - displayWidth(s)

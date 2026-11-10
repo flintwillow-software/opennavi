@@ -256,6 +256,23 @@ func truncate(s string, width int, tail string) string {
 	return ansi.Truncate(s, width, tail)
 }
 
+// truncateLeft cuts from the LEFT, keeping the tail, and marks the cut at the
+// front. It is the identity-column rule: a generated id's distinguishing
+// characters are at the end, so the tail is what the reader needs.
+func truncateLeft(s string, width int, marker string) string {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(s) <= width {
+		return s
+	}
+	mw := displayWidth(marker)
+	if width <= mw {
+		return truncate(s, width, "")
+	}
+	return marker + ansi.TruncateLeft(s, displayWidth(s)-(width-mw), "")
+}
+
 // pad right-pads s to exactly width display columns, truncating first when it
 // is too long. This replaces fmt.Sprintf("%-*s", …), which padded by byte
 // length and so misaligned every column after a non-ASCII value.

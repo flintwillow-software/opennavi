@@ -1,7 +1,7 @@
 ╱─┤ Thoughts ├─────────────────────────┐
-│ navi · portal                        │
 │                                      │
 │  terminal too narrow — need at least…│
+│                                      │
 │                                      │
 │                                      │
 │                                      │

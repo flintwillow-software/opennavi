@@ -1,5 +1,4 @@
 ╱─┤ chat · t-run ├─────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ navi · portal                                                                                                        │
 │ chat · t-run · live (esc returns) · following                                                                        │
 │ ▸ summarise the release notes                                                                                        │
 │                                                                                                                      │
@@ -13,6 +12,7 @@
 │   ⚙ note_write · wrote summary  (enter to expand)                                                                    │
 │                                                                                                                      │
 │   · turn_end                                                                                                         │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

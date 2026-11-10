@@ -14,13 +14,16 @@ import "strings"
 
 // chrome is the number of rows the frame spends on non-body content: the
 // header, the footer, and the two separator rules between them.
-// The panel chrome: a top border with the title, a header line inside it, a
-// bottom border, and the status/help footer beneath the panel.
+// The panel chrome: a top border with the title, an optional header line
+// inside it, a bottom border, and the status/help footer beneath the panel.
+// The header row is optional because it only ever carries a warning; a
+// healthy TUI spends that row on content.
 const (
-	frameHeaderRows = 1 // the header line inside the panel
+	frameHeaderRows = 1 // the optional header line inside the panel
 	frameBorderRows = 2 // the top and bottom panel edges
 	frameFooterRows = 1 // the status/help line below the panel
-	frameChromeRows = frameHeaderRows + frameBorderRows + frameFooterRows
+	frameBaseChrome = frameBorderRows + frameFooterRows
+	frameChromeRows = frameBaseChrome + frameHeaderRows
 )
 
 // minBodyRows is the floor the body is given even on a terminal too short to
@@ -84,6 +87,9 @@ type frame struct {
 	// title labels the panel's top edge (the augmented-ui "labelled module"
 	// idiom). Empty draws a plain edge.
 	title string
+	// hasHeader says whether the optional header row inside the panel is
+	// drawn. It carries only a warning, so it is usually absent.
+	hasHeader bool
 }
 
 // maxInt is a local helper: the standard library's max is generic in newer
@@ -120,9 +126,19 @@ func (f frame) innerWidth() int {
 	return w
 }
 
+// chromeRows is the chrome this frame actually spends: the borders and footer
+// always, the header row only when there is something to say in it.
+func (f frame) chromeRows() int {
+	n := frameBaseChrome
+	if f.hasHeader {
+		n += frameHeaderRows
+	}
+	return n
+}
+
 // bodyHeight is the rows left for the body once the chrome is subtracted.
 func (f frame) bodyHeight() int {
-	h := f.height - frameChromeRows
+	h := f.height - f.chromeRows()
 	if h < minBodyRows {
 		return minBodyRows
 	}
@@ -139,7 +155,7 @@ func (f frame) tooNarrow() bool { return f.width < narrowFloor }
 
 // tooShort reports whether there is no room for the chrome plus a usable
 // body.
-func (f frame) tooShort() bool { return f.height < frameChromeRows+minBodyRows }
+func (f frame) tooShort() bool { return f.height < f.chromeRows()+minBodyRows }
 
 // render assembles header + rule + body + rule + footer, each line fitted to
 // the frame width and the whole thing fitted to the frame height. body is
@@ -168,7 +184,9 @@ func (f frame) render(header string, body []string, footer string) string {
 
 	lines := make([]string, 0, f.height)
 	lines = append(lines, pad(top, f.width))
-	lines = append(lines, line(header))
+	if f.hasHeader {
+		lines = append(lines, line(header))
+	}
 
 	bh := f.bodyHeight()
 	for i := 0; i < bh; i++ {
