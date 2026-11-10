@@ -17,4 +17,4 @@
 │ steer › █                                                │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
- actions for t-run actions: s pause p bump · esc close      
+ actions for t-run actions: s pause p bump                  

@@ -378,3 +378,41 @@ decision 2, that a new object type needs no new screen.
 **Follow-up:** the keymap and the persistent input are still hand-rolled
 (`chatKeys`, `helpLine`, `menuLetter`, and a `string` with manual backspace).
 Moving them to `bubbles/key` + `bubbles/help` + `bubbles/textarea` is NAVI-593.
+
+## Amendment — the keymap is declared, and the help is generated from it
+
+**Recorded on implementation (NAVI-593).** Decision 7 says actions are bound to
+the focused object and that "the footer help is derived from the active
+bindings, so a key is never advertised that does not work". The first half was
+delivered by NAVI-587; the second half is this amendment.
+
+Before it, the help was a hand-kept string per context (`helpLine`) and the
+dispatch was a `switch k.String()` — two lists that had to be kept in agreement
+by hand, and did not always agree (the whole revamp started from a help line
+advertising keys that were inert). Now every key is a `key.Binding` declared
+once in `keys.go`, and **both** the dispatch and the footer read the same
+declarations. Each context supplies a small `help.KeyMap` over the bindings
+that are live in it, so a context cannot advertise a key it does not handle.
+
+Two consequences worth recording:
+
+- **The help truncates rather than overflows.** `bubbles/help` renders from the
+  bindings and clips to the terminal width; the hand-kept string overflowed any
+  narrow terminal. (`help` clips *items* and can still emit a line wider than
+  its `Width`, so the footer enforces the final width — that is a property of
+  the library, not of the binding.)
+- **`?` opens a full-screen help overlay, and is typable while a text input has
+  focus.** The rule "a printable rune is text while a text input owns the
+  keyboard" now lives in one predicate (`inputOwnsKeyboard`) that the help key,
+  the action letters, and the leader all consult. `?` is a character people
+  write ("does this work?"), so claiming it while typing would make the steer
+  input unable to express a question — the same defect as an advertised key
+  that does nothing, in the other direction. Blurred, `?` opens help.
+
+The overlay reports the keys of the screen **underneath** it, not its own: a
+reader who asked for help wants to know what they can do where they were.
+
+**Not in this amendment:** the persistent input is still a `string` with manual
+backspace handling rather than `bubbles/textarea`. That is a behaviour change
+(it brings its own key handling and can be multi-line, which changes the
+frame's input-row accounting) and is tracked separately.

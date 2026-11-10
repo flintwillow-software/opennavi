@@ -37,4 +37,4 @@
 │ new › █                                                                                                              │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow · tab blur                                 
+  enter send · ctrl+a actions · esc clear/blur · ctrl+o fold · ctrl+f follow · ? help                                   

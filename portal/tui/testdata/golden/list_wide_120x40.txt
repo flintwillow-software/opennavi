@@ -37,4 +37,4 @@
 │                                                                                                                      │
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  1 home · q quit · j/k move · enter open · t type · n new · a attach · p/P priority · s pause · r resume · c cancel · …
+  j/k move · enter open · n new · a attach · p/P priority · s pause · c cancel · 1 home · ? help                        

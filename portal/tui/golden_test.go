@@ -220,6 +220,27 @@ func TestGoldenLiveChatAtFixedSizes(t *testing.T) {
 	}
 }
 
+// TestGoldenHelpOverlayAtFixedSizes pins the full-screen help overlay (`?`).
+// It is GENERATED from the keymap (NAVI-593), so this golden is also the check
+// that the generated help is legible at each form factor — the narrow case is
+// where a hand-kept help line used to overflow.
+func TestGoldenHelpOverlayAtFixedSizes(t *testing.T) {
+	for _, size := range fixedSizes {
+		t.Run(size.name, func(t *testing.T) {
+			m := newGoldenModel(t)
+			resize(m, size.w, size.h)
+			// `?` is typable while the steer input is focused, so the overlay
+			// is reached from the blurred state.
+			m.inputFocused = false
+			_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+			if !m.helpOpen {
+				t.Fatal("? did not open the help overlay")
+			}
+			checkGolden(t, "help_"+size.name, m.View())
+		})
+	}
+}
+
 // TestFrameIsExactlyTerminalSized is the "fills the terminal" contract: the
 // render is exactly height lines, each exactly width display columns. It is
 // asserted directly rather than through a golden so a failure names the
