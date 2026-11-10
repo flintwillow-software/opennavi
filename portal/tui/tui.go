@@ -1991,15 +1991,122 @@ func (m *tuiModel) bodyActionMenu(f frame) []string {
 // detail screen uses (decision 5) — home is a context, not a second
 // implementation.
 func (m *tuiModel) bodyHome(f frame) []string {
+	// The wide form factor splits home (ADR 0038 decision 3, decision 6):
+	// the conversation on the left, the queue as a sidebar on the right. The
+	// sidebar is a CONTENT pane, not the persistent navigation sidebar
+	// decision 4 rejected — it shows what is queued while you watch what is
+	// running, and below the wide floor it collapses because the queue is
+	// reachable as its own page.
+	if f.form() == formWide {
+		return m.bodyHomeSplit(f)
+	}
 	if m.homeID == "" {
 		return m.bodyHomeEmpty(f)
 	}
-	// The viewport gets the whole body, exactly as in live: the panel's top
-	// edge already names the thought (`home · <id>`).
+	// The viewport gets the whole body, exactly as in live: the header already
+	// names the thought (`home · <id>`).
 	m.chat.setSize(f.innerWidth(), f.bodyHeight())
 	out := make([]string, 0, f.bodyHeight())
 	for _, l := range m.chat.view(m.theme) {
 		out = append(out, truncate(l, f.innerWidth(), "…"))
+	}
+	return out
+}
+
+// bodyHomeSplit composes home's two panes on a wide terminal: the
+// conversation on the left at 66%, the queue sidebar on the right at 33%
+// (ADR 0038 decision 3). The left pane keeps the same three states it has
+// single-pane — the steer page, the empty state — and the right pane is always
+// the queue, so what is running and what is waiting are visible together.
+func (m *tuiModel) bodyHomeSplit(f frame) []string {
+	rows := f.bodyHeight()
+	// A one-column gap between the panes, so they read as separate columns
+	// rather than one wide run of text.
+	leftW, rightW := splitColumns(f.innerWidth(), splitLeftFrac)
+	if rightW < minSidebarWidth {
+		// Too narrow to be useful: fall back to the single pane rather than
+		// render a sidebar of ellipses. The left pane then takes the full
+		// width, which is what the single-pane path already renders.
+		left := m.homeLeftPane(f.innerWidth(), rows)
+		return left
+	}
+	left := m.homeLeftPane(leftW, rows)
+	right := m.queuePane(rightW, rows)
+	return f.joinColumns(left, leftW, right, rightW, rows)
+}
+
+// homeLeftPane renders home's conversation pane at the given width.
+func (m *tuiModel) homeLeftPane(w, rows int) []string {
+	if m.homeID == "" {
+		// The empty state, sized to the pane.
+		return m.bodyHomeEmpty(frame{width: w, height: rows, theme: m.theme})
+	}
+	m.chat.setSize(w, rows)
+	out := make([]string, 0, rows)
+	for _, l := range m.chat.view(m.theme) {
+		out = append(out, truncate(l, w, "…"))
+	}
+	return out
+}
+
+// minSidebarWidth is the narrowest the queue sidebar may be before it is
+// dropped. Below it the columns are too squeezed to read, and the queue is
+// reachable as its own page, so nothing is lost.
+const minSidebarWidth = 28
+
+// statusW is the width of the sidebar's status column. It fits the longest
+// lifecycle word (`cancelled`) so the column never reflows as states change.
+const statusW = 9
+
+// queuePane renders the queue as a sidebar: a titled list of the thoughts in
+// the queue, marking the one home is tracking. It is deliberately compact —
+// the full table with filters and sorting is its own page (NAVI-592) — so it
+// shows the shape of the queue, not every field.
+func (m *tuiModel) queuePane(w, rows int) []string {
+	out := make([]string, 0, rows)
+	if len(m.list.Rows) == 0 {
+		return append(out, "", " "+m.theme.Subtle("queue empty"))
+	}
+	// A header row, so the column is legible as a list rather than a run of
+	// ids. It names the count, which is the fact a sidebar is for.
+	title := "queue · " + itoa(len(m.list.Rows))
+	out = append(out, " "+m.theme.Title(title))
+	if rows > 2 {
+		out = append(out, m.theme.Subtle(" "+strings.Repeat("─", maxInt(1, w-1))))
+	}
+	// The rows themselves: a marker gutter, the prompt (what a reader
+	// recognises), and the status. The id is deliberately absent — a sidebar
+	// this narrow cannot show an id AND a prompt, and the prompt is what a
+	// reader scans for.
+	for i, row := range m.list.Rows {
+		if len(out) >= rows {
+			break
+		}
+		mark := " "
+		if row.ID == m.homeID {
+			mark = m.theme.Marker("▸")
+		} else if i == m.sel && m.mode == ModeList {
+			mark = m.theme.Marker("·")
+		}
+		prompt := cellValue(row, "prompt")
+		if prompt == "" {
+			prompt = row.ID
+		}
+		status := m.statusOf(row.ID)
+		// The status is right-aligned in a fixed column so the states line up
+		// and the eye can scan them, which is the whole reason the column
+		// exists; the prompt takes what is left.
+		room := w - 2 - statusW - 1
+		if room < 4 {
+			room = 4
+		}
+		// Status takes the RAW value and pads it itself (that is its contract:
+		// it colours the value and lays the cell out, so the escape codes
+		// never count toward the width). Pre-fitting here padded twice and
+		// made the coloured and uncoloured renders differ in width.
+		line := mark + " " + fit(prompt, room) + " " +
+			m.theme.Status(status, status, statusW, alignRight)
+		out = append(out, truncate(line, w, "…"))
 	}
 	return out
 }

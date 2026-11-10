@@ -461,3 +461,25 @@ NAVI-598) are built on these regions in follow-up work. Decision 4's answer to
 open question 4 — **tabs, not a sidebar** — is not changed here; the sidebar
 decision 4 rejected was a *persistent navigation* sidebar, and NAVI-601 adds a
 *content* pane on home only.
+
+## Amendment — home's sidebar is a content pane
+
+**Recorded on implementation (NAVI-601).** Decision 3 describes the left pane
+and the queue as a right pane at a 66/33 split, and decision 6 makes that split
+the wide-only form factor. Both are now built: on a wide terminal home shows
+the running thought's transcript on the left and the queue on the right; below
+the wide floor the pane collapses to the single-pane home, and nothing is lost
+because the queue is reachable as its own page.
+
+This does **not** reverse decision 4's answer to open question 4 (tabs, not a
+sidebar). The sidebar decision 4 rejected was a *persistent navigation*
+sidebar — one that would be present on every screen and take width from the
+conversation everywhere. This is a **content pane on home only**: it shows what
+is queued while you watch what is running, and it is absent everywhere else.
+The distinction is the point; if a sidebar later appears on other screens, that
+is a different decision and needs its own amendment.
+
+The sidebar is deliberately **not** the full queue table: it shows the prompt
+and the lifecycle state, because a 33% column cannot show an id *and* a prompt
+*and* a date, and the prompt is what a reader scans for. Filtering and sorting
+are the queue page's job (NAVI-592).

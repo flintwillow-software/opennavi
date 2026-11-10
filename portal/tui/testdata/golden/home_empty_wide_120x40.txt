@@ -1,9 +1,9 @@
  home · nothing running                                                                                            idle 
                                                                                                                         
-                                                                                                                        
- nothing is running                                                                                                     
-                                                                                                                        
- type a prompt below and press enter to enqueue a thought                                                               
+                                                                             queue · 2                                  
+ nothing is running                                                          ───────────────────────────────────────    
+                                                                              summarise the release notes   complete    
+ type a prompt below and press enter to enqueue a thought                     draft the migration guide      pending    
                                                                                                                         
  2 thoughts in the queue — esc twice for the queue                                                                      
                                                                                                                         
