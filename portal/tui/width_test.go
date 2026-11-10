@@ -22,6 +22,7 @@ func TestTableColumnsAlignWithWideRunes(t *testing.T) {
 	m.theme = newThemeFor(false)
 	resize(m, 120, 24)
 	_ = m.Init()
+	showList(m)
 
 	// One ASCII row, one CJK row, one emoji row — all the same shape.
 	ascii := th("a1", 4)

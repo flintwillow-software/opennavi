@@ -35,7 +35,35 @@ func newQueue(t *testing.T) *thought.Queue {
 	if err != nil {
 		t.Fatalf("NewQueue: %v", err)
 	}
+	// The steering bridge a running thought needs. The real navi registers one
+	// (navi/navi.go); without it RouteMessage refuses a running thought with
+	// ErrSteeringUnavailable, so a test that steers the thought home is showing
+	// would fail on a harness gap rather than on the model. The bridge is the
+	// INJECTION point, so what it records is what a running thought receives.
+	q.SetSteeringRouter(func(thoughtID, message string) error {
+		steersMu.Lock()
+		steers = append(steers, thoughtID+"|"+message)
+		steersMu.Unlock()
+		return nil
+	})
 	return q
+}
+
+// steers records what the steering bridge injected for a running thought, in
+// order. It is package-level because the bridge is registered per queue and
+// tests build a fresh queue per case; steerLog() reads and clears it.
+var (
+	steersMu sync.Mutex
+	steers   []string
+)
+
+// steerLog returns the injections recorded since the last call.
+func steerLog() []string {
+	steersMu.Lock()
+	defer steersMu.Unlock()
+	out := append([]string(nil), steers...)
+	steers = nil
+	return out
 }
 
 // newInProcess builds the in-process transport over q with a fresh
@@ -204,6 +232,15 @@ func resize(m *tuiModel, w, h int) {
 	_, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 }
 
+// showList navigates to the queue list, which is no longer the default screen
+// (home is, ADR 0038 decision 3). Tests that assert on the list's rendering
+// call it after seeding; tests that assert on the keymap do not, because the
+// point of NAVI-587 is that the keys work from home too.
+func showList(m *tuiModel) {
+	m.mode = ModeList
+	m.inputFocused = false
+}
+
 // drain applies the feed's pending events to the model, mirroring the
 // poll cmd (ReadAfter cursor semantics).
 func drain(m *tuiModel) {
@@ -272,6 +309,7 @@ func TestModelSeedsAndTracksLifecycle(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init() // seed from snapshot (returns the poll cmd, re-armed by tea)
+	showList(m)
 
 	if err := q.Enqueue(th("t1", 4)); err != nil {
 		t.Fatal(err)
@@ -340,6 +378,7 @@ func TestModelLiveView(t *testing.T) {
 	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 	if err := q.Enqueue(th("t3", 4)); err != nil {
 		t.Fatal(err)
 	}
@@ -549,6 +588,7 @@ func TestModelEnqueueFlow(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	// n -> prompt "say hi" -> priority (default) -> defer (none).
 	keyRunes(t, m, "n")
@@ -617,6 +657,7 @@ func TestModelEnqueueRejectsEmptyPrompt(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	keyRunes(t, m, "n")
 	keyEnter(m) // empty prompt
@@ -783,10 +824,13 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 	}
 	drain(m)
 
-	// The full program with buffered input/output: type 'q' to quit.
+	// The full program with buffered input/output. `tab` blurs home's steer
+	// input (a printable `q` is text while it is focused, NAVI-587), then `q`
+	// quits — exactly the gesture a reader makes. `tab` rather than `esc`
+	// because the input reader parses a bare `\x1bq` as alt+q, not two keys.
 	var buf bytes.Buffer
 	var in bytes.Buffer
-	in.Write([]byte("q"))
+	in.Write([]byte("\tq"))
 	ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Second)
 	defer cancel()
 	p := tea.NewProgram(m, tea.WithInput(&in), tea.WithOutput(&buf), tea.WithContext(ctx))
@@ -797,7 +841,9 @@ func TestTeaProgramRunsAndQuits(t *testing.T) {
 	if model2 == nil {
 		t.Fatal("program returned no model")
 	}
-	// The model quit cleanly; the queue row survived.
+	// The model quit cleanly; the queue row survived (on the list screen —
+	// home is the default now, so navigate there).
+	showList(m)
 	if !strings.Contains(m.View(), "smoke") {
 		t.Errorf("view lost rows: %q", m.View())
 	}
@@ -808,6 +854,7 @@ func TestModelShowsModelColumn(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 	tagged := th("mm1", 4)
 	tagged.Model = "very-long-model-name"
 	if err := q.Enqueue(tagged); err != nil {
@@ -832,6 +879,7 @@ func TestSanitizeRowNewlines(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 	weird := th("n1", 4)
 	weird.Prompt = "hello\nworld check\tthis\rnice"
 	if err := q.Enqueue(weird); err != nil {
@@ -881,6 +929,7 @@ func TestLiveViewHeaderMarksLive(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 	if err := q.Enqueue(th("run1", 4)); err != nil {
 		t.Fatal(err)
 	}
@@ -899,6 +948,7 @@ func TestHomeViewAgentPreview(t *testing.T) {
 	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 	if err := q.Enqueue(th("run1", 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -1005,6 +1055,7 @@ func TestIdleModelSeesAnExternallyQueuedThought(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	if strings.Contains(m.View(), "fromremote") {
 		t.Fatal("precondition: the thought must not exist yet")
@@ -1091,6 +1142,7 @@ func TestEnqueueInputAcceptsCommandLetters(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	keyRunes(t, m, "n") // open the enqueue input
 	if m.mode != ModeInput {
@@ -1133,6 +1185,7 @@ func TestCompletedThoughtResponseVisible(t *testing.T) {
 	tport, broker := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	if err := q.Enqueue(th("late", 4)); err != nil {
 		t.Fatal(err)
@@ -1176,6 +1229,7 @@ func TestModelShowsBlockedDependency(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	if err := q.Enqueue(th("t1", 4)); err != nil {
 		t.Fatal(err)
@@ -1217,6 +1271,7 @@ func TestModelShowsVerificationFlag(t *testing.T) {
 	tport, _ := newInProcess(t, q)
 	m := NewModel(tport)
 	_ = m.Init()
+	showList(m)
 
 	check := th("verify-abcd1234", 5)
 	check.Metadata = map[string]string{thought.MetadataRole: thought.RoleVerification}
@@ -1321,11 +1376,18 @@ func (s *multiSurface) Detail(typeName, id, detail string, _ object.Query) ([]ob
 	return s.transcript, "", nil
 }
 
-func (s *multiSurface) Act(typeName, id, action string, _ map[string]any) error {
+// Act records the dispatch and then performs it on the real queue, so a test
+// can assert BOTH that the model chose the right verb for the right object and
+// that the effect actually landed. A recorder that only records would let a
+// model dispatch a verb the surface would have rejected and still pass.
+func (s *multiSurface) Act(typeName, id, action string, args map[string]any) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.acted = append(s.acted, typeName+"/"+id+"/"+action)
-	return nil
+	s.mu.Unlock()
+	if typeName != "thought" {
+		return nil
+	}
+	return queueSurface{q: s.q}.Act(typeName, id, action, args)
 }
 
 func (s *multiSurface) Watch(int) ([]object.Delta, int, bool, error) { return nil, 0, false, nil }
@@ -1360,6 +1422,7 @@ func TestModelSwitchesTypesAndOpensDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.refreshList()
+	showList(m)
 	if !strings.Contains(m.View(), "task t1") {
 		t.Fatalf("thought list missing:\n%s", m.View())
 	}
@@ -1412,6 +1475,7 @@ func TestModelOpensChatFromTheTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.refreshList()
+	showList(m)
 	m.sel = 0
 
 	keyEnter(m)
@@ -1435,7 +1499,13 @@ func TestModelDispatchesDeclaredActions(t *testing.T) {
 	if err := q.Enqueue(th("t1", 4)); err != nil {
 		t.Fatal(err)
 	}
+	// `pause` applies to a RUNNING thought (the guard the menu and the plain
+	// letters share), so the thought is claimed before the key is pressed.
+	if _, ok := q.Dequeue(); !ok {
+		t.Fatal("no claim")
+	}
 	m.refreshList()
+	showList(m)
 	m.sel = 0
 
 	keyRunes(t, m, "s") // pause
@@ -1482,6 +1552,7 @@ func TestModelRetriesTypesUntilTheSurfaceAnswers(t *testing.T) {
 	}
 	m := NewModel(tr)
 	_ = m.Init()
+	showList(m)
 	if err := q.Enqueue(th("t1", 4)); err != nil {
 		t.Fatal(err)
 	}
@@ -1528,6 +1599,7 @@ func TestRemoteClientRendersTheQueueThroughTheGateway(t *testing.T) {
 	defer rport.Close()
 	m := NewModel(rport)
 	_ = m.Init()
+	showList(m)
 
 	// NewRemote returned only once the opening snapshot arrived, so the
 	// descriptors are ready before the first render — no polling, no retry.
