@@ -1,10 +1,10 @@
 ╱──┤ Thoughts ├────────────────────────────────────────────┐
 │                                                          │
-│   Id         │ Prompt        │   Status                  │
-│ ─────────────┼───────────────┼────────────────           │
-│ ▸ t-run      │ summarise th… │  running                  │
-│ ·············┼···············┼················           │
-│   t-pending  │ draft the mi… │  pending                  │
+│   Id         │ Prompt             │   Status             │
+│ ─────────────┼────────────────────┼───────────────       │
+│ ▸ t-run      │ summarise the rel… │  running             │
+│ ·············┼····················┼···············       │
+│   t-pending  │ draft the migrati… │  pending             │
 │                                                          │
 │                                                          │
 │                                                          │

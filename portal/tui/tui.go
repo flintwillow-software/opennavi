@@ -1391,9 +1391,10 @@ func (m *tuiModel) buildGrid(f frame) grid {
 		g.widths = append(g.widths, c.width)
 	}
 	// The trailing gutter holds the flags and, where there is room, the
-	// running activity preview.
+	// running activity preview. It is computed here and used by both the row
+	// and the spine, so the two cannot disagree about where a column ends.
 	g.gutterW = flagsReserve
-	if f.innerWidth() >= activityMinFrame {
+	if f.innerWidth() >= activityMinFrame && m.pageHasActivity() {
 		g.gutterW += activityReserve
 	}
 	return g
@@ -1420,32 +1421,31 @@ func (g grid) header(th theme) []string {
 // joined at the column separators. It is what makes the rows read as a grid
 // rather than as floating text.
 func (g grid) rule(th theme) string {
+	return th.Subtle(g.spine("─", "─", "┼"))
+}
+
+// spine builds a horizontal line across the grid: the marker column, each
+// column's width, and the trailing gutter, joined at the column separators.
+// The rule, the dotted separator, and the header all derive their shape from
+// this one function, so they cannot disagree about where a column ends.
+func (g grid) spine(fill, join, cross string) string {
 	var b strings.Builder
-	b.WriteString(strings.Repeat("─", g.markW))
+	b.WriteString(strings.Repeat(fill, g.markW))
 	for i, w := range g.widths {
 		if i > 0 {
-			b.WriteString("─┼─")
+			b.WriteString(fill + cross + fill)
 		}
-		b.WriteString(strings.Repeat("─", w))
+		b.WriteString(strings.Repeat(fill, w))
 	}
-	b.WriteString(strings.Repeat("─", g.gutterW+1))
-	return th.Subtle(b.String())
+	b.WriteString(strings.Repeat(fill, g.gutterW))
+	return b.String()
 }
 
 // separator is the light rule drawn between rows: a dotted line through each
 // column, joined at the separators. It is deliberately lighter than the
 // header rule so the header still reads as the table's edge.
 func (g grid) separator(th theme) string {
-	var b strings.Builder
-	b.WriteString(strings.Repeat("·", g.markW))
-	for i, w := range g.widths {
-		if i > 0 {
-			b.WriteString("·┼·")
-		}
-		b.WriteString(strings.Repeat("·", w))
-	}
-	b.WriteString(strings.Repeat("·", g.gutterW+1))
-	return th.Subtle(b.String())
+	return th.Subtle(g.spine("·", "·", "┼"))
 }
 
 // row renders one data row: the marker gutter, each cell aligned by its
@@ -1559,7 +1559,10 @@ type laidOutColumn struct {
 // room to be read; everything else keeps a floor so a header stays legible.
 func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	const (
-		leading = 4 // " > " plus the space before the first column
+		// leading is the marker column: the selection glyph and the space
+		// after it. The frame's own gutter is NOT included here — the layout
+		// is given the inner width, which is already net of the rails.
+		leading = 2
 		gap     = 1
 	)
 	cols := m.list.Columns
@@ -1586,11 +1589,12 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	flags := flagsReserve
 
 	// The activity preview shares the row with the columns. Reserve room for
-	// it when there is any, so a running thought's preview is legible rather
-	// than squeezed to a single ellipsis at the edge; on a narrow terminal
-	// the preview is dropped instead of starving the columns.
+	// it only when the page actually has one to show, and only when the
+	// terminal is wide enough: reserving unconditionally left a dead gap
+	// before the right rail on every page whose thoughts were not running,
+	// which is most of them.
 	activity := 0
-	if frameWidth >= activityMinFrame {
+	if frameWidth >= activityMinFrame && m.pageHasActivity() {
 		activity = activityReserve
 	}
 
@@ -1600,7 +1604,16 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 		seps = (len(cols) - 1) * 3
 	}
 
-	avail := frameWidth - leading - flags - activity - gap - seps
+	// avail is exactly the space the columns may occupy: the inner width less
+	// the marker column, the inter-column separators, and the trailing gutter
+	// (flags plus, where reserved, the activity preview). Deriving it this way
+	// — rather than subtracting loose constants — is what makes the row fill
+	// its width and the rule reach the rail.
+	gutter := flags
+	if activity > 0 {
+		gutter += activity
+	}
+	avail := frameWidth - leading - gutter - seps
 	if avail < 1 {
 		avail = 1
 	}
@@ -1619,19 +1632,20 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	}
 	cols = cols[:keep]
 
-	// Start every column at its natural width, capped.
+	// Start every column at its natural width, capped. The inter-column
+	// separators are accounted for separately (seps), so they are NOT added
+	// here — adding both double-counted them and left the row short.
 	out := make([]laidOutColumn, len(cols))
 	total := 0
 	textIdx := -1
 	for i, c := range cols {
 		w := naturalColumnWidth(c)
 		out[i] = laidOutColumn{column: c, width: w, align: alignFor(c.Kind)}
-		total += w + gap
+		total += w
 		if c.Kind == object.KindText {
 			textIdx = i
 		}
 	}
-	total -= gap // no trailing gap after the last column
 
 	// Too wide: shrink the text column first (it can spare width), then the
 	// widest remaining column, never below a per-column floor.
@@ -1668,10 +1682,16 @@ func (m *tuiModel) columnLayout(frameWidth int) []laidOutColumn {
 	}
 
 	// Room left over goes to the text column, so a wide terminal shows more
-	// prompt rather than a stretched status column.
-	if textIdx >= 0 {
+	// prompt rather than a stretched status column. When there is no text
+	// column the last column takes it, so the row always fills its width —
+	// an under-filled row leaves a dead gap before the right rail.
+	grow := textIdx
+	if grow < 0 {
+		grow = len(out) - 1
+	}
+	if grow >= 0 {
 		for total < avail {
-			out[textIdx].width++
+			out[grow].width++
 			total++
 		}
 	}
@@ -1702,6 +1722,18 @@ const (
 	// so the columns keep their room.
 	activityMinFrame = 90
 )
+
+// pageHasActivity reports whether any row on the current page has a running
+// activity preview to draw. The column layout uses it to decide whether to
+// reserve room for that preview, so a quiet page gets the width back.
+func (m *tuiModel) pageHasActivity() bool {
+	for _, row := range m.list.Rows {
+		if m.badges[row.ID].activity != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // columnsMinTotal is the total width a column set needs at its floors,
 // including the inter-column gaps. The layout uses it to decide how many
