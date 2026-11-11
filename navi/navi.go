@@ -100,7 +100,7 @@ type Navi struct {
 	// tokenizer is the declared token counter (WithTokenizer), shared by
 	// memory budgets, assembly truncation, and the agent's deferral notice so
 	// the three agree (ADR 0039 decision 3). Nil means the heuristic.
-	tokenizer llm.Tokenizer
+	tokenizer model.Tokenizer
 
 	// stmBudget overrides the per-scope short-term memory budgets
 	// (WithShortTermMemoryBudget), keyed by scope. A scope absent from the
@@ -271,7 +271,11 @@ func WithThoughtBudget(tokens int) Option {
 // deferral notice (ADR 0039 decision 3). All three must agree on how full a
 // thought is, which is why there is one counter rather than three estimates.
 // A navi that declares none gets the heuristic fallback.
-func WithTokenizer(tok llm.Tokenizer) Option {
+//
+// The parameter is model.Tokenizer — the public contract — rather than the
+// runtime's internal counter, so an out-of-repo navi can declare one
+// (model/tokenizer.TiktokenTokenizer, or its own).
+func WithTokenizer(tok model.Tokenizer) Option {
 	return func(n *Navi) {
 		if tok != nil {
 			n.tokenizer = tok
