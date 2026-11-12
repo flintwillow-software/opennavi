@@ -143,7 +143,8 @@ refs = sorted({n for _, e in entries for n in refs_of(e)})
 # it is obviously a draft.
 print(f"{version} — <one-line summary of this release>")
 print()
-print(f"{len(entries)} changes since {last_tag}.")
+n = len(entries)
+print(f"{n} change{'s' if n != 1 else ''} since {last_tag}.")
 print()
 
 MAX_PER_HEAD = 8
@@ -201,7 +202,7 @@ fi
 # the beginning.
 
 TODAY="$(date +%Y-%m-%d)"
-python3 scripts/changelog-cut.py "$NEXT" "$TODAY" "$CHANGELOG"
+python3 scripts/changelog-cut.py "${NEXT#v}" "$TODAY" "$CHANGELOG"
 
 ok "cut [Unreleased] into [$NEXT] in $CHANGELOG"
 
