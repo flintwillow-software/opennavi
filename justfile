@@ -85,6 +85,23 @@ test:
 test-race:
     go test -race -timeout 10m ./...
 
+# --- release ---------------------------------------------------------------
+
+# Cut an annotated SDK release tag from the CHANGELOG.
+#
+# Tags are DELIBERATE: this is a procedure, not a merge hook. It computes the
+# version from the `Semver:` hints in [Unreleased], drafts the tag message,
+# opens it in $EDITOR, cuts [Unreleased] into a versioned section, and tags.
+#
+#   just release            # compute, draft, edit, cut, tag, push
+#   just release --dry-run  # compute and draft only; change nothing
+release *FLAGS:
+    ./scripts/release.sh {{ FLAGS }}
+
+# Self-test the changelog cutter (the release tooling's only logic worth testing)
+release-test:
+    python3 scripts/changelog-cut.py --self-test
+
 # --- run (state under var/) ----------------------------------------------
 
 # Start the daemon with its database under var/

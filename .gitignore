@@ -16,3 +16,7 @@
 /navi.log
 /navi.health.json
 /state/
+
+# Python tooling artifacts (scripts/)
+__pycache__/
+*.pyc
