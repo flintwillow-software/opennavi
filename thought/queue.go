@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -86,9 +87,16 @@ type Queue struct {
 	// assemble is the creation-time context assembler (ADR 0013 decision
 	// 2), installed by the composition root via SetAssembler. The queue
 	// cannot assemble itself — the content is navi-specific (compiled
-	// skills, short-term memory) — so this is a seam, like Store. It is
-	// set before serving begins and read outside q.mu.
-	assemble func(*Thought) error
+	// skills, short-term memory) — so this is a seam, like Store.
+	//
+	// It is read outside q.mu (the assembler reads the navi's compiled
+	// skills and in-RAM memory, never the queue, so holding q.mu across it
+	// would be a lock-order trap). It is therefore guarded by its own
+	// atomic rather than q.mu: the reconcile loop reads it on its own
+	// goroutine, so "set before serving begins" is not by itself enough to
+	// make the read safe — the race detector found exactly that once
+	// adoption began assembling (NAVI-613 follow-up).
+	assemble atomic.Pointer[func(*Thought) error]
 
 	// steeringRouter delivers messages to a running thought's agent
 	// (running-path); invoked OUTSIDE q.mu — implementations
@@ -426,7 +434,20 @@ func (q *Queue) OnEvent(fn func(Event)) {
 // assembled is rejected at the door rather than mid-run. Set it before
 // serving begins; with no assembler, Enqueue schedules as before.
 func (q *Queue) SetAssembler(fn func(*Thought) error) {
-	q.assemble = fn
+	if fn == nil {
+		q.assemble.Store(nil)
+		return
+	}
+	q.assemble.Store(&fn)
+}
+
+// assembler returns the installed assembler, or nil. Safe to call from any
+// goroutine, including while SetAssembler runs.
+func (q *Queue) assembler() func(*Thought) error {
+	if p := q.assemble.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 func (q *Queue) Enqueue(t *Thought) error {
@@ -451,8 +472,8 @@ func (q *Queue) Enqueue(t *Thought) error {
 	// Context assembly at the door (ADR 0013 decision 2). Runs outside q.mu:
 	// the assembler reads the navi's compiled skills and in-RAM memory, never
 	// the queue.
-	if q.assemble != nil {
-		if err := q.assemble(t); err != nil {
+	if assemble := q.assembler(); assemble != nil {
+		if err := assemble(t); err != nil {
 			return fmt.Errorf("thought: enqueue %s: assemble: %w", t.ID, err)
 		}
 	}

@@ -113,6 +113,33 @@ func (q *Queue) reconcileOnce() {
 		return // transient store error — next tick retries
 	}
 
+	// Context assembly runs on the adoption path exactly as it does on
+	// Enqueue (ADR 0013 decision 2). A thought written by an external process
+	// — `navi enqueue -db`, the CLI mailbox — was never assembled by anyone,
+	// so without this it would run with NO assembled context: no personality,
+	// no skills, and no injected memory. The runner takes the transcript's
+	// system entry from the thought's Assembled field, so the visible symptom
+	// was a transcript that began at the user turn.
+	//
+	// It runs OUTSIDE q.mu, matching Enqueue and the assembler's own contract
+	// (it reads the navi's compiled skills and in-RAM memory, never the
+	// queue). A thought that cannot be assembled is skipped, not admitted
+	// unassembled: the next tick retries, so a transient assembler failure
+	// does not permanently strand work — and admitting it would be worse,
+	// because the run would be silently context-free.
+	if assemble := q.assembler(); assemble != nil {
+		ready := loaded[:0]
+		for _, t := range loaded {
+			if t.Assembled == "" {
+				if err := assemble(t); err != nil {
+					continue
+				}
+			}
+			ready = append(ready, t)
+		}
+		loaded = ready
+	}
+
 	q.mu.Lock()
 	var evts []Event
 	for _, t := range loaded {
