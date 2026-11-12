@@ -45,8 +45,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -f "$CHANGELOG" ]] || die "no $CHANGELOG (run from the repository root)"
 git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
+
+# Work from the repository root whatever the invocation directory, so the
+# relative paths below are correct. `just` runs recipes from the
+# justfile's directory, but a direct ./scripts/release.sh may not be.
+cd "$(git rev-parse --show-toplevel)"
+
+[[ -f "$CHANGELOG" ]] || die "no $CHANGELOG at the repository root"
+[[ -d cmd/navi-release ]] || die "cmd/navi-release is missing — is this an opennavi checkout?"
 
 # --- preconditions ---------------------------------------------------------
 
@@ -62,14 +69,26 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "$REMOTE/main" 2>/dev/null || 
     warn "local main differs from $REMOTE/main — the tag will name your local HEAD"
 fi
 
+# The text surgery helper (internal/release), built once.
+RELEASE_DIR="$(mktemp -d)"
+RELEASE_BIN="$RELEASE_DIR/navi-release"
+trap 'rm -rf "$RELEASE_DIR"' EXIT
+go build -o "$RELEASE_BIN" ./cmd/navi-release \
+    || die "could not build cmd/navi-release"
+
 # --- version ---------------------------------------------------------------
 
 LAST_TAG="$(git tag --sort=version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)"
 [[ -n "$LAST_TAG" ]] || die "no existing vX.Y.Z tag to increment from"
 
-HINTS="$(awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' "$CHANGELOG" \
-    | grep -o 'Semver: [a-z]*' | sed 's/Semver: //' | sort -u | tr '\n' ' ')"
-[[ -n "${HINTS//[[:space:]]/}" ]] || die "no 'Semver: patch|minor|major' hints in [Unreleased]"
+# `|| true` on the pipeline: under `set -o pipefail` an empty grep exits
+# non-zero, which would kill the script at `set -e` BEFORE the guard below could
+# explain why. The guard is the thing that should report an empty section.
+HINTS="$( { awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' "$CHANGELOG" \
+    | grep -o 'Semver: [a-z]*' | sed 's/Semver: //' | sort -u | tr '\n' ' ' ; } 2>/dev/null || true)"
+if [[ -z "${HINTS//[[:space:]]/}" ]]; then
+    die "no 'Semver: patch|minor|major' hints in [Unreleased] — nothing to release?"
+fi
 
 BUMP="patch"
 grep -qw minor <<<"$HINTS" && BUMP="minor"
@@ -97,73 +116,14 @@ git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null && die "$NEXT already exi
 # with counts, plus the issue reference list. The operator supplies the prose
 # summary in the editor, matching how every existing tag was written (see
 # `git tag -l --format='%(contents)' v0.4.1`).
+#
+# The text surgery lives in internal/release (Go, unit-tested under `go test`)
+# rather than in a heredoc here, so it is covered by the repo's existing gate.
 
 DRAFT="$(mktemp)"
-trap 'rm -f "$DRAFT"' EXIT
+trap 'rm -rf "$RELEASE_DIR"; rm -f "$DRAFT"' EXIT
 
-python3 - "$NEXT" "$LAST_TAG" > "$DRAFT" <<'PY'
-import re, sys
-from collections import OrderedDict
-
-version, last_tag = sys.argv[1], sys.argv[2]
-text = open("CHANGELOG.md").read()
-
-m = re.search(r'^## \[Unreleased\]\s*\n(.*?)(?=^## \[|\Z)', text, re.S | re.M)
-body = m.group(1) if m else ""
-
-# Collect (heading, entry) pairs, joining continuation lines.
-entries = []
-heading = "Changed"
-for raw in body.splitlines():
-    line = raw.rstrip()
-    if line.startswith("### "):
-        heading = line[4:].strip()
-    elif line.startswith("- "):
-        e = re.sub(r'\s*—\s*`Semver:\s*\w+`\s*$', '', line[2:])
-        entries.append([heading, e])
-    elif line.strip() and entries:
-        entries[-1][1] += " " + line.strip()
-
-def title_of(e):
-    m = re.match(r'\*\*(.+?)\*\*', e)
-    if m:
-        return m.group(1).rstrip('.')
-    return re.split(r'(?<=[.!?])\s', e)[0][:110]
-
-def refs_of(e):
-    return [int(n) for n in re.findall(r'NAVI-(\d+)', e)]
-
-by_head = OrderedDict()
-for h, e in entries:
-    by_head.setdefault(h, []).append(e)
-
-refs = sorted({n for _, e in entries for n in refs_of(e)})
-
-# Subject: the operator edits this. Seed it with the version and the counts so
-# it is obviously a draft.
-print(f"{version} — <one-line summary of this release>")
-print()
-n = len(entries)
-print(f"{n} change{'s' if n != 1 else ''} since {last_tag}.")
-print()
-
-MAX_PER_HEAD = 8
-for h, es in by_head.items():
-    print(f"{h}:")
-    for e in es[:MAX_PER_HEAD]:
-        print(f"  - {title_of(e)}")
-    if len(es) > MAX_PER_HEAD:
-        print(f"  - … and {len(es) - MAX_PER_HEAD} more")
-    print()
-
-if refs:
-    # Bounded so the Refs line stays readable; the full list is in the changelog.
-    shown = refs if len(refs) <= 30 else refs[:30]
-    line = ", ".join(f"NAVI-{n}" for n in shown)
-    if len(refs) > 30:
-        line += f", … (+{len(refs) - 30} more)"
-    print(f"Refs {line}")
-PY
+"$RELEASE_BIN" draft "$CHANGELOG" "$LAST_TAG" "${NEXT#v}" > "$DRAFT"
 
 echo
 echo "────────────── draft tag message (edit in \$EDITOR) ──────────────"
@@ -202,7 +162,7 @@ fi
 # the beginning.
 
 TODAY="$(date +%Y-%m-%d)"
-python3 scripts/changelog-cut.py "${NEXT#v}" "$TODAY" "$CHANGELOG"
+"$RELEASE_BIN" cut "$CHANGELOG" "${NEXT#v}" "$TODAY"
 
 ok "cut [Unreleased] into [$NEXT] in $CHANGELOG"
 

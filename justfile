@@ -98,9 +98,9 @@ test-race:
 release *FLAGS:
     ./scripts/release.sh {{ FLAGS }}
 
-# Self-test the changelog cutter (the release tooling's only logic worth testing)
+# Test the release tooling's text surgery (also covered by `just test`)
 release-test:
-    python3 scripts/changelog-cut.py --self-test
+    go test ./internal/release/ ./cmd/navi-release/
 
 # --- run (state under var/) ----------------------------------------------
 
