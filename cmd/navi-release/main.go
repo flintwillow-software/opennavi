@@ -10,6 +10,7 @@
 //	navi-release next   <changelog> <last-tag>            # print the next version
 //	navi-release draft  <changelog> <last-tag> <version>  # print the tag-message draft
 //	navi-release cut    <changelog> <version> <date>      # rewrite in place
+//	navi-release draft-section <changelog> <version>      # draft from a cut section
 //
 // `next` prints "<version> <bump>" (e.g. "0.6.0 minor").
 package main
@@ -30,7 +31,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: navi-release next|draft|cut ...")
+		return fmt.Errorf("usage: navi-release next|draft|draft-section|cut ...")
 	}
 
 	switch args[0] {
@@ -68,6 +69,24 @@ func run(args []string) error {
 		// 8 titles per section and 30 refs keep the draft readable; the full
 		// detail is in the changelog either way.
 		fmt.Print(release.Draft(args[3], args[2], entries, 8, 30))
+		return nil
+
+	case "draft-section":
+		// Draft from an already-cut versioned section. This is what the TAGGING
+		// step uses: after the cut, the release's own section is the committed
+		// record of what the tag names, so the message cannot drift from it.
+		if len(args) != 3 {
+			return fmt.Errorf("usage: navi-release draft-section <changelog> <version>")
+		}
+		changelog, err := read(args[1])
+		if err != nil {
+			return err
+		}
+		entries, err := release.Versioned(changelog, args[2])
+		if err != nil {
+			return err
+		}
+		fmt.Print(release.Draft(args[2], "the previous release", entries, 8, 30))
 		return nil
 
 	case "cut":

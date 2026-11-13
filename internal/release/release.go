@@ -31,13 +31,20 @@ var anyH2Heading = regexp.MustCompile(`^## `)
 // It is a line scan rather than one regexp because Go's regexp is RE2, which
 // has no lookahead — the natural `(?=^## )` boundary is not expressible.
 func sectionBody(changelog string) (body string, start, end int, ok bool) {
+	return namedSectionBody(changelog, "[Unreleased]")
+}
+
+// namedSectionBody returns the body of the `## <heading>` section whose
+// heading contains headingMark, plus the byte offsets of the whole section
+// (heading included).
+func namedSectionBody(changelog, headingMark string) (body string, start, end int, ok bool) {
 	lines := strings.SplitAfter(changelog, "\n")
 
 	offset := 0
 	headingEnd := -1
 	for _, line := range lines {
 		if headingEnd < 0 {
-			if unreleasedHeading.MatchString(line) {
+			if strings.HasPrefix(line, "## ") && strings.Contains(line, headingMark) {
 				headingEnd = offset + len(line)
 				start = offset
 			}
@@ -49,7 +56,7 @@ func sectionBody(changelog string) (body string, start, end int, ok bool) {
 	if headingEnd < 0 {
 		return "", 0, 0, false
 	}
-	// Unreleased runs to the end of the document.
+	// The section runs to the end of the document.
 	return changelog[headingEnd:], start, len(changelog), true
 }
 
@@ -82,6 +89,19 @@ func Unreleased(changelog string) ([]Entry, error) {
 	body, _, _, ok := sectionBody(changelog)
 	if !ok {
 		return nil, fmt.Errorf("no '## [Unreleased]' section found")
+	}
+	return parseEntries(body), nil
+}
+
+// Versioned returns the entries in the CHANGELOG's `## [<version>]` section.
+//
+// It is what the tagging step drafts from: after the cut, the release's own
+// section is the committed record of what the tag names, so a message built
+// from it cannot drift from the changelog.
+func Versioned(changelog, version string) ([]Entry, error) {
+	body, _, _, ok := namedSectionBody(changelog, "["+version+"]")
+	if !ok {
+		return nil, fmt.Errorf("no '## [%s]' section found", version)
 	}
 	return parseEntries(body), nil
 }

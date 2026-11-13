@@ -87,16 +87,28 @@ test-race:
 
 # --- release ---------------------------------------------------------------
 
-# Cut an annotated SDK release tag from the CHANGELOG.
+# Cut the CHANGELOG for a release: compute the version, draft the tag message,
+# and open a PR that cuts [Unreleased] into a versioned section.
 #
 # Tags are DELIBERATE: this is a procedure, not a merge hook. It computes the
-# version from the `Semver:` hints in [Unreleased], drafts the tag message,
-# opens it in $EDITOR, cuts [Unreleased] into a versioned section, and tags.
+# version from the `Semver:` hints in [Unreleased] (highest wins) and does the
+# cut on a BRANCH — `main` is protected, so the cut goes through review like
+# any other change. The tag is a separate step, applied after the merge, so it
+# names a commit that is really on main.
 #
-#   just release            # compute, draft, edit, cut, tag, push
+#   just release            # cut on a branch, push, print the PR command
 #   just release --dry-run  # compute and draft only; change nothing
 release *FLAGS:
     ./scripts/release.sh {{ FLAGS }}
+
+# Tag an already-merged changelog cut (the second half of `just release`).
+#
+# Drafts the tag message from the VERSIONED section on main, so the message and
+# the committed changelog cannot disagree.
+#
+#   just release-tag v0.6.0
+release-tag *FLAGS:
+    ./scripts/release-tag.sh {{ FLAGS }}
 
 # Test the release tooling's text surgery (also covered by `just test`)
 release-test:
