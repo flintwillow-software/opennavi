@@ -155,27 +155,44 @@ if [[ "$ASSUME_YES" != true ]]; then
     [[ "$reply" =~ ^[Yy]$ ]] || { info "aborted."; exit 0; }
 fi
 
-# --- cut the changelog section --------------------------------------------
+# --- cut the changelog on a branch ----------------------------------------
 #
-# [Unreleased] is emptied of its entries and a versioned section is inserted
-# below it. Without this, every future release would re-list everything since
-# the beginning.
+# The cut is an ordinary change, and `main` is protected (4 required checks),
+# so it goes through a branch and a pull request like everything else — this
+# script does NOT commit to main. That was the first thing the tool got wrong:
+# it committed the cut straight to main, the push was rejected, and the TAG had
+# already gone through — leaving a published tag pointing at a commit that was
+# not on main. The tag is therefore the LAST step, and a separate command.
+#
+#   just release           cut on a branch, push, print the PR command
+#   just release-tag vX.Y.Z  tag the merged main, using the versioned section
 
 TODAY="$(date +%Y-%m-%d)"
+BRANCH="release/${NEXT}"
+
+info "cutting [Unreleased] into [${NEXT}] on $BRANCH"
+
+git checkout -q -b "$BRANCH"
 "$RELEASE_BIN" cut "$CHANGELOG" "${NEXT#v}" "$TODAY"
 
-ok "cut [Unreleased] into [$NEXT] in $CHANGELOG"
-
 git add "$CHANGELOG"
-git commit -m "docs(changelog): cut $NEXT"
-ok "committed the changelog cut"
+git commit -q -m "docs(changelog): cut ${NEXT}"
+ok "committed the changelog cut on $BRANCH"
 
-git tag -a "$NEXT" -F "$DRAFT"
-ok "tagged $NEXT"
-
-git push "$REMOTE" main "$NEXT"
-ok "pushed main and $NEXT to $REMOTE"
+git push -q -u "$REMOTE" "$BRANCH"
+ok "pushed $BRANCH"
 
 echo
-info "CI runs on the tag (ci.yml triggers tags: ['v*'])."
-info "Next: bump the navi's SDK pin — see the release-navi skill."
+info "next: open the PR, let the four checks pass, and merge it:"
+echo
+echo "    gh pr create --base main --head $BRANCH \\"
+echo "        --title \"docs(changelog): cut ${NEXT}\" \\"
+echo "        --body \"Changelog cut for ${NEXT}. Semver: minor\""
+echo
+info "then, once it is MERGED:"
+echo
+echo "    just release-tag ${NEXT}"
+echo
+warn "the tag message written above is NOT reused by release-tag — that step"
+warn "drafts from the versioned section on main, so the message and the"
+warn "committed changelog cannot disagree."
