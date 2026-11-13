@@ -93,6 +93,31 @@ jobs:
             const baseSet = new Set(baseLines);
             const newLines = headLines.filter(l => !baseSet.has(l));
 
+            // A RELEASE CUT is exempt, and must be: cutting a release moves
+            // every entry OUT of [Unreleased] into a versioned section, so the
+            // rule above can never be satisfied by the very PR that performs
+            // it. `just release` produces exactly such a PR.
+            //
+            // The cut is recognised by what it does rather than by a marker:
+            // the head must contain a `## [x.y.z]` versioned section that the
+            // base did not. A new versioned section IS the changelog change.
+            function versionedSections(content) {
+              const out = new Set();
+              for (const line of content.split('\n')) {
+                const m = line.match(/^##\s+\[v?(\d+\.\d+\.\d+)\]/i);
+                if (m) out.add(m[1]);
+              }
+              return out;
+            }
+
+            const baseVersions = versionedSections(baseContent);
+            const newVersions = [...versionedSections(headContent)].filter(v => !baseVersions.has(v));
+
+            if (newVersions.length > 0) {
+              core.info(`release cut: new versioned section(s) ${JSON.stringify(newVersions)}`);
+              return;
+            }
+
             if (newLines.length === 0) {
               core.setFailed(
                 'CHANGELOG.md was not modified or no new entry was added under the `## [Unreleased]` section.\n' +
