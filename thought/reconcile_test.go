@@ -337,3 +337,95 @@ func TestReconcileEmitsOutsideLock(t *testing.T) {
 		t.Fatal("reconcile deadlocked — event emitted under q.mu")
 	}
 }
+
+// TestReconcileAssemblesAdoptedThoughts: a thought adopted from an external
+// writer gets the creation-time context assembly, exactly as an in-process
+// Enqueue does (ADR 0013 decision 2).
+//
+// Without this, an externally enqueued thought runs with NO assembled context:
+// no personality, no skills, and no injected memory. The transcript then has no
+// system entry at all, because the runner takes that entry from the thought's
+// Assembled field (navi/runner.go, persistConversation).
+//
+// Found on navi-dock: two thoughts enqueued via `navi enqueue -db` completed
+// with `assembled` empty and a two-entry transcript (user, assistant) where a
+// real run has the system entry first.
+func TestReconcileAssemblesAdoptedThoughts(t *testing.T) {
+	st := newExtStore()
+	q, stop := reconcileQueue(t, Config{MaxConcurrent: 2}, st)
+	defer stop()
+
+	// The navi installs its assembler on the queue; the queue must run it on
+	// EVERY path that admits a thought, not only Enqueue.
+	var assembled []string
+	q.SetAssembler(func(t *Thought) error {
+		t.Assembled = "you are a navi"
+		assembled = append(assembled, t.ID)
+		return nil
+	})
+
+	time.Sleep(60 * time.Millisecond) // let the startup pass settle
+	extWrite(st, &Thought{ID: "ext-assemble", Prompt: "from CLI", Priority: 4, Status: ThoughtPending})
+
+	waitReconcile(t, 2*time.Second, func() bool {
+		for _, tt := range q.GetThoughts() {
+			if tt.ID == "ext-assemble" && tt.Status == ThoughtPending {
+				return true
+			}
+		}
+		return false
+	}, "external thought adoption")
+
+	got, err := q.GetThought("ext-assemble")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Assembled != "you are a navi" {
+		t.Fatalf("adopted thought has no assembled context: %q (assembler ran for %v)",
+			got.Assembled, assembled)
+	}
+}
+
+// TestReconcileDoesNotReassembleAdoptedThoughts: a thought that already carries
+// assembled context is adopted as-is. Assembly is fixed at enqueue (ADR 0013
+// decision 2), so re-running the assembler on adoption would change a thought's
+// context after the fact — and on restart it would let today's memory leak into
+// yesterday's queued work.
+func TestReconcileDoesNotReassembleAdoptedThoughts(t *testing.T) {
+	st := newExtStore()
+	q, stop := reconcileQueue(t, Config{MaxConcurrent: 2}, st)
+	defer stop()
+
+	calls := 0
+	q.SetAssembler(func(t *Thought) error {
+		calls++
+		t.Assembled = "REASSEMBLED"
+		return nil
+	})
+
+	time.Sleep(60 * time.Millisecond)
+	extWrite(st, &Thought{
+		ID: "ext-fixed", Prompt: "from CLI", Priority: 4, Status: ThoughtPending,
+		Assembled: "fixed at enqueue",
+	})
+
+	waitReconcile(t, 2*time.Second, func() bool {
+		for _, tt := range q.GetThoughts() {
+			if tt.ID == "ext-fixed" {
+				return true
+			}
+		}
+		return false
+	}, "adoption of an already-assembled thought")
+
+	got, err := q.GetThought("ext-fixed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Assembled != "fixed at enqueue" {
+		t.Fatalf("assembled context was rewritten on adoption: %q", got.Assembled)
+	}
+	if calls != 0 {
+		t.Fatalf("assembler ran %d times for an already-assembled thought, want 0", calls)
+	}
+}
