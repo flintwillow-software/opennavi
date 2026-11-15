@@ -58,6 +58,34 @@ just enqueue    # enqueue a thought against var/data/navi.db
 just clean      # remove var/
 ```
 
+## Releasing
+
+Cutting a release is a **procedure, not a merge hook** — every merge to `main`
+does not publish one. It is two commands, because the changelog cut goes
+through a pull request and the tag must name a commit that is really on `main`:
+
+```bash
+just release              # cuts [Unreleased] on release/vX.Y.Z and pushes it,
+                          # then prints the gh pr create command
+# open the PR, let the four checks pass, merge it
+just release-tag v0.6.0   # tags the merged main
+```
+
+Both prompt for the tag message in `$EDITOR`: the summary is a **human**
+artifact (that is what comparable projects converge on), while the version and
+the changelog cut are mechanical. The version comes from the `Semver:` hints in
+`[Unreleased]` — highest wins — so **every PR must add an entry there**; the
+`Verify changelog entry` check enforces it. A release cut is exempt, because it
+moves those entries into a versioned section.
+
+> **Never tag before the merge.** An earlier version of this tooling committed
+the cut to `main` and tagged first: branch protection rejected the push but the
+tag had already gone through, leaving a published tag pointing at a commit that
+was not on `main`. `just release-tag` refuses unless `HEAD == origin/main`.
+
+Shipping the release to a running navi is the rest of the train — see the
+`release-navi` skill in the engineering workspace.
+
 Conventions agents must respect:
 
 - **`var/` is the only artifact/runtime directory** (`var/bin` for binaries,
