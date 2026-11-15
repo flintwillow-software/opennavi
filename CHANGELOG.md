@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **The release procedure is documented in `AGENTS.md`** (NAVI-608). The repo gained `just release` and `just release-tag`, but its `AGENTS.md` listed only `build`/`ci`/`test` — so an agent working here would not know the release path exists, and this is where a release starts. The section records the two-step flow and why it is two steps (the changelog cut goes through a PR, and the tag must name a commit that is really on `main`), why the tag cannot come first (an earlier version committed the cut to `main` and tagged first — branch protection rejected the push but the tag had already gone through, publishing a tag for an unmerged commit), and the `Semver:` hint convention the check enforces. — `Semver: patch`
+
 ## [0.6.0] - 2026-11-13
 
 ### Fixed
