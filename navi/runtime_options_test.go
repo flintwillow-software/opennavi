@@ -225,3 +225,78 @@ func TestWithEndpointAppliesOverride(t *testing.T) {
 		t.Fatal("empty endpoint must be a no-op")
 	}
 }
+
+// TestQueueConfigFromRuntimeFile pins NAVI-605: a `thought_queue` block in
+// the runtime config file reaches the queue a navi built on this package
+// runs. Before the fix the field was documented as a deployment override
+// but never read — assembly built the queue in New, before the file was
+// loaded — so a navi silently ran the framework default of 2.
+func TestQueueConfigFromRuntimeFile(t *testing.T) {
+	clearProviderEnv(t)
+	path := writeConfig(t, "thought_queue:\n  max_concurrent: 5\n  priority_slots: 2\n")
+
+	n := testNavi(t, WithRuntimeConfig(path))
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+
+	slots := n.Thoughts.Slots()
+	if len(slots) != 5 {
+		t.Fatalf("max_concurrent from config not applied: %d slots, want 5", len(slots))
+	}
+	reserved := 0
+	for _, s := range slots {
+		if s.Reserved {
+			reserved++
+		}
+	}
+	if reserved != 2 {
+		t.Fatalf("priority_slots from config not applied: %d reserved, want 2", reserved)
+	}
+}
+
+// TestRuntimeFileOverridesExplicitQueueConfig pins the precedence for the
+// queue: the config file is the deployment layer and wins over the
+// build-time WithQueueConfig, matching env > config > build-time elsewhere
+// in assembly. A partial block changes only the fields it names.
+func TestRuntimeFileOverridesExplicitQueueConfig(t *testing.T) {
+	clearProviderEnv(t)
+	path := writeConfig(t, "thought_queue:\n  max_concurrent: 6\n")
+
+	n := testNavi(t,
+		WithRuntimeConfig(path),
+		WithQueueConfig(thought.Config{MaxConcurrent: 3, PrioritySlots: 1, SlotExhaustion: thought.PolicyQueue}),
+	)
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+
+	slots := n.Thoughts.Slots()
+	if len(slots) != 6 {
+		t.Fatalf("config file must win over WithQueueConfig: %d slots, want 6", len(slots))
+	}
+	reserved := 0
+	for _, s := range slots {
+		if s.Reserved {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Fatalf("a partial block must keep the unset priority_slots: %d reserved, want 1", reserved)
+	}
+}
+
+// TestNoQueueConfigLeavesDefault pins the no-op path: a navi whose runtime
+// file declares no thought_queue keeps the queue New built.
+func TestNoQueueConfigLeavesDefault(t *testing.T) {
+	clearProviderEnv(t)
+	path := writeConfig(t, "provider:\n  primary: ollama\n")
+
+	n := testNavi(t, WithRuntimeConfig(path))
+	if err := n.assemble(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(n.Thoughts.Slots()); got != 2 {
+		t.Fatalf("unconfigured queue changed: %d slots, want the default 2", got)
+	}
+}

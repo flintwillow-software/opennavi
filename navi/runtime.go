@@ -145,6 +145,19 @@ func (n *Navi) assemble() error {
 		return err
 	}
 
+	// Apply the deployment's thought_queue override (NAVI-605). The queue
+	// is constructed in New, before the runtime config file is read, so a
+	// `thought_queue` block was previously a documented surface with no
+	// effect: a navi built on this package silently ran the framework
+	// default. Rebuild the queue with the file's values now that they are
+	// known — after the datastore is bound so the new queue recovers the
+	// same persisted work. An explicit WithQueueConfig is the build-time
+	// layer and a non-zero file value overrides it, matching the
+	// env > config > build precedence the rest of assembly uses.
+	if err := n.applyQueueConfig(file); err != nil {
+		return err
+	}
+
 	// Short-term memory (when declared) needs the bound datastore, and adds
 	// its write tool to the catalog before the registry is built.
 	if err := n.assembleMemory(); err != nil {
@@ -290,6 +303,62 @@ func (n *Navi) assembleDatastore(file *config.RuntimeConfig) error {
 		// The queue was built before the datastore resolved; adopt any
 		// thoughts persisted in a previous process now that its store is
 		// bound. Idempotent.
+		n.Thoughts.Recover()
+	}
+	return nil
+}
+
+// applyQueueConfig rebuilds the thought queue with the runtime config
+// file's thought_queue values, which New could not see because the file is
+// read at assembly. It is a no-op when the file declares no thought_queue,
+// so an unconfigured navi keeps the queue New built (framework defaults or
+// an explicit WithQueueConfig).
+//
+// The queue has no reconfigure seam, and rebuilding is safe here because
+// assembly runs before serving: the queue is empty apart from recovery,
+// and the store is a stable handle, so the replacement sees the same
+// persisted thoughts. Recover is re-run so the rebuilt queue adopts them.
+func (n *Navi) applyQueueConfig(file *config.RuntimeConfig) error {
+	if file == nil || file.ThoughtQueue == nil {
+		return nil
+	}
+	tq := file.ThoughtQueue
+	if tq.MaxConcurrent == 0 && tq.PrioritySlots == 0 && tq.SlotExhaustion == "" {
+		return nil
+	}
+
+	// Start from what New built (the framework default or the author's
+	// WithQueueConfig) and apply only the fields the file names, so a
+	// partial block changes only what it states.
+	cfg := thought.Config{
+		MaxConcurrent:     2,
+		ReconcileInterval: -1,
+		FlushInterval:     0,
+		SlotExhaustion:    thought.PolicyQueue,
+	}
+	if n.queueConfig != nil {
+		cfg = *n.queueConfig
+	}
+	if tq.MaxConcurrent > 0 {
+		cfg.MaxConcurrent = tq.MaxConcurrent
+	}
+	if tq.PrioritySlots > 0 {
+		cfg.PrioritySlots = tq.PrioritySlots
+	}
+	if tq.SlotExhaustion != "" {
+		cfg.SlotExhaustion = thought.SlotExhaustionPolicy(tq.SlotExhaustion)
+	}
+
+	q, err := thought.NewQueue(cfg, n.queueStore)
+	if err != nil {
+		return fmt.Errorf("navi: thought queue (runtime config): %w", err)
+	}
+	q.SetAssembler(n.assembleThought)
+	n.Thoughts = q
+
+	// The datastore is bound by now, so adopt persisted work into the
+	// rebuilt queue (idempotent, as in assembleDatastore).
+	if n.Datastores.handle.Bound() {
 		n.Thoughts.Recover()
 	}
 	return nil
