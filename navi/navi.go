@@ -85,8 +85,12 @@ type Navi struct {
 
 	// thoughtStore / queueConfig configure the thought system; the
 	// defaults (memory store, off reconcile/flush) suit tests, while a
-	// durable navi supplies a sqlite store and enables both.
+	// durable navi supplies a sqlite store and enables both. queueStore is
+	// the resolved store the queue was built with, kept so assembly can
+	// rebuild the queue against it for a runtime thought_queue override
+	// (NAVI-605).
 	thoughtStore thought.Store
+	queueStore   thought.Store
 	queueConfig  *thought.Config
 
 	// datastoreFlushInterval tunes the datastore's RAM-first flush cadence
@@ -461,6 +465,9 @@ func New(name string, opts ...Option) *Navi {
 		// memory; assembly re-runs recovery once the datastore resolves.
 		queueStore = newDatastoreThoughtStore(n.Datastores.handle)
 	}
+	// Remember the store so assembly can rebuild the queue against it when
+	// the runtime config file names a thought_queue block (NAVI-605).
+	n.queueStore = queueStore
 	q, err := thought.NewQueue(cfg, queueStore)
 	if err != nil {
 		n.initErr = fmt.Errorf("navi: thought queue: %w", err)
