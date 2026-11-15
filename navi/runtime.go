@@ -76,6 +76,13 @@ func (n *Navi) assemble() error {
 		file = &rc
 	}
 
+	// The navi's own identity (ADR 0031 decision 2), when declared. Loaded
+	// here so a malformed key fails the run before anything serves, and
+	// generated on first run when the path does not exist.
+	if err := n.assembleIdentity(); err != nil {
+		return err
+	}
+
 	sel, err := n.resolveDefault(file)
 	if err != nil {
 		return err

@@ -123,6 +123,12 @@ type Navi struct {
 	webhookAddr string
 	webhooks    *connector.Router
 
+	// identityPath is where the navi's own Ed25519 keypair lives
+	// (WithIdentity, ADR 0031 decision 2); empty = no identity, exactly as
+	// before this existed. identity is resolved at assembly.
+	identityPath string
+	identity     *Identity
+
 	// shortTermMemory records the WithShortTermMemory declaration.
 	shortTermMemory bool
 	// longMemory is the searched long-term memory tier (ADR 0037 decision 2),
