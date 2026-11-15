@@ -42,6 +42,11 @@ type keyMap struct {
 	New    key.Binding
 	Attach key.Binding
 
+	// The queue page's filter and sort (NAVI-592, ADR 0038 decision 4).
+	Filter      key.Binding
+	Sort        key.Binding
+	ClearFilter key.Binding
+
 	// Actions on the focused object.
 	Pause   key.Binding
 	Resume  key.Binding
@@ -88,6 +93,10 @@ func defaultKeyMap() keyMap {
 		Types:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "type")),
 		New:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
 		Attach: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attach")),
+
+		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Sort:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sort")),
+		ClearFilter: key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "clear filter")),
 
 		Pause:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "pause")),
 		Resume:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resume")),
@@ -167,7 +176,7 @@ type listKeys struct{ km keyMap }
 
 func (l listKeys) ShortHelp() []key.Binding {
 	return []key.Binding{
-		l.km.Up, l.km.Open, l.km.New, l.km.Attach, l.km.RisePri,
+		l.km.Up, l.km.Open, l.km.Filter, l.km.Sort, l.km.New,
 		l.km.Pause, l.km.Cancel, l.km.Home, l.km.Help,
 	}
 }
@@ -175,6 +184,7 @@ func (l listKeys) ShortHelp() []key.Binding {
 func (l listKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{l.km.Up, l.km.Down, l.km.Open, l.km.Types, l.km.New, l.km.Attach},
+		{l.km.Filter, l.km.Sort, l.km.ClearFilter},
 		{l.km.Pause, l.km.Resume, l.km.Cancel, l.km.Retry, l.km.RisePri, l.km.DropPri},
 		{l.km.Actions, l.km.Home, l.km.Help, l.km.Debug, l.km.Quit},
 	}
@@ -223,6 +233,22 @@ func (m menuKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{{m.km.Actions, m.km.Back, m.km.Help, m.km.Quit}}
 }
 
+// filterKeys is the keymap while the filter bar owns the keyboard. It
+// advertises the bar's own two keys rather than the list's, so the footer does
+// not offer a key the bar would swallow as text (NAVI-592).
+type filterKeys struct{ km keyMap }
+
+func (f filterKeys) ShortHelp() []key.Binding {
+	return []key.Binding{f.km.Submit, f.km.CancelInput, f.km.ClearFilter}
+}
+
+func (f filterKeys) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{f.km.Submit, f.km.CancelInput, f.km.ClearFilter},
+		{f.km.Quit},
+	}
+}
+
 // helpKeys is the keymap while the full-screen help overlay is open.
 type helpKeys struct{ km keyMap }
 
@@ -245,6 +271,9 @@ func (h helpKeys) FullHelp() [][]key.Binding {
 func (m *tuiModel) keyMapFor() help.KeyMap {
 	if m.menuOpen {
 		return menuKeys{m.keys}
+	}
+	if m.filtering {
+		return filterKeys{m.keys}
 	}
 	switch m.mode {
 	case ModeHome, ModeLive:

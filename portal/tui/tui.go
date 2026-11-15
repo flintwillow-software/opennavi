@@ -362,6 +362,20 @@ type tuiModel struct {
 	// the navi, so it belongs behind a toggle rather than in every screen's
 	// chrome.
 	debug bool
+
+	// filter is the queue page's active filter (NAVI-592, ADR 0038
+	// decision 4). Its zero value is "no filter"; it is translated to the
+	// surface's object.Query.Filter in refreshList, so filtering is the
+	// surface's job and the TUI only decides what to ask for.
+	filter queueFilter
+	// sortBy is the queue page's ordering. The zero value is the surface's
+	// own order (newest first), so an untouched queue is unchanged.
+	sortBy sortKey
+	// filtering is true while the `/` filter bar owns the keyboard, so a
+	// printable rune edits the filter text rather than acting on a row.
+	filtering bool
+	// filterInput is the buffer the filter bar edits before it is applied.
+	filterInput string
 }
 
 // NewModel builds the model over a transport.
@@ -447,7 +461,11 @@ func (m *tuiModel) refreshList() {
 	if !ok || m.objects == nil {
 		return
 	}
-	objs, next, err := m.objects.List(t.Name, object.Query{Limit: listPage})
+	// The filter goes to the surface (equality and $in, applied before
+	// paging so a filtered page stays full — ADR 0028). The two axes the
+	// surface's Filter cannot express (a priority range and a prompt
+	// substring) are applied here, after the page is read.
+	objs, next, err := m.objects.List(t.Name, m.filter.query(listPage))
 	if err != nil {
 		// A failed read clears the page. Keeping the previous type's rows on
 		// screen under the new type's title is the worst of both: the reader
@@ -458,10 +476,20 @@ func (m *tuiModel) refreshList() {
 		m.status = "list " + t.Name + ": " + err.Error()
 		return
 	}
+	objs = m.applyClientFilters(objs)
+	objs = sortRows(objs, m.sortBy)
 	m.list = view.ListOf(t, objs, next)
 	m.items = make(map[string]object.Object, len(objs))
 	for _, o := range objs {
 		m.items[o.ID] = o
+	}
+	// The overlay is keyed by object id and outlives the page, so a row the
+	// filter removed must not keep a stale badge. Prune to what is on screen:
+	// a filtered-out thought's live status is not this page's to show.
+	for id := range m.badges {
+		if _, on := m.items[id]; !on {
+			delete(m.badges, id)
+		}
 	}
 	if m.sel >= len(m.list.Rows) {
 		m.sel = len(m.list.Rows) - 1
@@ -470,6 +498,46 @@ func (m *tuiModel) refreshList() {
 		m.sel = 0
 	}
 	m.refreshBlocked()
+}
+
+// applyFilterInput commits the filter bar's buffer: it parses the text into a
+// filter, reports a parse error without applying it, and re-reads the page so
+// the surface does the filtering (NAVI-592).
+func (m *tuiModel) applyFilterInput() {
+	f, errMsg := parseFilter(m.filterInput)
+	if errMsg != "" {
+		m.status = "filter: " + errMsg
+		return
+	}
+	m.filter = f
+	m.sel = 0
+	m.refreshList()
+	if m.filter.active() {
+		m.status = "filtered: " + m.filter.describe()
+	} else {
+		m.status = "filter cleared"
+	}
+}
+
+// applyClientFilters drops objects the surface's Filter could not exclude:
+// the priority range and the prompt substring (see filter.go for why those two
+// are client-side). A row arriving mid-filter is evaluated here, so it is
+// subject to the active filter the same way a served page is.
+func (m *tuiModel) applyClientFilters(objs []object.Object) []object.Object {
+	if m.filter.priorityMin == 0 && m.filter.priorityMax == 0 && strings.TrimSpace(m.filter.text) == "" {
+		return objs
+	}
+	out := make([]object.Object, 0, len(objs))
+	for _, o := range objs {
+		if !m.filter.matchesPriority(intField(o.Fields["priority"])) {
+			continue
+		}
+		if !m.filter.matchesText(stringField(o, "prompt")) {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // Init seeds the first screen from the surface. The feed is driven by the
@@ -1033,6 +1101,36 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 		m.helpOpen = false
 		return false
 	}
+
+	// The filter bar owns the keyboard while it is open (NAVI-592): a
+	// printable rune edits the filter text, and only explicit keys act. This
+	// is the same rule the input follows — while a text field has focus, a
+	// command letter is a character.
+	if m.filtering {
+		switch k.String() {
+		case "ctrl+c":
+			return true
+		case "esc", "escape":
+			// Abandon the edit: restore the text the bar opened with, so esc
+			// is a true cancel rather than an implicit apply.
+			m.filterInput = m.filter.text
+			m.filtering = false
+		case "enter":
+			m.applyFilterInput()
+			m.filtering = false
+		case "backspace":
+			if r := []rune(m.filterInput); len(r) > 0 {
+				m.filterInput = string(r[:len(r)-1])
+			}
+		case "up", "down", "left", "right", "tab":
+			// No cursor movement in the bar yet.
+		default:
+			if len(k.Runes) > 0 {
+				m.filterInput += string(k.Runes)
+			}
+		}
+		return false
+	}
 	// `?` opens the overlay — but NOT while the steer input has focus, because
 	// `?` is a character people type ("does this work?"), and swallowing it
 	// would make the input unable to express a question. This is the same rule
@@ -1131,6 +1229,23 @@ func (m *tuiModel) key(k tea.KeyMsg) bool {
 			m.detail = nil
 			m.refreshList()
 			m.status = "type: " + m.typeLabel(m.typeIdx)
+		}
+	case matchesAny(k, m.keys.Filter) && m.mode == ModeList:
+		// `/` opens the filter bar seeded with the current text, so an
+		// existing filter is editable rather than only replaceable.
+		m.filtering = true
+		m.filterInput = m.filter.text
+	case matchesAny(k, m.keys.Sort) && m.mode == ModeList:
+		m.sortBy = nextSort(m.sortBy)
+		m.refreshList()
+		m.status = "sort: " + sortLabel(m.sortBy)
+	case matchesAny(k, m.keys.ClearFilter) && m.mode == ModeList:
+		if m.filter.active() {
+			m.filter.clear()
+			m.refreshList()
+			m.status = "filter cleared"
+		} else {
+			m.status = "no filter to clear"
 		}
 	case matchesAny(k, m.keys.New) && m.mode == ModeList:
 		m.enqueue = true
@@ -1303,6 +1418,12 @@ func (m *tuiModel) conversationKey(k tea.KeyMsg) bool {
 // the ONE predicate the dispatch consults for that rule, so the help key, the
 // action letters, and any future printable binding cannot disagree about it.
 func (m *tuiModel) inputOwnsKeyboard() bool {
+	// The filter bar is a text field too (NAVI-592): while it is open a
+	// printable rune is filter text, so `?` must type a question mark rather
+	// than open help — the same rule the steer input follows.
+	if m.filtering {
+		return true
+	}
 	if m.mode == ModeInput {
 		return true
 	}
@@ -1852,7 +1973,22 @@ func (m *tuiModel) panelLabel() string {
 	case ModeInput:
 		return "input"
 	}
-	return m.typeLabel(m.typeIdx)
+	// The list screen's title carries the queue page's own state (NAVI-592):
+	// an active filter and the sort key are visible where the reader is
+	// looking, so a filter that hides rows is never silent. This is the
+	// visible half of the "an active filter must be visible" contract.
+	label := m.typeLabel(m.typeIdx)
+	var notes []string
+	if m.filter.active() {
+		notes = append(notes, "filter: "+m.filter.describe())
+	}
+	if m.sortBy != sortDefault {
+		notes = append(notes, "sort: "+sortLabel(m.sortBy))
+	}
+	if len(notes) > 0 {
+		label += " — " + strings.Join(notes, " · ")
+	}
+	return label
 }
 
 // typeLabel is a type's name for a LIST context. The descriptor's own Label
@@ -2216,7 +2352,18 @@ func (m *tuiModel) bodyList(f frame) []string {
 		return []string{" " + m.theme.Subtle("(waiting for the navi's object types…)")}
 	}
 	var out []string
+	// The filter bar is the page's first line while it owns the keyboard
+	// (NAVI-592): the reader sees the query they are typing, and the empty
+	// state below says "no match" rather than "none exist" when a filter is
+	// what emptied the page.
+	if m.filtering {
+		out = append(out, " "+m.theme.Title("/")+" "+m.filterInput+m.theme.Subtle("_"))
+		out = append(out, " "+m.theme.Subtle("status: model: priority: text: — enter apply · esc cancel"))
+	}
 	if len(m.list.Rows) == 0 {
+		if m.filter.active() {
+			return append(out, " "+m.theme.Subtle("(no match for "+m.filter.describe()+")"))
+		}
 		return append(out, " "+m.theme.Subtle("(no "+strings.ToLower(m.typeLabel(m.typeIdx))+" yet)"))
 	}
 
