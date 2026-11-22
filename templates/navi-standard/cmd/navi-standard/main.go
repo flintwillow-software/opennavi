@@ -253,6 +253,27 @@ func declareIdentity() (*navi.Navi, error) {
 		opts = append(opts, navi.WithRuntimeConfig(cfg))
 	}
 
+	// ── trust (ADR 0021 decision 6) ──────────────────────────────────────
+	// Where the navi learns which principals exist and what their public keys
+	// are. NAVI_TRUST_STORE names a trust-store document (a path, or the name
+	// of an env var holding the path — ADR 0008 references). Without it a
+	// remote portal cannot authenticate: the gateway refuses every connection
+	// rather than defaulting open (fail closed), which is why the local
+	// in-process TUI needs no store and the headless/remote-attach path does.
+	//
+	// An EMPTY value declares NO trust source, so the local playground is
+	// unchanged — a navi that authenticates nobody needs no store. The source
+	// is wired only when the deployment names one, so an unset variable does
+	// not make the navi try to read a file literally named
+	// "NAVI_TRUST_STORE".
+	if store := strings.TrimSpace(os.Getenv("NAVI_TRUST_STORE")); store != "" {
+		source, err := navi.NewFileTrustStore(navi.FileTrustStoreConfig{Path: store})
+		if err != nil {
+			return nil, fmt.Errorf("trust store: %w", err)
+		}
+		opts = append(opts, navi.WithTrustSource(source))
+	}
+
 	// ── peers (ADR 0031 decision 7, ADR 0042 decisions 2-3) ──────────────
 	// The peer ROSTER: the other navis this one knows how to reach, and the
 	// scopes it publishes to. Declaring it is what derives `send:`/`pub:`/
