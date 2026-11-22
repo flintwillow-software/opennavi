@@ -71,7 +71,7 @@ jobs:
       - name: Build starter templates against SDK
         run: |
           cat > go.work <<'EOF'
-          go 1.26
+          go 1.26.0
 
           use (
           	.

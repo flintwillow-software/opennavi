@@ -135,6 +135,15 @@ type Navi struct {
 	identityPath string
 	identity     *Identity
 
+	// peerHostAddr is the declared peer host address (WithPeerHost, ADR 0044);
+	// empty = no host, exactly as before this existed. peerHost is resolved at
+	// serve (built from the identity and bound), and peerHostErr records a
+	// declared host that could not be built (a host without an identity), so
+	// the failure surfaces through the health path.
+	peerHostAddr string
+	peerHost     *peerHost
+	peerHostErr  error
+
 	// shortTermMemory records the WithShortTermMemory declaration.
 	shortTermMemory bool
 	// longMemory is the searched long-term memory tier (ADR 0037 decision 2),
@@ -851,6 +860,32 @@ func (n *Navi) serve(ctx context.Context) error {
 	// health accumulates each door's start-time state for the health view
 	// (NAVI-329). A failed Start is recorded and the run continues.
 	var health []ConnectorHealth
+
+	// The peer host (NAVI-629 piece 3, ADR 0044) starts BEFORE the connectors,
+	// like the webhook listener: it is a door the navi owns, not a component
+	// the author adds, so it is built and started here and stopped with
+	// everything else. A declared host that cannot be built (no identity) is a
+	// start-time failure recorded in the health view, not a silent no-op.
+	if ph, err := n.peerHostFor(); err != nil {
+		n.log.Error("peer host not started; continuing", "err", err)
+		n.peerHostErr = err
+		health = append(health, ConnectorHealth{Name: "peers", State: ConnectorFailed,
+			Addr: strings.TrimSpace(n.peerHostAddr), Reason: err.Error()})
+	} else if ph != nil {
+		name, addr := describeHealth(ph)
+		if err := ph.Start(ctx, cdeps); err != nil {
+			n.log.Error("peer host start failed; continuing", "host", name, "err", err)
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorFailed, Addr: addr, Reason: err.Error()})
+		} else {
+			n.peerHost = ph
+			health = append(health, ConnectorHealth{Name: name, State: ConnectorOK, Addr: ph.PeerID()})
+			started = append(started, func() {
+				if err := ph.Stop(); err != nil {
+					n.log.Error("peer host stop", "host", name, "err", err)
+				}
+			})
+		}
+	}
 
 	// The webhook listener starts BEFORE the connectors, so a connector that
 	// registers its route during Start registers on a bound listener rather
