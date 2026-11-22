@@ -17,15 +17,16 @@
 // watches. Deployment settings — endpoints, credential references, database
 // path — come from the environment and the config file named by NAVI_CONFIG.
 //
-// This template declares the peer ROSTER (ADR 0031 decision 7, ADR 0042
-// decisions 2-3): the navis this one knows how to reach, as a build-time
-// declaration that derives send:/pub:/sub: into the compiled ceiling and
-// renders through the read-only `peer` object type. It does NOT yet run a
-// libp2p host — the transport is a later slice (NAVI-629 piece 3), and the
-// roster is deliberately testable before any transport exists. The navi-fleet
-// template is the connector test bed today; it becomes the P2P TEAM template
-// (teams of navis, ADR 0031) once the peer protocol lands, and navi-standard
-// stays the single complete navi.
+// This template declares the peer network (ADR 0031, ADR 0042, ADR 0044): an
+// IDENTITY (the navi's own Ed25519 key, which IS its libp2p PeerID), a ROSTER
+// of the navis it knows how to reach, and a HOST that listens for them. The
+// roster derives send:/pub:/sub: into the compiled ceiling and renders through
+// the read-only `peer` object type; the host is enabled separately by its
+// address, so a deployment that wants only the roster pays nothing for a
+// socket (ADR 0044 decision 4). The peer PROTOCOL — envelope, streams, pubsub,
+// store-and-forward — is still a later slice (NAVI-412); the navi-fleet
+// template is the connector test bed today, and navi-standard stays the single
+// complete navi.
 package main
 
 import (
@@ -150,6 +151,24 @@ func declareIdentity() (*navi.Navi, error) {
 	opts := []navi.Option{
 		navi.WithVersion(envOr("NAVI_VERSION", "0.1.0")),
 		navi.WithPersonality(personality),
+
+		// ── identity (ADR 0031 decision 2) ───────────────────────────────
+		// The navi's own Ed25519 keypair: its principal reference
+		// (navi:<name>) and its libp2p PeerID both derive from it. The file
+		// is a PKCS#8 PEM, generated on first run when absent, and NEVER
+		// overwritten — a malformed key fails the run rather than silently
+		// minting a new identity and changing the navi's PeerID. NAVI_IDENTITY
+		// names the path; the default sits beside the database under var/.
+		navi.WithIdentity(envOr("NAVI_IDENTITY", filepath.Join("var", "navi-standard-identity.pem"))),
+
+		// ── the peer host (ADR 0041 decision 1, ADR 0044) ────────────────
+		// The navi's one libp2p host: QUIC + TCP, built from the identity
+		// above. It is enabled by the ADDRESS, not by the roster — an empty
+		// NAVI_PEER_ADDR runs no host at all (the local-playground default),
+		// so declaring peers does not open a socket (ADR 0044 decision 4).
+		// Set it to a multiaddress to make the navi reachable, e.g.
+		// "/ip4/0.0.0.0/udp/4001/quic-v1".
+		navi.WithPeerHost(envOr("NAVI_PEER_ADDR", "")),
 
 		// ── observability ────────────────────────────────────────────────
 		// A structured logger handed to every component through Deps. The

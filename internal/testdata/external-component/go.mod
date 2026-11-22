@@ -1,6 +1,6 @@
 module example.com/external-component
 
-go 1.26
+go 1.26.0
 
 require github.com/flintwillow-software/opennavi v0.1.0
 
