@@ -175,6 +175,12 @@ run-navi-standard-headless: build-navi-standard
 
     # A development trust store with one service:cli principal holding an
     # Ed25519 key (ADR 0021 decision 6). Generated once and reused.
+    #
+    # The principal is placed in group:readers, which navi-standard's `reader`
+    # role holds: a trust store pins a KEY and supplies GROUP MEMBERSHIP, but
+    # grants nothing by itself, so a principal with no group would authenticate
+    # and then be refused (403). `reader` grants connect plus reads of the
+    # navi's own aggregates, which is what a dev TUI attach needs.
     if [[ ! -f "$KEY" ]]; then
         openssl genpkey -algorithm ed25519 -out "$KEY" 2>/dev/null
     fi
@@ -183,8 +189,11 @@ run-navi-standard-headless: build-navi-standard
         printf '%s\n' \
             'principals:' \
             '  - ref: service:cli' \
+            '    groups:' \
+            '      - group:readers' \
             '    keys:' \
             '      - id: tui-1' \
+            '        type: ed25519' \
             "        public_key: $PUB" \
             > "$TRUST"
     fi

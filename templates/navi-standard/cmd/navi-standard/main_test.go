@@ -262,3 +262,42 @@ func TestPeerRosterDerivesTheCeiling(t *testing.T) {
 		t.Error("an undeclared scope must be outside the compiled ceiling")
 	}
 }
+
+// TestHeadlessAttachPrincipalCanConnect is the regression guard for NAVI-630:
+// `just run-navi-standard-headless` generates a trust store whose principal is
+// in group:readers, and the printed `navi connect` command attaches as it. A
+// trust store pins a KEY and supplies GROUP MEMBERSHIP but grants nothing, so
+// if no role held by group:readers granted `connect`, the principal would
+// authenticate and then be refused (403) — which is exactly what happened.
+//
+// This asserts the property at the POLICY level, which is where it belongs:
+// the generated store's job is to make the principal resolvable and place it
+// in a group; the template's job is to have a role that group can hold with
+// `connect`. It fails if the reader role loses Connect, or if the group the
+// justfile places the principal in stops matching a role.
+func TestHeadlessAttachPrincipalCanConnect(t *testing.T) {
+	baseEnv(t)
+
+	n, store, err := compose()
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	defer store.Close()
+	if err := n.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// The principal the generated trust store supplies: service:cli, placed in
+	// group:readers (see the `run-navi-standard-headless` recipe).
+	who, err := navi.NewResolvedPrincipal(
+		principal.MustParse("service:cli"),
+		nil,
+		[]principal.Ref{principal.MustParse("group:readers")},
+	)
+	if err != nil {
+		t.Fatalf("principal: %v", err)
+	}
+	if d := n.Policy().Decide(navi.AccessRequest{Principal: who, Capability: navi.Connect()}); !d.Allowed {
+		t.Fatalf("a principal in group:readers must be able to connect (NAVI-630): %s", d.Reason)
+	}
+}
