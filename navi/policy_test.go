@@ -16,7 +16,7 @@ func declaredCeiling() CapabilitySet {
 		Name:    "thought",
 		Fields:  []object.Field{{Name: "id"}, {Name: "assembled"}},
 		Actions: []object.Action{{Name: "pause"}, {Name: "cancel"}},
-	}}, []string{"todo_read", "shell_exec"})
+	}}, []string{"todo_read", "shell_exec"}, nil)
 }
 
 func resolved(t *testing.T, ref string, claims map[string]string, groups ...string) *Principal {

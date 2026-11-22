@@ -17,11 +17,15 @@
 // watches. Deployment settings — endpoints, credential references, database
 // path — come from the environment and the config file named by NAVI_CONFIG.
 //
-// This template deliberately does NOT declare peer/P2P features: ADR 0031 is
-// accepted but unimplemented (no libp2p, no peer package, no navi-relay), so
-// there is nothing to declare. The navi-fleet template is the connector test
-// bed today; it becomes the P2P TEAM template (teams of navis, ADR 0031) once
-// the peer protocol lands, and navi-standard stays the single complete navi.
+// This template declares the peer ROSTER (ADR 0031 decision 7, ADR 0042
+// decisions 2-3): the navis this one knows how to reach, as a build-time
+// declaration that derives send:/pub:/sub: into the compiled ceiling and
+// renders through the read-only `peer` object type. It does NOT yet run a
+// libp2p host — the transport is a later slice (NAVI-629 piece 3), and the
+// roster is deliberately testable before any transport exists. The navi-fleet
+// template is the connector test bed today; it becomes the P2P TEAM template
+// (teams of navis, ADR 0031) once the peer protocol lands, and navi-standard
+// stays the single complete navi.
 package main
 
 import (
@@ -229,6 +233,32 @@ func declareIdentity() (*navi.Navi, error) {
 	if cfg := strings.TrimSpace(os.Getenv("NAVI_CONFIG")); cfg != "" {
 		opts = append(opts, navi.WithRuntimeConfig(cfg))
 	}
+
+	// ── peers (ADR 0031 decision 7, ADR 0042 decisions 2-3) ──────────────
+	// The peer ROSTER: the other navis this one knows how to reach, and the
+	// scopes it publishes to. Declaring it is what derives `send:`/`pub:`/
+	// `sub:` into the compiled ceiling (navi.CeilingFromDeclarations), and it
+	// renders through the read-only `peer` object type — so the roster is
+	// visible in the TUI before any transport exists.
+	//
+	// A peer is a REACHABILITY RECORD, deliberately thin: it carries a
+	// reference and scopes, NO key and NO permission. The key lives in the
+	// trust store (the one place a peer's identity is pinned); what a peer may
+	// DO is decided by the compiled policy. Being listed is not permission,
+	// and permission is not reachability. A navi that declares no peers is
+	// unchanged — discovery is off by default (ADR 0031 decision 3).
+	roster := make([]*navi.Peer, 0, 2)
+	for _, ref := range []string{"navi:bastilli", "navi:tutore"} {
+		p, err := navi.NewPeer(
+			principal.MustParse(ref),
+			navi.WithScopes("team/alpha"),
+		)
+		if err != nil {
+			return nil, err
+		}
+		roster = append(roster, p)
+	}
+	opts = append(opts, navi.WithPeers(roster...))
 
 	return navi.New(envOr("NAVI_NAME", "navi-standard"), opts...), nil
 }
@@ -602,10 +632,18 @@ func declarePolicy(n *navi.Navi) error {
 	// membership list would be a second, conflicting answer. A group declares
 	// only what its members may DO.
 	//
-	// This is the "navi peers" group: other navis on the mesh (once ADR 0031
-	// lands) may read this navi's aggregates but not touch external systems
-	// or mutate anything. It is the read-on-navi-level,
+	// This is the "navi peers" group: other navis on the mesh may read this
+	// navi's aggregates and exchange messages with it, but may not touch
+	// external systems or mutate anything. It is the read-on-navi-level,
 	// read-only-on-external default, expressed as a group.
+	//
+	// The peer verbs (ADR 0031 decision 7) are SEPARATE grants at independent
+	// granularity: `sub` on a namespace does not imply `pub` on it, and
+	// neither implies `send` to a peer. Here the group holds all three over
+	// the declared roster, because the navi's peers are the ones it publishes
+	// with. The scope strings match the peer declarations below exactly —
+	// `team/alpha` here is the same namespace `declarePeers` names — which is
+	// what keeps discoverability and authorization one vocabulary.
 	peers, err := navi.NewGroup(
 		principal.MustParse("group:navi-peers"),
 		navi.CapabilitySet{Allow: navi.Allows(
@@ -614,6 +652,12 @@ func declarePolicy(n *navi.Navi) error {
 			navi.Read("entry"),
 			navi.Read("memory"),
 			navi.Read("todo"),
+			// The peer surface: publish and subscribe on the declared team
+			// namespace, and send to the declared peers.
+			navi.Pub("team/alpha"),
+			navi.Sub("team/alpha"),
+			navi.Send("navi:bastilli"),
+			navi.Send("navi:tutore"),
 		)},
 	)
 	if err != nil {

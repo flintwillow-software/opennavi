@@ -402,7 +402,9 @@ func (s CapabilitySet) Denies(c Capability, ctx RequestContext) bool {
 
 // CeilingFromDeclarations derives the capability ceiling from what a navi
 // actually declares (ADR 0021 decision 11): every declared tool is call:<tool>,
-// every exposed type is read:<type> and its fields and act:<type>.<action>.
+// every exposed type is read:<type> and its fields and act:<type>.<action>, and
+// every declared peer is send:<peer> plus pub:/sub: over the scopes it
+// publishes to.
 //
 // The ceiling is DERIVED, not declared, and that is what makes the intersection
 // well defined: it is unconditioned by construction, so no policy can be wider
@@ -410,8 +412,15 @@ func (s CapabilitySet) Denies(c Capability, ctx RequestContext) bool {
 // naming something undeclared is outside the ceiling — which is exactly the
 // referential rule, enforced by construction rather than by a list somebody
 // maintains.
-func CeilingFromDeclarations(types []object.Type, toolNames []string) CapabilitySet {
-	allow := make([]Grant, 0, len(types)*2+len(toolNames))
+//
+// The peer capabilities (ADR 0031 decision 7, ADR 0042 decision 6) are derived
+// from the SAME declarations that make a peer reachable: a peer declares the
+// scopes it publishes to, so `pub:`/`sub:` over those scopes are inside the
+// ceiling and `send:` to that peer is too. A topic outside every declared scope
+// is outside the ceiling, which is what keeps discoverability a capability
+// rather than an ambient property (ADR 0042 open question 5).
+func CeilingFromDeclarations(types []object.Type, toolNames []string, peers []*Peer) CapabilitySet {
+	allow := make([]Grant, 0, len(types)*2+len(toolNames)+len(peers)*3)
 	for _, name := range toolNames {
 		allow = append(allow, Grant{Capability: Call(name)})
 	}
@@ -422,6 +431,15 @@ func CeilingFromDeclarations(types []object.Type, toolNames []string) Capability
 		}
 		for _, a := range t.Actions {
 			allow = append(allow, Grant{Capability: Act(t.Name, a.Name)})
+		}
+	}
+	for _, p := range peers {
+		if p == nil {
+			continue
+		}
+		allow = append(allow, Grant{Capability: Send(p.Ref().String())})
+		for _, scope := range p.Scopes() {
+			allow = append(allow, Grant{Capability: Pub(scope)}, Grant{Capability: Sub(scope)})
 		}
 	}
 	// The two target-less verbs are always part of the ceiling: every navi
