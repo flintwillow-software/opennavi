@@ -24,6 +24,10 @@ const (
 	// TypeTrustEvent is the trust ledger: the trust decisions the navi made
 	// (ADR 0027). It is read-only and separate from the navi's own state.
 	TypeTrustEvent = "trust_event"
+	// TypePeer is the declared peer roster (NAVI-629, ADR 0031 decision 7;
+	// ADR 0042 decisions 2-3). It is read-only, and it exists only when the
+	// navi declares peers — a peerless navi has no roster to show.
+	TypePeer = "peer"
 )
 
 // DetailTranscript is the thought type's transcript detail collection.
@@ -41,12 +45,20 @@ const (
 // views, RAM-first (ADR 0017 decisions 3 and 9).
 func (n *Navi) builtinTypes() []TypeRegistration {
 	thoughts := &thoughtProvider{n: n}
-	return []TypeRegistration{
+	regs := []TypeRegistration{
 		{Type: thoughtType(), Provider: thoughts, Act: thoughts.act},
 		{Type: entryType(), Provider: entryProvider{}},
 		{Type: memoryType(), Provider: &memoryProvider{n: n}},
 		{Type: trustEventType(), Provider: trustEventProvider{n: n}},
 	}
+	// The peer roster is exposed only when peers are declared: a navi with no
+	// peers has no roster, and adding an always-empty `peer` type would put a
+	// peer network on a peerless navi's surface (ADR 0031 decision 3,
+	// fail-closed).
+	if n.peerList.Len() > 0 {
+		regs = append(regs, TypeRegistration{Type: peerType(), Provider: peerProvider{n: n}})
+	}
+	return regs
 }
 
 // ── thought ─────────────────────────────────────────────────────────────
@@ -455,6 +467,96 @@ func trustEventObject(ev TrustEvent, index int) object.Object {
 		Fields: map[string]any{
 			"id": id, "at": ev.At, "kind": string(ev.Kind),
 			"principal": ev.Principal.String(), "scheme": ev.Scheme, "detail": ev.Detail,
+		},
+	}
+}
+
+// ── peer ────────────────────────────────────────────────────────────────
+
+// peerType is the declared peer roster as a read-only type (NAVI-629, ADR 0031
+// decision 7; ADR 0042 decisions 2-3). It is what makes "what a peer looks like
+// on the object surface" concrete and testable BEFORE any transport exists —
+// the roster is a declaration, so it renders through the same object surface a
+// portal already reads, with no libp2p import.
+//
+// Every field is ReadOnly: the roster is a build-time declaration (ADR 0013),
+// not working state a portal may edit. Trust mutation is a portal CAPABILITY
+// gated by policy (ADR 0042 decision 11), not an object-surface write, so this
+// type declares no actions — there is nothing here to mutate.
+func peerType() object.Type {
+	return object.Type{
+		Name:  TypePeer,
+		Label: "Peer",
+		ID:    "ref",
+		Fields: []object.Field{
+			{Name: "ref", Label: "Reference", Kind: object.KindString, Section: "identity", ReadOnly: true},
+			{Name: "name", Label: "Name", Kind: object.KindString, Section: "identity", ReadOnly: true},
+			// The peer's libp2p PeerID is NOT here: it derives from the peer's
+			// key, which lives in the trust store (ADR 0042 decision 3), not on
+			// the declaration. Exposing it would require reading the trust
+			// store from the roster, which is the trust surface's job, not the
+			// peer declaration's.
+			{Name: "addrs", Label: "Addresses", Kind: object.KindList, ItemKind: object.KindString,
+				Section: "reachability", ReadOnly: true},
+			{Name: "scopes", Label: "Scopes", Kind: object.KindList, ItemKind: object.KindString,
+				Section: "discovery", ReadOnly: true},
+		},
+		Views: []object.View{
+			{Kind: object.ViewList, Name: "peers", Label: "Peers",
+				Columns: []string{"name", "addrs", "scopes"}},
+			{Kind: object.ViewDetail, Label: "Peer"},
+		},
+	}
+}
+
+// peerProvider serves the declared peer roster from the navi's own declaration
+// — RAM is the source of truth, so a navi with no datastore still serves it.
+// It is read-only: the roster is frozen at Run.
+type peerProvider struct{ n *Navi }
+
+func (p peerProvider) List(q object.Query) ([]object.Object, string, error) {
+	var peers []*Peer
+	if p.n != nil {
+		peers = p.n.Peers()
+	}
+	objs := make([]object.Object, 0, len(peers))
+	for _, peer := range peers {
+		objs = append(objs, peerObject(peer))
+	}
+	objs = filterObjects(objs, q.Filter)
+	start, end := pageWindow(len(objs), q)
+	return objs[start:end], nextCursor(end, len(objs)), nil
+}
+
+func (p peerProvider) Get(id string) (object.Object, error) {
+	if p.n != nil {
+		for _, peer := range p.n.Peers() {
+			if peer.Ref().String() == id {
+				return peerObject(peer), nil
+			}
+		}
+	}
+	return object.Object{}, object.ErrNotFound
+}
+
+func (p peerProvider) Detail(string, string, object.Query) ([]object.Object, string, error) {
+	return nil, "", object.ErrUnknownDetail
+}
+
+// peerObject projects one peer declaration. The id is the peer's reference, so
+// a portal links to a peer the same way it links to any other object.
+func peerObject(peer *Peer) object.Object {
+	if peer == nil {
+		return object.Object{Type: TypePeer}
+	}
+	return object.Object{
+		Type: TypePeer,
+		ID:   peer.Ref().String(),
+		Fields: map[string]any{
+			"ref":    peer.Ref().String(),
+			"name":   peer.Name(),
+			"addrs":  peer.Addrs(),
+			"scopes": peer.Scopes(),
 		},
 	}
 }

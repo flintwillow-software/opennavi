@@ -53,7 +53,10 @@ func (n *Navi) capabilityCeiling() CapabilitySet {
 	for _, reg := range regs {
 		types = append(types, reg.Type)
 	}
-	return CeilingFromDeclarations(types, toolNames)
+	// The declared peers contribute send:<peer> and pub:/sub: over their
+	// scopes (ADR 0031 decision 7, ADR 0042 decision 6). A navi with no peers
+	// derives no peer capabilities, so a peerless navi's ceiling is unchanged.
+	return CeilingFromDeclarations(types, toolNames, n.Peers())
 }
 
 // Policy returns the compiled policy, or nil when nothing has compiled it yet.

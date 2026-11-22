@@ -3,6 +3,8 @@ package navi
 import (
 	"fmt"
 	"strings"
+
+	"github.com/flintwillow-software/opennavi/principal"
 )
 
 // This file is the capability vocabulary of ADR 0021 decision 11: a *closed*
@@ -31,6 +33,20 @@ const (
 	// VerbEnqueue authorizes scheduling a thought: the fifth verb, checked at
 	// the portal boundary (ADR 0022 decision 1).
 	VerbEnqueue Verb = "enqueue"
+	// VerbPub authorizes publishing to a declared topic or namespace
+	// (ADR 0031 decision 7). Its target is a topic (`team/alpha/notices`) or a
+	// declared namespace (`team/alpha`), and a namespace grant covers every
+	// topic under it by prefix.
+	VerbPub Verb = "pub"
+	// VerbSub authorizes subscribing to a declared topic or namespace
+	// (ADR 0031 decision 7). It is a SEPARATE grant from VerbPub at independent
+	// granularity, so a peer may hold `sub` on a namespace and `pub` only on
+	// one topic inside it.
+	VerbSub Verb = "sub"
+	// VerbSend authorizes a point-to-point message to a declared peer
+	// (ADR 0031 decision 7): "a point-to-point message is authorized the same
+	// way". Its target is a peer reference (`navi:bastilli`).
+	VerbSend Verb = "send"
 )
 
 // verbs is the closed set. A verb not listed here is not a capability verb,
@@ -41,11 +57,14 @@ var verbs = map[Verb]struct{}{
 	VerbAct:     {},
 	VerbCall:    {},
 	VerbEnqueue: {},
+	VerbPub:     {},
+	VerbSub:     {},
+	VerbSend:    {},
 }
 
 // Verbs returns the closed verb set, for diagnostics and tests.
 func Verbs() []Verb {
-	return []Verb{VerbConnect, VerbRead, VerbAct, VerbCall, VerbEnqueue}
+	return []Verb{VerbConnect, VerbRead, VerbAct, VerbCall, VerbEnqueue, VerbPub, VerbSub, VerbSend}
 }
 
 // Wildcard is the one non-referential target: it names any target of its verb
@@ -63,6 +82,9 @@ const Wildcard = "*"
 //	                    grant; a type grant does not imply it)
 //	act:<type>.<action> performing a declared action on a type
 //	call:<tool>         calling a declared tool
+//	pub:<topic>         publishing to a declared topic or namespace
+//	sub:<topic>         subscribing to a declared topic or namespace
+//	send:<peer>         sending a point-to-point message to a declared peer
 type Capability struct {
 	// Verb is the capability verb.
 	Verb Verb
@@ -96,6 +118,28 @@ func Act(typeName, action string) Capability {
 // Call is the capability to call a declared tool.
 func Call(toolName string) Capability {
 	return Capability{Verb: VerbCall, Target: strings.TrimSpace(toolName)}
+}
+
+// Pub is the capability to publish to a declared topic or namespace
+// (ADR 0031 decision 7). The target is a topic (`team/alpha/notices`) or a
+// declared namespace (`team/alpha`); a namespace grant covers every topic
+// under it by segment prefix.
+func Pub(topic string) Capability {
+	return Capability{Verb: VerbPub, Target: strings.TrimSpace(topic)}
+}
+
+// Sub is the capability to subscribe to a declared topic or namespace
+// (ADR 0031 decision 7). It is independent of Pub, so a peer may hold `sub`
+// on a namespace and `pub` on one topic inside it.
+func Sub(topic string) Capability {
+	return Capability{Verb: VerbSub, Target: strings.TrimSpace(topic)}
+}
+
+// Send is the capability to send a point-to-point message to a declared peer
+// (ADR 0031 decision 7). The target is a peer reference (`navi:bastilli`), the
+// same reference the peer declaration carries.
+func Send(peer string) Capability {
+	return Capability{Verb: VerbSend, Target: strings.TrimSpace(peer)}
 }
 
 // Any is the wildcard capability for a verb: every target of it.
@@ -157,18 +201,57 @@ func (c Capability) Validate() error {
 			return fmt.Errorf("%w: %s target %q is not <type>.<action>", ErrInvalid, c.Verb, target)
 		}
 		return nil
+	case VerbPub, VerbSub:
+		if target == "" {
+			return fmt.Errorf("%w: %s needs a topic or namespace", ErrInvalid, c.Verb)
+		}
+		if target == Wildcard {
+			return nil
+		}
+		if err := ValidateScope(target); err != nil {
+			return fmt.Errorf("%w: %s target %q: %w", ErrInvalid, c.Verb, target, err)
+		}
+		return nil
+	case VerbSend:
+		if target == "" {
+			return fmt.Errorf("%w: %s needs a peer reference", ErrInvalid, c.Verb)
+		}
+		if target == Wildcard {
+			return nil
+		}
+		ref, err := principal.Parse(target)
+		if err != nil {
+			return fmt.Errorf("%w: %s target %q: %w", ErrInvalid, c.Verb, target, err)
+		}
+		if ref.Kind() != principal.KindNavi {
+			return fmt.Errorf("%w: %s target %s is not a navi", ErrInvalid, c.Verb, ref)
+		}
+		return nil
 	}
 	return nil
 }
 
 // covers reports whether a grant c authorizes the request want: same verb, and
-// either the same target or the wildcard. A `read:<type>` grant does NOT cover
-// `read:<type>.<field>` — a sensitive field needs its own grant.
+// either the same target, the wildcard, or — for pub/sub only — a declared
+// namespace that is a prefix of the requested topic (ADR 0031 decision 7).
+//
+// A `read:<type>` grant does NOT cover `read:<type>.<field>` — a sensitive
+// field needs its own grant. A `pub:`/`sub:` grant DOES cover the topics under
+// a namespace it names, because that is what a namespace is FOR: the namespace
+// is a declaration, not a wildcard expression, and `Sub("team/alpha")` is
+// documented to cover every topic under it. Prefix matching is on segment
+// boundaries, so `team/alpha` does not cover `team/alphabet`.
 func (c Capability) covers(want Capability) bool {
 	if c.Verb != want.Verb {
 		return false
 	}
-	return c.Target == Wildcard || c.Target == want.Target
+	if c.Target == Wildcard || c.Target == want.Target {
+		return true
+	}
+	if c.Verb == VerbPub || c.Verb == VerbSub {
+		return ScopeMatches(c.Target, want.Target)
+	}
+	return false
 }
 
 // ParseCapability parses `verb` or `verb:target` into a validated capability.

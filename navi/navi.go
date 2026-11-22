@@ -64,6 +64,12 @@ type Navi struct {
 	// membership comes from the trust source.
 	Roles  *Collection[Role]
 	Groups *Collection[*Group]
+	// peerList is the declared peer roster (NAVI-629, ADR 0031 decision 7;
+	// ADR 0042 decisions 2-3): the navis this one knows how to reach, declared
+	// at composition so the ceiling can derive send:/pub:/sub: from it. It is
+	// private — peers are read through Peers() and the read-only `peer` object
+	// type, not appended to by a component after declaration.
+	peerList *Collection[*Peer]
 
 	// Datastores is the compiled candidate set of persistence backends
 	// (ADR 0011). The active one is selected from runtime config at
@@ -433,6 +439,8 @@ func New(name string, opts ...Option) *Navi {
 			func(r Role) string { return r.Name }, validateRole),
 		Groups: newCollection("group",
 			func(g *Group) string { return g.Ref().String() }, validateGroup),
+		peerList: newCollection("peer",
+			func(p *Peer) string { return p.Ref().String() }, validatePeer),
 		Datastores: newDatastoreCollection(),
 		// The assembled-context budget defaults on; WithThoughtBudget
 		// overrides or disables it.
@@ -641,6 +649,7 @@ func (n *Navi) validate() error {
 	// a malformed component into a serving navi.
 	for _, c := range []interface{ revalidate() error }{
 		n.Skills, n.Tools, n.Models, n.Connectors, n.Portals, n.Modes, n.Datastores, n.Roles, n.Groups,
+		n.peerList,
 	} {
 		if err := c.revalidate(); err != nil {
 			return err
@@ -649,7 +658,7 @@ func (n *Navi) validate() error {
 	// Duplicate names, likewise: Add catches them eagerly, this catches
 	// them whether or not Add's error was read.
 	for _, d := range []interface{ duplicates() (string, bool) }{
-		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores, n.Roles, n.Groups,
+		n.Skills, n.Tools, n.Models, n.Modes, n.Datastores, n.Roles, n.Groups, n.peerList,
 	} {
 		if name, dup := d.duplicates(); dup {
 			return fmt.Errorf("%w: %q", ErrDuplicate, name)

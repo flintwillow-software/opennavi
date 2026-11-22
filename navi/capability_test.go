@@ -160,7 +160,12 @@ func TestCapabilitySetValidate(t *testing.T) {
 }
 
 func TestVerbsAreClosed(t *testing.T) {
-	want := map[Verb]bool{VerbConnect: true, VerbRead: true, VerbAct: true, VerbCall: true, VerbEnqueue: true}
+	want := map[Verb]bool{
+		VerbConnect: true, VerbRead: true, VerbAct: true, VerbCall: true, VerbEnqueue: true,
+		// The peer verbs (ADR 0031 decision 7, NAVI-629 slice 2): publish and
+		// subscribe to a declared topic/namespace, and send to a declared peer.
+		VerbPub: true, VerbSub: true, VerbSend: true,
+	}
 	got := Verbs()
 	if len(got) != len(want) {
 		t.Fatalf("Verbs() = %v, want %d entries", got, len(want))

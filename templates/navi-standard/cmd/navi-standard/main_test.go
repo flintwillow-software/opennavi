@@ -62,6 +62,9 @@ func TestComposeValidates(t *testing.T) {
 	if got := n.Groups.Len(); got != 1 {
 		t.Fatalf("groups = %d, want 1 (navi-peers)", got)
 	}
+	if got := len(n.Peers()); got != 2 {
+		t.Fatalf("peers = %d, want 2 (bastilli, tutore)", got)
+	}
 	if n.Tools.Len() == 0 {
 		t.Fatal("no tools declared")
 	}
@@ -225,5 +228,37 @@ func TestEnvHelpers(t *testing.T) {
 	t.Setenv("NAVI_TEST_DUR", "90s")
 	if got := envDuration("NAVI_TEST_DUR", 0); got.String() != "1m30s" {
 		t.Errorf("envDuration = %s, want 1m30s", got)
+	}
+}
+
+// TestPeerRosterDerivesTheCeiling pins the peer slice end to end in the
+// reference navi: the declared roster puts send:/pub:/sub: inside the COMPILED
+// ceiling, and the navi-peers group holds them without exceeding it. It fails
+// without the peer declaration — Validate compiles the policy, and a grant
+// naming an undeclared scope is outside the ceiling by construction.
+func TestPeerRosterDerivesTheCeiling(t *testing.T) {
+	baseEnv(t)
+	n, store, err := compose()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := n.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	c := n.Policy().Ceiling()
+	for _, want := range []navi.Capability{
+		navi.Send("navi:bastilli"),
+		navi.Send("navi:tutore"),
+		navi.Pub("team/alpha"),
+		navi.Sub("team/alpha"),
+		navi.Pub("team/alpha/notices"), // the namespace covers a topic under it
+	} {
+		if !c.Permits(want, navi.RequestContext{}) {
+			t.Errorf("%s must be inside the compiled ceiling", want)
+		}
+	}
+	if c.Permits(navi.Pub("team/beta"), navi.RequestContext{}) {
+		t.Error("an undeclared scope must be outside the compiled ceiling")
 	}
 }
