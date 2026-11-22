@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -84,10 +85,32 @@ func newGoldenModel(t *testing.T) *tuiModel {
 	return m
 }
 
+// goldenTimePattern matches the leading date of a rendered timestamp — the
+// list's "Updated at" column renders `2006-01-02 15:04:05Z` (portal/view), and
+// the column truncates it, so this matches both the full date and the
+// truncated `2026-11-2` form.
+//
+// A golden render MUST NOT depend on the wall clock. The thought's UpdatedAt is
+// stamped with time.Now() by the queue on every enqueue (thought/thought.go),
+// so the fixture cannot pin it, and a stored golden therefore encodes the day
+// it was generated — which fails for everyone at the next date rollover. That
+// is not hypothetical: it blocked every PR the day after these goldens were
+// written. Normalising the date to a constant keeps the column's presence and
+// width under test while making the comparison stable.
+var goldenTimePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{1,2}`)
+
+// normalizeGolden replaces a rendered date with a constant, so a golden is
+// stable across days. Applied on both write and compare, so the stored files
+// are already normalised.
+func normalizeGolden(s string) string {
+	return goldenTimePattern.ReplaceAllString(s, "YYYY-MM-DD")
+}
+
 // checkGolden compares got against testdata/golden/<name>.txt, writing it
 // when -update is set.
 func checkGolden(t *testing.T, name, got string) {
 	t.Helper()
+	got = normalizeGolden(got)
 	path := filepath.Join(goldenDir, name+".txt")
 	if *update {
 		if err := os.MkdirAll(goldenDir, 0o755); err != nil {
