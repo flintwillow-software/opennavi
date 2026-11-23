@@ -114,21 +114,35 @@ conventions rather than inventing a parallel one.
                               and the ONLY cactus-go importer (wraps Whistle)
    ```
 
-   **There is no `voice/` parent, and no separate `stt`/`tts` pair.** Speech
-   input is a kit of its own because it shares no code with anything else today:
-   text-to-speech does not exist in the repo, and when it does it is an *output*
-   (rendering) concern like `kit/view`, not a peer of an input capability. If a
-   future TTS kit arrives and the two genuinely share an ALSA capture/playback
-   substrate, that substrate becomes a shared `kit/audio` kit beneath both —
-   grouped by shared substrate, not by medium. That is a decision for a TTS
-   record, not this one.
+   **There is no `voice/` parent.** Speech *input* is a kit of its own. Text-to-
+   speech is deliberately **out of scope** for this record: it is a separate
+   capability, it does not exist in the repo today, and this shape does not
+   presume its package layout. When it arrives, its kit is decided on its own
+   merits (see Open Questions), and if it and `stt` genuinely share an ALSA
+   capture/playback substrate that substrate becomes a shared `kit/audio` kit
+   beneath both — grouped by shared substrate, not by the fact that both make
+   sound. Naming a parent `voice` would group by medium, which is the mistake
+   ADR 0010 corrected for `interfaces`.
 
    The word **"interfaces" is not used** for this namespace: ADR 0010 retired it
    as a capability label, and in Go `interfaces` collides with the language's
    own vocabulary for the type contracts (`Portal`, `Connector`) this repo
    already names.
 
-6. **Push-to-talk streams; it does not block.** The TUI gains a `Talk` binding
+6. **A portal may present output directly or expose an egress tool; both are
+   supported and neither is privileged.** The repo already has two outbound
+   mechanisms and they do not conflict: a portal **renders** what the navi
+   produces (the TUI draws `TurnAssistant` turns from the observation stream with
+   no tool involved), and a navi may declare an **egress tool**
+   (`connector.SendTool()`, ADR [0014](./0014-connectors-are-bidirectional-service-integrations.md))
+   that lets the agent *choose* when to emit. A voice portal is not blocked on a
+   new component kind: whether the navi speaks every turn (rendering) or decides
+   when to speak (a `portal_say`-style tool) is a **per-navi composition choice**,
+   visible in `main.go` exactly as ADR 0014 decision 2 requires. This record does
+   not decide which a conversational portal should use — only that both exist and
+   that neither requires extending the taxonomy.
+
+7. **Push-to-talk streams; it does not block.** The TUI gains a `Talk` binding
    (declared once in `portal/tui/keys.go`, per NAVI-593 / ADR
    [0038](./0038-the-portal-tui-is-a-richer-client.md) decision 7, so dispatch
    and the advertised footer derive from the same data). While the key is held,
@@ -139,7 +153,7 @@ conventions rather than inventing a parallel one.
    cannot be interrupted by context cancellation and would otherwise freeze the
    UI.
 
-7. **A screenless device reuses the kits; it is not a separate stack.** The
+8. **A screenless device reuses the kits; it is not a separate stack.** The
    mic-only device (`portal/device`) composes `kit/stt` with button, LED and
    speaker feedback and no renderer; the screened device (`portal/handheld`)
    composes the same `kit/stt` with `kit/view`. Neither is a new component type —
@@ -147,7 +161,7 @@ conventions rather than inventing a parallel one.
    establishes that a portal declares optional capabilities by implementing
    optional interfaces.
 
-8. **One stream per process is a shared resource, and the design respects it.**
+9. **One stream per process is a shared resource, and the design respects it.**
    The Cactus engine holds **one live stream per process** and returns
    `ErrStreamActive` to a second `Stream` or a concurrent speech call. If a navi
    runs two voice-capable portals in one process, they must serialize access
@@ -209,13 +223,19 @@ local toolchain. This record's own measured cost is deferred to that PR.
   directory.)
 - **A `portal/kit/voice/` parent holding both `stt` and a future `tts`.**
   Rejected: it groups by *medium* rather than by *direction*, and this repo
-  classifies capabilities by direction (ADR 0010). Text-to-speech is an *output*
-  (rendering) concern — a peer of `kit/view`, not of speech input — and it does
-  not exist in the repo today, so the parent would hold one real child and one
-  imagined one. If the two later share an ALSA capture/playback substrate, that
-  substrate becomes `kit/audio` beneath both, grouped by shared code rather than
-  by the fact that both make sound. Naming the kit `voice` would repeat the
-  mistake ADR 0010 corrected for `interfaces`.
+  classifies capabilities by direction (ADR 0010). Speech input and speech
+  output are separate capabilities, TTS does not exist in the repo today, and
+  the parent would hold one real child and one imagined one. If the two later
+  share an ALSA capture/playback substrate, that substrate becomes `kit/audio`
+  beneath both, grouped by shared code rather than by the fact that both make
+  sound. Naming the kit `voice` would repeat the mistake ADR 0010 corrected for
+  `interfaces`.
+- **Folding speech *output* into this record** (deciding TTS's package shape,
+  engine, or mechanism now). Rejected: it would decide a capability that does not
+  exist yet against a design that has not met it. This record fixes the *input*
+  path and explicitly leaves output to its own decision (Open Questions 6-7),
+  because the two are independent and the input path is what the near-term work
+  needs.
 - **`portal/kit/voice/stt` (nesting STT under a `voice` parent)**, or a two-
   package `voice` + `voice/stt` split. Rejected: the second package existed only
   to create a dependency boundary, but `stt` is already the boundary, so the
@@ -248,7 +268,20 @@ local toolchain. This record's own measured cost is deferred to that PR.
    PCM; microphone capture and resampling "belong to the caller" (upstream's
    words). Whether OpenNAVI ships that (`soxr`-like) or leaves it to the device
    module is undecided.
-5. **Wake word.** The existing personal-assistant design assumed Porcupine or
+5. **Speech output (TTS): engine and mechanism.** A conversational portal —
+   "talk with your navi" — needs synthesis as well as recognition, and it is a
+   near-term goal. Undecided: which engine (the personal-assistant design names
+   Piper or eSpeak, with viseme output for lip-sync), and whether a voice portal
+   presents output by **rendering** the assistant's stream or by exposing an
+   **egress tool** the agent calls (decision 6 permits both). Whether TTS gets
+   its own `kit/tts`, and whether `kit/audio` is warranted as a shared
+   capture/playback substrate, is decided when the implementation shows what is
+   actually shared.
+6. **Whether a conversational portal is a new complete portal or the TUI with
+   voice.** A portal that speaks and listens could be `portal/conversational` or
+   the existing `portal/tui` gaining `kit/stt` (and later TTS). This record does
+   not decide it; the package shape above leaves room for either.
+7. **Wake word.** The existing personal-assistant design assumed Porcupine or
    Snowboy for always-on wake-word detection. Whether that stays a separate
    engine or is subsumed by a future Whistle capability is open.
 
