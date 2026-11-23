@@ -86,12 +86,13 @@ conventions rather than inventing a parallel one.
    A thin device that streams audio to a navi-hosted transcriber is a
    *deployment variant*, not a different design.
 
-4. **The dependency is confined to `portal/kit/voice/stt/`.** That package is
-   the only importer of `github.com/zbiljic/cactus-go`, and it wraps Whistle
-   behind a small OpenNAVI interface (`Transcribe` / `Stream` / `Embed`). The
-   contract package `portal/` stays stdlib-only (ADR 0004), and so does
-   `portal/kit/voice/`, which depends on the *interface*, not the engine. This
-   is ADR 0041's confinement pattern applied to a second dependency.
+4. **The dependency is confined to `portal/kit/stt/`.** That package is the only
+   importer of `github.com/zbiljic/cactus-go`, and it wraps Whistle behind a
+   small OpenNAVI interface (`Transcribe` / `Stream` / `Embed`) so the engine is
+   reachable through a seam rather than directly. The contract package `portal/`
+   stays stdlib-only (ADR 0004). This is ADR 0041's confinement pattern applied
+   to a second dependency, and the kit *is* the boundary — there is no separate
+   parent package to keep clean.
 
 5. **`portal/kit/` is the shared-kit namespace; `portal/` holds complete
    portals.** A package that is a *part* of a portal lives under
@@ -108,10 +109,19 @@ conventions rather than inventing a parallel one.
      handheld/             ← complete portal (voice + view: the screened device)
      kit/
        view/               ← shared kit (moved from portal/view) — "Nothing here renders"
-       voice/              ← shared kit: capture, push-to-talk state machine,
-                              LED/button feedback, commit-on-release → Enqueue
-       voice/stt/          ← shared kit: the ONLY cactus-go importer; wraps Whistle
+       stt/                ← shared kit: mic capture, push-to-talk state machine,
+                              LED/button feedback, commit-on-release → Enqueue,
+                              and the ONLY cactus-go importer (wraps Whistle)
    ```
+
+   **There is no `voice/` parent, and no separate `stt`/`tts` pair.** Speech
+   input is a kit of its own because it shares no code with anything else today:
+   text-to-speech does not exist in the repo, and when it does it is an *output*
+   (rendering) concern like `kit/view`, not a peer of an input capability. If a
+   future TTS kit arrives and the two genuinely share an ALSA capture/playback
+   substrate, that substrate becomes a shared `kit/audio` kit beneath both —
+   grouped by shared substrate, not by medium. That is a decision for a TTS
+   record, not this one.
 
    The word **"interfaces" is not used** for this namespace: ADR 0010 retired it
    as a capability label, and in Go `interfaces` collides with the language's
@@ -130,10 +140,10 @@ conventions rather than inventing a parallel one.
    UI.
 
 7. **A screenless device reuses the kits; it is not a separate stack.** The
-   mic-only device (`portal/device`) composes `kit/voice` with button, LED and
+   mic-only device (`portal/device`) composes `kit/stt` with button, LED and
    speaker feedback and no renderer; the screened device (`portal/handheld`)
-   composes the same `kit/voice` with `kit/view`. Neither is a new component
-   type — both are ordinary `Portal` implementations, and `Addressed` already
+   composes the same `kit/stt` with `kit/view`. Neither is a new component type —
+   both are ordinary `Portal` implementations, and `Addressed` already
    establishes that a portal declares optional capabilities by implementing
    optional interfaces.
 
@@ -141,7 +151,7 @@ conventions rather than inventing a parallel one.
    The Cactus engine holds **one live stream per process** and returns
    `ErrStreamActive` to a second `Stream` or a concurrent speech call. If a navi
    runs two voice-capable portals in one process, they must serialize access
-   through one shared handle; `portal/kit/voice` owns that serialization rather
+   through one shared handle; `portal/kit/stt` owns that serialization rather
    than each portal reimplementing it.
 
 ## Consequences
@@ -150,10 +160,9 @@ conventions rather than inventing a parallel one.
   `model/`, `internal/llm`, or the thought queue is required for voice — the
   portal produces a string and calls `Enqueue`. This is the property that makes
   voice cheap to add to *any* navi.
-- **Only navis that want voice carry the engine.** `portal/`, `portal/kit/voice`,
-  and every other component package stay stdlib-only; the NAVI-355
-  contract-purity check keeps it that way, because `portal/kit/voice/stt` is not
-  a contract package.
+- **Only navis that want voice carry the engine.** `portal/` and every other
+  component package stay stdlib-only; the NAVI-355 contract-purity check keeps
+  it that way, because `portal/kit/stt` is not a contract package.
 - **`portal/view` moves to `portal/kit/view`.** A mechanical move, but it touches
   every importer (`portal/tui`, tests) and must land with the ADR's rule so the
   convention has no grandfathered exception.
@@ -162,9 +171,9 @@ conventions rather than inventing a parallel one.
   pieces they compose. This is the clarity that a top-level `ui/` tree would
   have *lost*, by moving parts and wholes into different trees.
 - **`cactus-go` is a community, early-development dependency** ("its API may
-  change"). The wrapper interface in `portal/kit/voice/stt` is the seam: a
-  breaking change, an abandoned project, or a swap to a cgo binding or a hosted
-  API touches one package and nothing above it.
+  change"). The wrapper interface in `portal/kit/stt` is the seam: a breaking
+  change, an abandoned project, or a swap to a cgo binding or a hosted API
+  touches one package and nothing above it.
 - **Cross-compilation stays ordinary.** Because `cactus-go` is CGO-free, building
   for the ARM64 test device is a `GOARCH`/`GOOS` build, not a toolchain project.
 - **Adding `cactus-go` is the four-file class of change ADR 0045 describes.** It
@@ -175,7 +184,7 @@ the PR is verified with ADR 0045 decision 4's command
 (`GOTOOLCHAIN=go1.26.0 GOWORK=off GOFLAGS=-mod=readonly go build ./...`), not the
 local toolchain. This record's own measured cost is deferred to that PR.
 - **A device portal is cheap to write and cheap to trust.** It is a `Portal`
-  implementation in an out-of-repo module importing `portal/kit/voice` — an
+  implementation in an out-of-repo module importing `portal/kit/stt` — an
   ordinary Go module, per ADR [0005](./0005-build-time-modules-are-the-extension-path.md).
 
 ## Alternatives considered
@@ -198,6 +207,20 @@ local toolchain. This record's own measured cost is deferred to that PR.
   until you read a doc comment, whereas `portal/kit/` says "part" in the import
   path. (The CI check is still worth having; it is not a substitute for the
   directory.)
+- **A `portal/kit/voice/` parent holding both `stt` and a future `tts`.**
+  Rejected: it groups by *medium* rather than by *direction*, and this repo
+  classifies capabilities by direction (ADR 0010). Text-to-speech is an *output*
+  (rendering) concern — a peer of `kit/view`, not of speech input — and it does
+  not exist in the repo today, so the parent would hold one real child and one
+  imagined one. If the two later share an ALSA capture/playback substrate, that
+  substrate becomes `kit/audio` beneath both, grouped by shared code rather than
+  by the fact that both make sound. Naming the kit `voice` would repeat the
+  mistake ADR 0010 corrected for `interfaces`.
+- **`portal/kit/voice/stt` (nesting STT under a `voice` parent)**, or a two-
+  package `voice` + `voice/stt` split. Rejected: the second package existed only
+  to create a dependency boundary, but `stt` is already the boundary, so the
+  split buys nothing. The push-to-talk state machine is not a peer of the
+  transcriber — it exists to feed one — so it belongs *inside* `kit/stt`.
 - **Writing our own Go binding** (cgo against `libcactus.a`, or a fresh
   `purego` wrapper). Rejected: `cactus-go` already exists, is CGO-free, and
   covers Whistle's streaming and embedding APIs; writing one is cost without a
@@ -213,7 +236,7 @@ local toolchain. This record's own measured cost is deferred to that PR.
    lands the transcript in the steer input and the human presses enter; a device
    with no screen must either enqueue on button release (walkie-talkie) or offer
    a confirmation gesture (a second press, a held LED). This decides whether
-   `kit/voice` produces *a string* or *a committed thought*.
+   `kit/stt` produces *a string* or *a committed thought*.
 2. **Where the weights are fetched and cached on a device.** `cactus-go` caches
    under `~/.cache/cactus/`; a device image may want them baked in or pinned at
    first run. `FetchWhistle` exists for offline setup.
